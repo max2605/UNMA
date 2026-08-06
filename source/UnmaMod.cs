@@ -114,21 +114,6 @@ public sealed class UnmaMod : IMod
 
     private UnmaSettings ReadSettings()
     {
-        var warning = Math.Max(
-            1,
-            Math.Min(
-                100,
-                JsonConfig.GetInt("healthWarningPercent", 65)));
-        var critical = Math.Max(
-            1,
-            Math.Min(
-                warning,
-                JsonConfig.GetInt("healthCriticalPercent", 45)));
-        var emergency = Math.Max(
-            1,
-            Math.Min(
-                critical,
-                JsonConfig.GetInt("healthEmergencyPercent", 25)));
         return new UnmaSettings
         {
             ShowOnGameStart = JsonConfig.GetBool("showOnGameStart", true),
@@ -140,9 +125,6 @@ public sealed class UnmaMod : IMod
             EnableSystemAlarms = JsonConfig.GetBool(
                 "enableSystemAlarms",
                 true),
-            HealthWarningPercent = warning,
-            HealthCriticalPercent = critical,
-            HealthEmergencyPercent = emergency,
         };
     }
 }

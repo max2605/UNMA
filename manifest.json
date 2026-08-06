@@ -1,9 +1,9 @@
 {
   "id": "UNMA",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "display_name": "UNMA – Universelle Nachrichten-Meldeanlage",
   "description_short": "Eine frei konfigurierbare Schlitzmelder-Tafel mit Quittierung, Sammelmeldungen und Alarmtönen.",
-  "description_long": "Spiegelt Vanilla-Meldungen in eine industrielle Schlitzmelder-Tafel, überwacht Gesundheit, Nahrung und Arbeiter in drei Eskalationsstufen und erlaubt eigene UND-/ODER-Sammelmeldungen für ausgewählte Gebäude, Fahrzeuge und Transporte. Kommende Meldungen blinken und wiederholen ihren Ton bis MASTER QUIT. Panels, Farben, Schwellen und Töne sind frei konfigurierbar.",
+  "description_long": "Spiegelt Vanilla-Meldungen in eine industrielle Schlitzmelder-Tafel, überwacht Gesundheit ursachen- und arbeitsreservebezogen sowie Nahrung und Arbeiter mit frei editierbaren Stufen. NOTFALL wird bei diesen Vorgaben nur für aktive Hunger- oder Gesundheitstodesspiralen verwendet. Eigene UND-/ODER-Sammelmeldungen für Gebäude, Fahrzeuge und Transporte bleiben auch nach dem Speichern editierbar. Kommende Meldungen blinken und wiederholen ihren Ton bis MASTER QUIT.",
   "authors": [
     "Maxim",
     "TaskEcho"

@@ -22,9 +22,6 @@ public sealed class UnmaSettings
     public int AudioVolumePercent = 65;
     public int PollIntervalMs = 500;
     public bool EnableSystemAlarms = true;
-    public int HealthWarningPercent = 65;
-    public int HealthCriticalPercent = 45;
-    public int HealthEmergencyPercent = 25;
 }
 
 public sealed class UnmaRuntime : IDisposable
@@ -57,9 +54,22 @@ public sealed class UnmaRuntime : IDisposable
         "failed",
     };
 
+    private static readonly HashSet<string> s_pollutionHealthCategoryIds =
+        new(StringComparer.Ordinal)
+        {
+            IdsCore.HealthPointsCategories.LandfillPollution.Value,
+            IdsCore.HealthPointsCategories.WaterPollution.Value,
+            IdsCore.HealthPointsCategories.AirPollution.Value,
+            IdsCore.HealthPointsCategories.AirPollutionVehicles.Value,
+            IdsCore.HealthPointsCategories.AirPollutionShips.Value,
+            IdsCore.HealthPointsCategories.AirPollutionTrains.Value,
+            IdsCore.HealthPointsCategories.WasteInSettlement.Value,
+        };
+
     private readonly object m_gate = new();
     private readonly object m_configurationGate = new();
     private readonly object m_inspectionGate = new();
+    private readonly object m_systemMetricsGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
     private readonly IWorkersManager m_workersManager;
@@ -78,6 +88,8 @@ public sealed class UnmaRuntime : IDisposable
     private int m_requestedInspectionEntityId = -1;
     private long m_inspectionRequestGeneration;
     private EntityInspectionSnapshot m_completedInspection;
+    private Dictionary<string, double> m_lastSystemMetrics =
+        new(StringComparer.Ordinal);
     private bool m_simListenerAdded;
     private bool m_disposed;
 
@@ -131,9 +143,10 @@ public sealed class UnmaRuntime : IDisposable
         Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
         if (!m_settings.EnableSystemAlarms)
         {
-            SetInactive("system:health");
-            SetInactive("system:food");
-            SetInactive("system:workers");
+            foreach (var alarm in Configuration.SystemAlarms)
+            {
+                SetInactive(alarm.Id);
+            }
         }
     }
 
@@ -177,9 +190,7 @@ public sealed class UnmaRuntime : IDisposable
         var settings = m_settings;
         if (settings.EnableSystemAlarms)
         {
-            EvaluateHealth();
-            EvaluateFood();
-            EvaluateWorkers();
+            EvaluateSystemAlarms();
         }
         EvaluateCustomRules();
     }
@@ -313,6 +324,44 @@ public sealed class UnmaRuntime : IDisposable
         return false;
     }
 
+    public bool UpdateRule(AlarmRuleDefinition updatedRule)
+    {
+        if (updatedRule == null ||
+            string.IsNullOrWhiteSpace(updatedRule.Id))
+        {
+            return false;
+        }
+
+        AlarmRuleDefinition previousRule;
+        var ruleIndex = -1;
+        lock (m_configurationGate)
+        {
+            ruleIndex = Configuration.Rules.FindIndex(rule =>
+                string.Equals(
+                    rule.Id,
+                    updatedRule.Id,
+                    StringComparison.Ordinal));
+            if (ruleIndex < 0)
+            {
+                return false;
+            }
+            previousRule = Configuration.Rules[ruleIndex];
+            Configuration.Rules[ruleIndex] = updatedRule;
+        }
+
+        if (!SaveConfiguration())
+        {
+            lock (m_configurationGate)
+            {
+                Configuration.Rules[ruleIndex] = previousRule;
+            }
+            return false;
+        }
+
+        Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+        return true;
+    }
+
     public bool RemoveRule(string ruleId)
     {
         AlarmRuleDefinition removedRule;
@@ -382,6 +431,79 @@ public sealed class UnmaRuntime : IDisposable
         }
         Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
         return true;
+    }
+
+    public IReadOnlyList<SystemAlarmDefinition> GetSystemAlarmDefinitions()
+    {
+        lock (m_configurationGate)
+        {
+            return Configuration.SystemAlarms
+                .Select(CloneSystemAlarmForEditing)
+                .ToArray();
+        }
+    }
+
+    public IReadOnlyDictionary<string, double> GetSystemMetricValues()
+    {
+        lock (m_systemMetricsGate)
+        {
+            return new Dictionary<string, double>(
+                m_lastSystemMetrics,
+                StringComparer.Ordinal);
+        }
+    }
+
+    public bool UpdateSystemAlarm(SystemAlarmDefinition updatedAlarm)
+    {
+        if (updatedAlarm == null ||
+            string.IsNullOrWhiteSpace(updatedAlarm.Id))
+        {
+            return false;
+        }
+
+        SystemAlarmDefinition previousAlarm;
+        var alarmIndex = -1;
+        var replacement = CloneSystemAlarmForEditing(updatedAlarm);
+        lock (m_configurationGate)
+        {
+            alarmIndex = Configuration.SystemAlarms.FindIndex(alarm =>
+                string.Equals(
+                    alarm.Id,
+                    updatedAlarm.Id,
+                    StringComparison.Ordinal));
+            if (alarmIndex < 0)
+            {
+                return false;
+            }
+            previousAlarm = Configuration.SystemAlarms[alarmIndex];
+            Configuration.SystemAlarms[alarmIndex] = replacement;
+        }
+
+        if (!SaveConfiguration())
+        {
+            lock (m_configurationGate)
+            {
+                Configuration.SystemAlarms[alarmIndex] = previousAlarm;
+            }
+            return false;
+        }
+
+        if (!replacement.Enabled)
+        {
+            SetInactive(replacement.Id);
+        }
+        Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+        return true;
+    }
+
+    public bool ResetSystemAlarm(string alarmId)
+    {
+        var defaultAlarm = UnmaConfiguration.CreateDefaultSystemAlarms()
+            .FirstOrDefault(alarm => string.Equals(
+                alarm.Id,
+                alarmId,
+                StringComparison.Ordinal));
+        return defaultAlarm != null && UpdateSystemAlarm(defaultAlarm);
     }
 
     public bool RemovePanel(string panelId)
@@ -468,6 +590,7 @@ public sealed class UnmaRuntime : IDisposable
         {
             return m_alarms.Values
                 .Where(state =>
+                    state.View.Source == "vanilla" &&
                     !string.IsNullOrWhiteSpace(state.View.OverrideId))
                 .GroupBy(
                     state => state.View.OverrideId,
@@ -673,137 +796,257 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
-    private void EvaluateHealth()
+    private void EvaluateSystemAlarms()
     {
-        var health = m_healthManager.HealthStats.HealthThisMonth
-            .ToIntPercentRounded();
+        var metrics = CaptureSystemMetrics();
+        SystemAlarmDefinition[] alarms;
+        lock (m_configurationGate)
+        {
+            alarms = Configuration.SystemAlarms
+                .Select(CloneSystemAlarmForEditing)
+                .ToArray();
+        }
+
+        if (metrics["population.total"] <= 0d)
+        {
+            foreach (var alarm in alarms)
+            {
+                SetInactive(alarm.Id);
+            }
+            return;
+        }
+
+        foreach (var alarm in alarms)
+        {
+            var stage = AlarmEvaluation.SelectSystemStage(alarm, metrics);
+            if (stage == null)
+            {
+                SetInactive(alarm.Id);
+                continue;
+            }
+
+            var soundId = string.IsNullOrWhiteSpace(stage.SoundId)
+                ? "auto"
+                : stage.SoundId;
+            var activeColor = string.IsNullOrWhiteSpace(stage.ActiveColor) ||
+                              string.Equals(
+                                  stage.ActiveColor,
+                                  "auto",
+                                  StringComparison.OrdinalIgnoreCase)
+                ? ColorFor(stage.Severity)
+                : stage.ActiveColor;
+
+            SetAlarm(
+                alarm.Id,
+                string.IsNullOrWhiteSpace(stage.Message)
+                    ? alarm.DisplayName
+                    : stage.Message,
+                FormatSystemAlarmDetail(alarm.Id, metrics),
+                "system",
+                "",
+                stage.Severity,
+                true,
+                false,
+                soundId,
+                activeColor,
+                LastValueForSystemAlarm(alarm.Id, metrics),
+                overrideId: alarm.Id);
+        }
+    }
+
+    private Dictionary<string, double> CaptureSystemMetrics()
+    {
+        var health = m_healthManager.HealthStats.HealthLastMonth
+            .ToDouble() * 100d;
+        var diseasePenalty = 0d;
+        var diseaseMortalityPercent = 0d;
+        var pollutionPenalty = 0d;
+        var netPopulationChangePercent = 0d;
+        foreach (var entry in m_healthManager.HealthStats.LastMonthRecords)
+        {
+            var change = entry.Change.ToDouble() * 100d;
+            var categoryId = entry.Category.Id.Value;
+            if (string.Equals(
+                    categoryId,
+                    IdsCore.HealthPointsCategories.Disease.Value,
+                    StringComparison.Ordinal))
+            {
+                diseasePenalty += Math.Min(0, change);
+            }
+            if (s_pollutionHealthCategoryIds.Contains(categoryId))
+            {
+                pollutionPenalty += Math.Min(0, change);
+            }
+        }
+        foreach (var entry in m_healthManager.BirthStats.LastMonthRecords)
+        {
+            var categoryId = entry.Category.Id.Value;
+            var changePercent = entry.Change.ToDouble() * 100d;
+            if (string.Equals(
+                    categoryId,
+                    IdsCore.BirthRateCategories.Disease.Value,
+                    StringComparison.Ordinal))
+            {
+                diseaseMortalityPercent += Math.Max(
+                    0d,
+                    -changePercent);
+            }
+            if (!string.Equals(
+                    categoryId,
+                    IdsCore.BirthRateCategories.Starvation.Value,
+                    StringComparison.Ordinal))
+            {
+                // The game applies starvation immediately and excludes it
+                // from its later population-rate calculation as well.
+                netPopulationChangePercent += changePercent;
+            }
+        }
+
         var population = m_settlementsManager.GetTotalPopulation();
-        var warningThreshold = Math.Max(
-            Settings.HealthWarningPercent,
-            Math.Max(
-                Settings.HealthCriticalPercent,
-                Settings.HealthEmergencyPercent));
-        var emergencyThreshold = Math.Min(
-            Settings.HealthWarningPercent,
-            Math.Min(
-                Settings.HealthCriticalPercent,
-                Settings.HealthEmergencyPercent));
-        var criticalThreshold = Settings.HealthWarningPercent +
-                                Settings.HealthCriticalPercent +
-                                Settings.HealthEmergencyPercent -
-                                warningThreshold -
-                                emergencyThreshold;
-
-        var severity = AlarmSeverity.Notice;
-        var isActive = population > 0 && health < warningThreshold;
-        if (isActive)
-        {
-            severity = AlarmSeverity.Warning;
-        }
-        if (population > 0 && health < criticalThreshold)
-        {
-            severity = AlarmSeverity.Critical;
-        }
-        if (population > 0 && health < emergencyThreshold)
-        {
-            severity = AlarmSeverity.Emergency;
-        }
-
-        SetAlarm(
-            "system:health",
-            "GESUNDHEIT NIEDRIG",
-            "Gesundheit: " + health + " %",
-            "system",
-            "",
-            severity,
-            isActive,
-            false,
-            ResolveConfiguredSound("system:health"),
-            ColorFor(severity),
-            health,
-            overrideId: "system:health");
-    }
-
-    private void EvaluateFood()
-    {
-        var months = m_settlementsManager.MonthsOfFood;
-        var severity = AlarmSeverity.Notice;
-        var isActive = false;
-        var detail = "Nahrungsvorrat: " + months + " Monate";
-
-        if (months <= 12)
-        {
-            severity = AlarmSeverity.Warning;
-            isActive = true;
-        }
-        if (months <= 3)
-        {
-            severity = AlarmSeverity.Critical;
-        }
-        if (m_settlementsManager.ArePeopleStarving ||
-            m_settlementsManager.AmountStarvedToDeathLastMonth > 0)
-        {
-            severity = AlarmSeverity.Emergency;
-            isActive = true;
-            detail = m_settlementsManager.AmountStarvedToDeathLastMonth > 0
-                ? "Verhungert: " +
-                  m_settlementsManager.AmountStarvedToDeathLastMonth
-                : "Bevölkerung hungert";
-        }
-
-        SetAlarm(
-            "system:food",
-            "NAHRUNGSVERSORGUNG",
-            detail,
-            "system",
-            "",
-            severity,
-            isActive,
-            false,
-            ResolveConfiguredSound("system:food"),
-            ColorFor(severity),
-            months,
-            overrideId: "system:food");
-    }
-
-    private void EvaluateWorkers()
-    {
+        var populationWithoutHomeless =
+            m_settlementsManager.GetTotalPopulationWithoutHomeless();
+        var homelessPopulation = Math.Max(
+            0,
+            population - populationWithoutHomeless);
+        var employablePopulation = Math.Max(
+            0,
+            populationWithoutHomeless -
+            m_workersManager.NumberOfWorkersWithheld);
         var workers = m_workersManager.AmountOfFreeWorkersOrMissing;
-        var missing = Math.Max(0, -workers);
-        var population = Math.Max(1, m_settlementsManager.GetTotalPopulation());
-        var criticalThreshold = Math.Max(5, population / 20);
-        var emergencyThreshold = Math.Max(20, population * 15 / 100);
-        var severity = AlarmSeverity.Notice;
-        var isActive = workers < 0;
-
-        if (isActive)
-        {
-            severity = AlarmSeverity.Warning;
-        }
-        if (missing >= criticalThreshold)
-        {
-            severity = AlarmSeverity.Critical;
-        }
-        if (missing >= emergencyThreshold)
-        {
-            severity = AlarmSeverity.Emergency;
-        }
-
-        SetAlarm(
-            "system:workers",
-            "ARBEITER FEHLEN",
-            workers >= 0
-                ? "Freie Arbeiter: " + workers
-                : "Fehlende Arbeiter: " + missing,
-            "system",
-            "",
-            severity,
-            isActive,
-            false,
-            ResolveConfiguredSound("system:workers"),
-            ColorFor(severity),
+        var reservePercent = SystemMetricCatalog.CalculateWorkerReservePercent(
             workers,
-            overrideId: "system:workers");
+            employablePopulation);
+        var diseaseMonthsLeft = m_healthManager.CurrentDisease.HasValue
+            ? SystemMetricCatalog.CalculateEffectiveDiseaseMonths(
+                m_healthManager.CurrentDiseaseMonthsLeft)
+            : 0;
+        var diseaseActive = diseaseMonthsLeft > 0;
+        if (!diseaseActive)
+        {
+            diseaseMortalityPercent = 0d;
+        }
+        var expectedLoss =
+            SystemMetricCatalog.CalculateExpectedPopulationLoss(
+                population,
+                netPopulationChangePercent);
+        var workerBufferMonths =
+            SystemMetricCatalog.CalculateWorkerBufferMonths(
+                Math.Max(0, workers),
+                homelessPopulation,
+                expectedLoss);
+        var workerSpiralMargin =
+            SystemMetricCatalog.CalculateWorkerSpiralMargin(
+                workerBufferMonths,
+                diseaseMonthsLeft);
+        var foodSpiral = SystemMetricCatalog.CalculateFoodSpiral(
+            m_settlementsManager.ArePeopleStarving,
+            workers,
+            m_workersManager.NumberOfWorkersWithheld,
+            populationWithoutHomeless,
+            m_settlementsManager.AmountStarvedToDeathLastMonth);
+        var metrics = new Dictionary<string, double>(StringComparer.Ordinal)
+        {
+            ["health.value"] = health,
+            ["health.disease_penalty"] = diseasePenalty,
+            ["health.disease_mortality"] = diseaseMortalityPercent,
+            ["health.pollution_penalty"] = pollutionPenalty,
+            ["health.structural_value"] = health - diseasePenalty,
+            ["health.expected_loss"] = expectedLoss,
+            ["health.lost_last_month"] =
+                m_healthManager.LostTotal.LastMonth.ToIntRounded(),
+            ["health.disease_active"] = diseaseActive ? 1d : 0d,
+            ["health.disease_months_left"] = diseaseMonthsLeft,
+            ["health.worker_buffer_months"] = workerBufferMonths,
+            ["health.worker_spiral_margin"] = workerSpiralMargin,
+            ["workers.reserve_percent"] = reservePercent,
+            ["workers.free_or_missing"] = workers,
+            ["workers.missing"] = Math.Max(0, -workers),
+            ["food.months"] = m_settlementsManager.MonthsOfFood,
+            ["food.starving"] =
+                m_settlementsManager.ArePeopleStarving ? 1d : 0d,
+            ["food.starved_last_month"] =
+                m_settlementsManager.AmountStarvedToDeathLastMonth,
+            ["food.spiral"] = foodSpiral ? 1d : 0d,
+            ["population.net_change_percent"] =
+                netPopulationChangePercent,
+            ["population.total"] = population,
+        };
+        lock (m_systemMetricsGate)
+        {
+            m_lastSystemMetrics = new Dictionary<string, double>(
+                metrics,
+                StringComparer.Ordinal);
+        }
+        return metrics;
+    }
+
+    private static string FormatSystemAlarmDetail(
+        string alarmId,
+        IReadOnlyDictionary<string, double> metrics)
+    {
+        if (string.Equals(alarmId, "system:health", StringComparison.Ordinal))
+        {
+            return "Gesundheit " + Metric(metrics, "health.value") +
+                   " (neutral 10) · Krankheit " +
+                   Metric(metrics, "health.disease_penalty") +
+                   " · Krankheitsmortalität " +
+                   Metric(metrics, "health.disease_mortality") + " %" +
+                   " · Pollution/Müll " +
+                   Metric(metrics, "health.pollution_penalty") +
+                   " · Arbeitsreserve " +
+                   Metric(metrics, "workers.reserve_percent") + " %" +
+                   " · erwarteter Nettoverlust " +
+                   Metric(metrics, "health.expected_loss") + "/Monat";
+        }
+        if (string.Equals(alarmId, "system:food", StringComparison.Ordinal))
+        {
+            return "Nahrung " + Metric(metrics, "food.months") +
+                   " Monate · Hunger " +
+                   (MetricValue(metrics, "food.starving") >= 1d
+                       ? "JA"
+                       : "nein") +
+                   " · verhungert " +
+                   Metric(metrics, "food.starved_last_month");
+        }
+        if (string.Equals(alarmId, "system:workers", StringComparison.Ordinal))
+        {
+            return "Arbeitsreserve " +
+                   Metric(metrics, "workers.reserve_percent") + " % · " +
+                   "frei/fehlend " +
+                   Metric(metrics, "workers.free_or_missing");
+        }
+        return "Systemmeldung";
+    }
+
+    private static double LastValueForSystemAlarm(
+        string alarmId,
+        IReadOnlyDictionary<string, double> metrics)
+    {
+        if (string.Equals(alarmId, "system:food", StringComparison.Ordinal))
+        {
+            return MetricValue(metrics, "food.months");
+        }
+        if (string.Equals(alarmId, "system:workers", StringComparison.Ordinal))
+        {
+            return MetricValue(metrics, "workers.reserve_percent");
+        }
+        return MetricValue(metrics, "health.value");
+    }
+
+    private static string Metric(
+        IReadOnlyDictionary<string, double> metrics,
+        string metricId)
+    {
+        return MetricValue(metrics, metricId).ToString(
+            "0.##",
+            CultureInfo.CurrentCulture);
+    }
+
+    private static double MetricValue(
+        IReadOnlyDictionary<string, double> metrics,
+        string metricId)
+    {
+        return metrics.TryGetValue(metricId, out var value) ? value : 0d;
     }
 
     private void EvaluateCustomRules()
@@ -1213,6 +1456,36 @@ public sealed class UnmaRuntime : IDisposable
                     Threshold = condition.Threshold,
                     ExpectedProductId = condition.ExpectedProductId,
                     EntityPrototypeId = condition.EntityPrototypeId,
+                }).ToList(),
+        };
+    }
+
+    private static SystemAlarmDefinition CloneSystemAlarmForEditing(
+        SystemAlarmDefinition source)
+    {
+        return new SystemAlarmDefinition
+        {
+            Id = source.Id,
+            DisplayName = source.DisplayName,
+            Enabled = source.Enabled,
+            Stages = source.Stages.Select(stage =>
+                new SystemAlarmStageDefinition
+                {
+                    Id = stage.Id,
+                    Priority = stage.Priority,
+                    Enabled = stage.Enabled,
+                    Message = stage.Message,
+                    Severity = stage.Severity,
+                    Logic = stage.Logic,
+                    ActiveColor = stage.ActiveColor,
+                    SoundId = stage.SoundId,
+                    Conditions = stage.Conditions.Select(condition =>
+                        new SystemConditionDefinition
+                        {
+                            MetricId = condition.MetricId,
+                            Comparison = condition.Comparison,
+                            Threshold = condition.Threshold,
+                        }).ToList(),
                 }).ToList(),
         };
     }

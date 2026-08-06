@@ -12,9 +12,18 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Spiegelung aller aktiven Vanilla-Benachrichtigungen über den
   `INotificationsManager`.
 - Drei automatische Kernüberwachungen:
-  - Gesundheit: Warnung, kritisch, Notfall;
+  - Gesundheit: `10` ist neutral; Krankheit und Pollution/Müll werden getrennt
+    ausgewertet und mit der prozentualen Arbeitsreserve verknüpft;
   - Nahrung: 12 Monate, 3 Monate, Hunger/Todesfälle;
-  - Arbeiter: Fehlbestand mit dynamischer Eskalation nach Bevölkerungsgröße.
+  - Arbeiter: prozentuale freie beziehungsweise fehlende Arbeitsreserve.
+- Die mitgelieferten Systemmeldungen sind im **SYSTEM**-Tab vollständig und
+  dauerhaft editierbar: Aktivierung, Text, Messwerte, Operatoren, Schwellen,
+  Alarmstufe, Farbe und Ton.
+- Die Werkvorgaben verwenden **NOTFALL** nur für eine aktive Hunger- oder
+  Gesundheitstodesspirale. Dabei nutzt UNMA die vom Spiel bereits gerundete und
+  mit positiven Geburten-/Ediktbeiträgen verrechnete Nettoentwicklung. Ein
+  reiner Arbeitermangel eskaliert höchstens auf
+  kritisch.
 - Klingel für Warnungen, Industriehorn für kritische Zustände und eine
   auf-/abschwellende E51-artige Sirene für Notfälle.
 - Zusätzliche synthetische Sinus-, Rechteck-, Sägezahn-, Dreieck- und
@@ -28,6 +37,8 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Typisierte Produktmengen für Lager, Förderbänder/Rohre sowie Frachten von
   Trucks, Baggern, Tree Plantern, Tree Harvestern und Güterwaggons.
 - Mehrere Bedingungen pro Sammelmeldung mit UND- oder ODER-Verknüpfung.
+- Eigene Meldungen lassen sich nach dem Speichern erneut in den Editor laden
+  und vollständig ändern.
 - Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
 - Beliebig viele Panels, Spaltenzahl, Vanilla-/Systemfilter und
   kommagetrennte Suchfilter.
@@ -53,8 +64,19 @@ Zielversion: Captain of Industry **0.8.6c**.
    Schwelle wählen und die Bedingung hinzufügen.
 7. Für eine Sammelmeldung weitere Entitäten nacheinander auswählen und
    Bedingungen ergänzen. Danach UND/ODER, Stufe, Farbe und Ton festlegen.
-8. Unter **MELDUNGSTÖNE** kann der Ton jeder bereits bekannten Vanilla- und
-   Systemmeldung separat überschrieben oder auf lautlos gestellt werden.
+8. Unter **MELDUNGSTÖNE** kann der Ton jeder bereits bekannten
+   Vanilla-Meldung separat überschrieben oder auf lautlos gestellt werden.
+9. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
+   ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
+   oder auf die Werkvorgabe zurückgesetzt werden.
+
+Die Gesundheitsanzeige des Spiels ist keine klassische 0–100-%-Skala:
+`10` ist der neutrale Basiswert und erst unter `0` entsteht ein
+gesundheitsbedingter Bevölkerungsverlust. UNMA verwendet deshalb den
+abgeschlossenen Monatswert. Eine zeitlich begrenzte Krankheit mit großer
+Arbeitsreserve bleibt niedriger priorisiert; dauerhafte Pollution/Müll unter
+der Verlustgrenze oder eine Krankheit, deren erwarteter Nettoverlust die freie
+Arbeitsreserve kurzfristig aufbraucht, gilt als Todesspirale.
 
 Ein Lager kann beispielsweise über `Lagerinhalt = 0` überwacht und mit der
 produktbezogenen Menge auf einem Förderband über UND verknüpft werden. Bei

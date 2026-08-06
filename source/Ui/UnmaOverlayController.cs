@@ -49,6 +49,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private readonly Dictionary<string, Texture2D> m_colorTextures =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ConditionDefinition> m_draftConditions = new();
+    private readonly List<string> m_draftConditionThresholdTexts = new();
     private readonly Dictionary<string, PanelViewCacheEntry> m_panelViewCache =
         new(StringComparer.Ordinal);
 
@@ -60,6 +61,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_boardScroll;
     private Vector2 m_editorScroll;
     private Vector2 m_soundOverrideScroll;
+    private Vector2 m_systemAlarmScroll;
     private bool m_isOpen;
     private bool m_stylesReady;
     private int m_tab;
@@ -86,8 +88,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_draftRuleName = "NEUE MELDUNG";
     private string m_draftColor = "#F0C541";
     private int m_draftSoundIndex;
+    private string m_originalDraftSoundId = "auto";
+    private bool m_draftSoundChanged;
+    private string m_editingRuleId = "";
     private string m_newPanelName = "NEUES PANEL";
     private string m_soundOverrideFilter = "";
+    private SystemAlarmDefinition m_systemAlarmDraft;
+    private readonly Dictionary<string, string> m_systemThresholdTexts =
+        new(StringComparer.Ordinal);
+    private string m_pendingSystemResetId = "";
+    private float m_pendingSystemResetUntil;
     private string m_statusMessage = "";
     private float m_statusMessageUntil;
     private AlarmView m_testAlarm;
@@ -327,8 +337,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.BeginHorizontal();
         DrawTabButton(0, "MELDETAFEL");
         DrawTabButton(1, "EDITOR");
-        DrawTabButton(2, "MELDUNGSTÖNE");
-        DrawTabButton(3, "OPTIONEN / INFO");
+        DrawTabButton(2, "SYSTEM");
+        DrawTabButton(3, "MELDUNGSTÖNE");
+        DrawTabButton(4, "OPTIONEN / INFO");
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
         {
@@ -343,9 +354,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 DrawEditor();
                 break;
             case 2:
-                DrawSoundOverrides();
+                DrawSystemAlarms();
                 break;
             case 3:
+                DrawSoundOverrides();
+                break;
+            case 4:
                 DrawOptions();
                 break;
             default:
@@ -510,7 +524,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.Space(12f);
-        GUILayout.Label("NEUE MELDUNG / SAMMELMELDUNG", m_sectionStyle);
+        GUILayout.Label(
+            string.IsNullOrWhiteSpace(m_editingRuleId)
+                ? "NEUE MELDUNG / SAMMELMELDUNG"
+                : "MELDUNG NACHTRÄGLICH BEARBEITEN",
+            m_sectionStyle);
         GUILayout.Label(
             "1. Entität im Spiel anklicken und Inspector geöffnet lassen. 2. Auswahl übernehmen. 3. Messwert und Schwelle wählen. Für eine Sammelmeldung weitere Entitäten nacheinander hinzufügen.",
             m_smallLabelStyle);
@@ -585,21 +603,37 @@ public sealed class UnmaOverlayController : MonoBehaviour
             for (var index = 0; index < m_draftConditions.Count; index++)
             {
                 var condition = m_draftConditions[index];
+                while (m_draftConditionThresholdTexts.Count <= index)
+                {
+                    m_draftConditionThresholdTexts.Add(
+                        condition.Threshold.ToString(
+                            "0.###",
+                            CultureInfo.CurrentCulture));
+                }
                 GUILayout.BeginHorizontal();
                 GUILayout.Label(
                     (index + 1) + ". " + condition.EntityTitle + " · " +
-                    condition.MetricLabel + " " +
-                    UnmaRuntime.OperatorText(condition.Comparison) + " " +
-                    condition.Threshold.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture),
+                    condition.MetricLabel,
                     m_smallLabelStyle);
+                if (GUILayout.Button(
+                        UnmaRuntime.OperatorText(condition.Comparison),
+                        m_buttonStyle,
+                        GUILayout.Width(48f)))
+                {
+                    condition.Comparison = NextEnum(condition.Comparison);
+                }
+                m_draftConditionThresholdTexts[index] = GUILayout.TextField(
+                    m_draftConditionThresholdTexts[index],
+                    24,
+                    m_textFieldStyle,
+                    GUILayout.Width(95f));
                 if (GUILayout.Button(
                         "ENTFERNEN",
                         m_dangerButtonStyle,
                         GUILayout.Width(105f)))
                 {
                     m_draftConditions.RemoveAt(index);
+                    m_draftConditionThresholdTexts.RemoveAt(index);
                     index--;
                 }
                 GUILayout.EndHorizontal();
@@ -649,9 +683,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_draftSoundIndex = Wrap(
                     m_draftSoundIndex - 1,
                     sounds.Count);
+                m_draftSoundChanged = true;
             }
+            var originalSoundMissing =
+                !string.IsNullOrWhiteSpace(m_editingRuleId) &&
+                !m_draftSoundChanged &&
+                !sounds.Any(sound => string.Equals(
+                    sound.Id,
+                    m_originalDraftSoundId,
+                    StringComparison.OrdinalIgnoreCase));
             GUILayout.Label(
-                sounds[m_draftSoundIndex].Label,
+                originalSoundMissing
+                    ? "DATEI FEHLT · " + m_originalDraftSoundId
+                    : sounds[m_draftSoundIndex].Label,
                 m_labelStyle,
                 GUILayout.Width(320f));
             if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(34f)))
@@ -659,6 +703,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_draftSoundIndex = Wrap(
                     m_draftSoundIndex + 1,
                     sounds.Count);
+                m_draftSoundChanged = true;
             }
             if (GUILayout.Button("TON TESTEN", m_buttonStyle, GUILayout.Width(125f)))
             {
@@ -679,7 +724,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle);
         GUI.enabled = m_draftConditions.Count > 0 && CurrentPanel != null;
         if (GUILayout.Button(
-                "MELDUNG SPEICHERN",
+                string.IsNullOrWhiteSpace(m_editingRuleId)
+                    ? "MELDUNG SPEICHERN"
+                    : "ÄNDERUNGEN SPEICHERN",
                 m_primaryButtonStyle,
                 GUILayout.Width(190f),
                 GUILayout.Height(30f)))
@@ -687,6 +734,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SaveDraftRule(sounds);
         }
         GUI.enabled = true;
+        if (!string.IsNullOrWhiteSpace(m_editingRuleId) &&
+            GUILayout.Button(
+                "ABBRECHEN",
+                m_buttonStyle,
+                GUILayout.Width(110f),
+                GUILayout.Height(30f)))
+        {
+            ResetDraftRule();
+            SetStatus("Bearbeitung abgebrochen.");
+        }
         GUILayout.EndHorizontal();
 
         GUILayout.Space(12f);
@@ -719,12 +776,26 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 (rule.Logic == AlarmLogic.All ? "UND" : "ODER"),
                 m_labelStyle);
             if (GUILayout.Button(
+                    "BEARBEITEN",
+                    m_buttonStyle,
+                    GUILayout.Width(105f)))
+            {
+                BeginEditingRule(rule, sounds);
+            }
+            if (GUILayout.Button(
                     "LÖSCHEN",
                     m_dangerButtonStyle,
                     GUILayout.Width(90f)))
             {
                 if (m_runtime.RemoveRule(rule.Id))
                 {
+                    if (string.Equals(
+                            m_editingRuleId,
+                            rule.Id,
+                            StringComparison.Ordinal))
+                    {
+                        ResetDraftRule();
+                    }
                     SetStatus("Meldung gelöscht.");
                 }
                 else
@@ -741,11 +812,406 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndScrollView();
     }
 
+    private void DrawSystemAlarms()
+    {
+        if (Time.realtimeSinceStartup > m_pendingSystemResetUntil)
+        {
+            m_pendingSystemResetId = "";
+        }
+        GUILayout.Label("EDITIERBARE VORDEFINIERTE MELDUNGEN", m_sectionStyle);
+        GUILayout.Label(
+            "Jede Systemmeldung und jede Stufe kann auch später geändert werden. Gesundheit 10 ist neutral; NOTFALL ist ab Werk ausschließlich an eine aktive Hunger- oder Gesundheitstodesspirale gebunden.",
+            m_smallLabelStyle);
+
+        m_systemAlarmScroll = GUILayout.BeginScrollView(m_systemAlarmScroll);
+        if (m_systemAlarmDraft == null)
+        {
+            foreach (var alarm in m_runtime.GetSystemAlarmDefinitions())
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(
+                    alarm.DisplayName + " · " +
+                    alarm.Stages.Count(stage => stage.Enabled) +
+                    " aktive Stufe(n)",
+                    m_labelStyle);
+                if (GUILayout.Button(
+                        alarm.Enabled ? "AN" : "AUS",
+                        alarm.Enabled
+                            ? m_primaryButtonStyle
+                            : m_buttonStyle,
+                        GUILayout.Width(55f)))
+                {
+                    alarm.Enabled = !alarm.Enabled;
+                    if (m_runtime.UpdateSystemAlarm(alarm))
+                    {
+                        SetStatus("Systemmeldung aktualisiert.");
+                    }
+                    else
+                    {
+                        SetStatus(
+                            "Speichern fehlgeschlagen: " +
+                            m_runtime.LastPersistenceError);
+                    }
+                }
+                if (GUILayout.Button(
+                        "BEARBEITEN",
+                        m_buttonStyle,
+                        GUILayout.Width(115f)))
+                {
+                    BeginEditingSystemAlarm(alarm);
+                }
+                if (GUILayout.Button(
+                        string.Equals(
+                            m_pendingSystemResetId,
+                            alarm.Id,
+                            StringComparison.Ordinal)
+                            ? "SICHER?"
+                            : "WERKSVORGABE",
+                        string.Equals(
+                            m_pendingSystemResetId,
+                            alarm.Id,
+                            StringComparison.Ordinal)
+                            ? m_dangerButtonStyle
+                            : m_buttonStyle,
+                        GUILayout.Width(125f)))
+                {
+                    if (!string.Equals(
+                            m_pendingSystemResetId,
+                            alarm.Id,
+                            StringComparison.Ordinal))
+                    {
+                        m_pendingSystemResetId = alarm.Id;
+                        m_pendingSystemResetUntil =
+                            Time.realtimeSinceStartup + 5f;
+                        SetStatus(
+                            "Werkvorgabe innerhalb von 5 Sekunden " +
+                            "noch einmal bestätigen.");
+                    }
+                    else
+                    {
+                        m_pendingSystemResetId = "";
+                        if (m_runtime.ResetSystemAlarm(alarm.Id))
+                        {
+                            SetStatus("Werkvorgabe wiederhergestellt.");
+                        }
+                        else
+                        {
+                            SetStatus(
+                                "Zurücksetzen fehlgeschlagen: " +
+                                m_runtime.LastPersistenceError);
+                        }
+                    }
+                }
+                GUILayout.EndHorizontal();
+            }
+        }
+        else
+        {
+            DrawSystemAlarmDraft();
+        }
+        DrawStatusMessage();
+        GUILayout.EndScrollView();
+    }
+
+    private void DrawSystemAlarmDraft()
+    {
+        var draft = m_systemAlarmDraft;
+        var sounds = m_audio.GetSoundOptions();
+        var metrics = SystemMetricCatalog.All;
+        var currentValues = m_runtime.GetSystemMetricValues();
+
+        GUILayout.BeginHorizontal();
+        draft.Enabled = GUILayout.Toggle(
+            draft.Enabled,
+            "Gesamtmeldung aktiv",
+            GUILayout.Width(170f));
+        GUILayout.Label("Name", m_labelStyle, GUILayout.Width(45f));
+        draft.DisplayName = GUILayout.TextField(
+            draft.DisplayName ?? "",
+            60,
+            m_textFieldStyle);
+        GUILayout.EndHorizontal();
+
+        foreach (var stage in draft.Stages
+                     .OrderBy(stage => stage.Priority)
+                     .ToArray())
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            stage.Enabled = GUILayout.Toggle(
+                stage.Enabled,
+                "Stufe aktiv",
+                GUILayout.Width(105f));
+            GUILayout.Label("Text", m_labelStyle, GUILayout.Width(38f));
+            stage.Message = GUILayout.TextField(
+                stage.Message ?? "",
+                100,
+                m_textFieldStyle);
+            if (GUILayout.Button(
+                    SeverityLabel(stage.Severity),
+                    m_buttonStyle,
+                    GUILayout.Width(105f)))
+            {
+                stage.Severity = NextEnum(stage.Severity);
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(
+                    stage.Logic == AlarmLogic.All
+                        ? "UND · alle"
+                        : "ODER · eine",
+                    m_buttonStyle,
+                    GUILayout.Width(115f)))
+            {
+                stage.Logic = stage.Logic == AlarmLogic.All
+                    ? AlarmLogic.Any
+                    : AlarmLogic.All;
+            }
+            GUILayout.Label("Farbe", m_labelStyle, GUILayout.Width(48f));
+            stage.ActiveColor = GUILayout.TextField(
+                stage.ActiveColor ?? "auto",
+                9,
+                m_textFieldStyle,
+                GUILayout.Width(92f));
+
+            if (sounds.Count > 0)
+            {
+                var soundIndex = FindSoundIndex(sounds, stage.SoundId);
+                var soundAvailable = sounds.Any(sound => string.Equals(
+                    sound.Id,
+                    stage.SoundId,
+                    StringComparison.OrdinalIgnoreCase));
+                if (GUILayout.Button("◀", m_buttonStyle, GUILayout.Width(30f)))
+                {
+                    soundIndex = Wrap(soundIndex - 1, sounds.Count);
+                    stage.SoundId = sounds[soundIndex].Id;
+                }
+                GUILayout.Label(
+                    soundAvailable
+                        ? sounds[soundIndex].Label
+                        : "DATEI FEHLT · " + stage.SoundId,
+                    m_smallLabelStyle,
+                    GUILayout.Width(190f));
+                if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(30f)))
+                {
+                    soundIndex = Wrap(soundIndex + 1, sounds.Count);
+                    stage.SoundId = sounds[soundIndex].Id;
+                }
+                if (GUILayout.Button(
+                        "TEST",
+                        m_buttonStyle,
+                        GUILayout.Width(55f)))
+                {
+                    TestSound(stage.SoundId, stage.Severity);
+                }
+            }
+            GUILayout.EndHorizontal();
+
+            for (var index = 0; index < stage.Conditions.Count; index++)
+            {
+                var condition = stage.Conditions[index];
+                var metricIndex = SystemMetricCatalog.FindIndex(
+                    condition.MetricId);
+                var metric = metricIndex >= 0
+                    ? metrics[metricIndex]
+                    : new SystemMetricDescriptor(
+                        condition.MetricId ?? "",
+                        "UNBEKANNT: " + (condition.MetricId ?? ""),
+                        "nicht verfügbar");
+                var thresholdKey = SystemThresholdKey(stage.Id, index);
+                if (!m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var thresholdText))
+                {
+                    thresholdText = condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture);
+                    m_systemThresholdTexts[thresholdKey] = thresholdText;
+                }
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("◀", m_buttonStyle, GUILayout.Width(30f)))
+                {
+                    metricIndex = metricIndex < 0
+                        ? metrics.Count - 1
+                        : Wrap(metricIndex - 1, metrics.Count);
+                    condition.MetricId = metrics[metricIndex].Id;
+                    metric = metrics[metricIndex];
+                }
+                GUILayout.Label(
+                    metric.Label + " · " + metric.Unit +
+                    (currentValues.TryGetValue(metric.Id, out var current)
+                        ? " [jetzt " + current.ToString(
+                            "0.##",
+                            CultureInfo.CurrentCulture) + "]"
+                        : ""),
+                    m_smallLabelStyle,
+                    GUILayout.Width(260f));
+                if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(30f)))
+                {
+                    metricIndex = metricIndex < 0
+                        ? 0
+                        : Wrap(metricIndex + 1, metrics.Count);
+                    condition.MetricId = metrics[metricIndex].Id;
+                }
+                if (GUILayout.Button(
+                        UnmaRuntime.OperatorText(condition.Comparison),
+                        m_buttonStyle,
+                        GUILayout.Width(45f)))
+                {
+                    condition.Comparison = NextEnum(condition.Comparison);
+                }
+                thresholdText = GUILayout.TextField(
+                    thresholdText,
+                    24,
+                    m_textFieldStyle,
+                    GUILayout.Width(90f));
+                m_systemThresholdTexts[thresholdKey] = thresholdText;
+                if (GUILayout.Button(
+                        "ENTFERNEN",
+                        m_dangerButtonStyle,
+                        GUILayout.Width(95f)))
+                {
+                    ApplyValidSystemThresholdTexts();
+                    stage.Conditions.RemoveAt(index);
+                    RebuildSystemThresholdTexts();
+                    index--;
+                }
+                GUILayout.EndHorizontal();
+            }
+
+            if (GUILayout.Button(
+                    "+ BEDINGUNG",
+                    m_buttonStyle,
+                    GUILayout.Width(135f)))
+            {
+                ApplyValidSystemThresholdTexts();
+                stage.Conditions.Add(new SystemConditionDefinition
+                {
+                    MetricId = metrics[0].Id,
+                    Comparison = ComparisonOperator.Less,
+                    Threshold = 0d,
+                });
+                RebuildSystemThresholdTexts();
+            }
+            GUILayout.EndVertical();
+        }
+
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button(
+                "SYSTEMMELDUNG SPEICHERN",
+                m_primaryButtonStyle,
+                GUILayout.Width(235f),
+                GUILayout.Height(30f)))
+        {
+            SaveSystemAlarmDraft();
+        }
+        if (GUILayout.Button(
+                "ABBRECHEN",
+                m_buttonStyle,
+                GUILayout.Width(115f),
+                GUILayout.Height(30f)))
+        {
+            m_systemAlarmDraft = null;
+            m_systemThresholdTexts.Clear();
+            SetStatus("Bearbeitung abgebrochen.");
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private void BeginEditingSystemAlarm(SystemAlarmDefinition alarm)
+    {
+        m_systemAlarmDraft = alarm;
+        RebuildSystemThresholdTexts();
+        m_systemAlarmScroll = Vector2.zero;
+        SetStatus("Systemmeldung in den Editor geladen.");
+    }
+
+    private void SaveSystemAlarmDraft()
+    {
+        foreach (var stage in m_systemAlarmDraft.Stages)
+        {
+            for (var index = 0; index < stage.Conditions.Count; index++)
+            {
+                var key = SystemThresholdKey(stage.Id, index);
+                if (!m_systemThresholdTexts.TryGetValue(key, out var text) ||
+                    !TryParseDouble(text, out var threshold))
+                {
+                    SetStatus(
+                        "Ungültige Schwelle in Stufe '" +
+                        stage.Message + "'.");
+                    return;
+                }
+                stage.Conditions[index].Threshold = threshold;
+            }
+            stage.ActiveColor = NormalizeSystemColor(stage.ActiveColor);
+            stage.SoundId = string.IsNullOrWhiteSpace(stage.SoundId)
+                ? "auto"
+                : stage.SoundId;
+        }
+
+        if (!m_runtime.UpdateSystemAlarm(m_systemAlarmDraft))
+        {
+            SetStatus(
+                "Speichern fehlgeschlagen: " +
+                m_runtime.LastPersistenceError);
+            return;
+        }
+        m_systemAlarmDraft = null;
+        m_systemThresholdTexts.Clear();
+        SetStatus("Systemmeldung dauerhaft gespeichert.");
+    }
+
+    private void RebuildSystemThresholdTexts()
+    {
+        m_systemThresholdTexts.Clear();
+        if (m_systemAlarmDraft == null)
+        {
+            return;
+        }
+        foreach (var stage in m_systemAlarmDraft.Stages)
+        {
+            for (var index = 0; index < stage.Conditions.Count; index++)
+            {
+                m_systemThresholdTexts[SystemThresholdKey(stage.Id, index)] =
+                    stage.Conditions[index].Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture);
+            }
+        }
+    }
+
+    private void ApplyValidSystemThresholdTexts()
+    {
+        if (m_systemAlarmDraft == null)
+        {
+            return;
+        }
+        foreach (var stage in m_systemAlarmDraft.Stages)
+        {
+            for (var index = 0; index < stage.Conditions.Count; index++)
+            {
+                var key = SystemThresholdKey(stage.Id, index);
+                if (m_systemThresholdTexts.TryGetValue(key, out var text) &&
+                    TryParseDouble(text, out var threshold))
+                {
+                    stage.Conditions[index].Threshold = threshold;
+                }
+            }
+        }
+    }
+
+    private static string SystemThresholdKey(string stageId, int index)
+    {
+        return (stageId ?? "") + "|" + index;
+    }
+
     private void DrawSoundOverrides()
     {
-        GUILayout.Label("TÖNE FÜR VANILLA- UND SYSTEMMELDUNGEN", m_sectionStyle);
+        GUILayout.Label("TÖNE FÜR VANILLA-MELDUNGEN", m_sectionStyle);
         GUILayout.Label(
-            "Eigene Regeln wählen ihren Ton im Editor. Hier kann jede bereits bekannte Vanilla- oder Systemmeldung separat auf Automatik, lautlos, einen Oszillator oder eine eigene WAV-/OGG-Datei gelegt werden.",
+            "Eigene Regeln wählen ihren Ton im Editor, vordefinierte Meldungen im SYSTEM-Tab. Hier kann jede bereits bekannte Vanilla-Meldung separat auf Automatik, lautlos, einen Oszillator oder eine eigene WAV-/OGG-Datei gelegt werden.",
             m_smallLabelStyle);
 
         GUILayout.BeginHorizontal();
@@ -882,7 +1348,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(10f);
         GUILayout.Label("SYSTEMALARME", m_sectionStyle);
         GUILayout.Label(
-            "Gesundheit, Nahrung und Arbeiter eskalieren automatisch: Warnung → Klingel, kritisch → Horn, Notfall → Sirene. Schwellen, Lautstärke, Startzustand und Prüfintervall stehen in den normalen Mod-Einstellungen.",
+            "Gesundheit, Nahrung und Arbeiter werden im SYSTEM-Tab pro Spielstand bearbeitet. Gesundheit 10 ist neutral; die Werkvorgabe nutzt NOTFALL nur für eine aktive Hunger- oder Gesundheitstodesspirale. Warnung → Klingel, kritisch → Horn, Notfall → Sirene.",
             m_labelStyle);
 
         GUILayout.Space(10f);
@@ -1184,6 +1650,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 ? m_selectedEntity.StoredProductId
                 : "",
         });
+        m_draftConditionThresholdTexts.Add(
+            threshold.ToString("0.###", CultureInfo.CurrentCulture));
         SetStatus("Bedingung zur Sammelmeldung hinzugefügt.");
     }
 
@@ -1195,15 +1663,48 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
-        var soundId = sounds.Count > 0
+        for (var index = 0; index < m_draftConditions.Count; index++)
+        {
+            if (index >= m_draftConditionThresholdTexts.Count ||
+                !TryParseDouble(
+                    m_draftConditionThresholdTexts[index],
+                    out var threshold))
+            {
+                SetStatus(
+                    "Schwelle in Bedingung " + (index + 1) +
+                    " ist ungültig.");
+                return;
+            }
+            m_draftConditions[index].Threshold = threshold;
+        }
+
+        var selectedSoundId = sounds.Count > 0
             ? sounds[Math.Max(
                 0,
                 Math.Min(m_draftSoundIndex, sounds.Count - 1))].Id
             : "auto";
+        var isEditing = !string.IsNullOrWhiteSpace(m_editingRuleId);
+        var existingRule = !isEditing
+            ? null
+            : m_runtime.Configuration.Rules.FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.Id,
+                    m_editingRuleId,
+                    StringComparison.Ordinal));
+        if (isEditing && existingRule == null)
+        {
+            SetStatus(
+                "Die bearbeitete Meldung existiert nicht mehr. " +
+                "Entwurf wurde nicht als neue Meldung gespeichert.");
+            return;
+        }
+        var soundId = isEditing && !m_draftSoundChanged
+            ? m_originalDraftSoundId
+            : selectedSoundId;
         var rule = new AlarmRuleDefinition
         {
-            Id = Guid.NewGuid().ToString("N"),
-            PanelId = panel.Id,
+            Id = existingRule?.Id ?? Guid.NewGuid().ToString("N"),
+            PanelId = existingRule?.PanelId ?? panel.Id,
             Name = string.IsNullOrWhiteSpace(m_draftRuleName)
                 ? "MELDUNG"
                 : m_draftRuleName.Trim(),
@@ -1211,19 +1712,64 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Logic = m_draftLogic,
             ActiveColor = NormalizeColor(m_draftColor),
             SoundId = soundId,
-            Enabled = true,
+            Enabled = existingRule?.Enabled ?? true,
             Conditions = m_draftConditions.Select(CloneCondition).ToList(),
         };
-        if (!m_runtime.AddRule(rule))
+        var saved = isEditing
+            ? m_runtime.UpdateRule(rule)
+            : m_runtime.AddRule(rule);
+        if (!saved)
         {
             SetStatus(
                 "Speichern fehlgeschlagen: " +
                 m_runtime.LastPersistenceError);
             return;
         }
+        var wasEditing = existingRule != null;
+        ResetDraftRule();
+        SetStatus(
+            wasEditing
+                ? "Meldung aktualisiert; neue Werte gelten im nächsten Takt."
+                : "Meldung gespeichert; Überwachung startet im nächsten Takt.");
+    }
+
+    private void BeginEditingRule(
+        AlarmRuleDefinition rule,
+        IReadOnlyList<SoundOption> sounds)
+    {
+        m_editingRuleId = rule.Id;
+        m_draftRuleName = rule.Name;
+        m_draftSeverity = rule.Severity;
+        m_draftLogic = rule.Logic;
+        m_draftColor = rule.ActiveColor;
+        m_draftSoundIndex = FindSoundIndex(sounds, rule.SoundId);
+        m_originalDraftSoundId = rule.SoundId;
+        m_draftSoundChanged = false;
         m_draftConditions.Clear();
+        m_draftConditionThresholdTexts.Clear();
+        m_draftConditions.AddRange(
+            rule.Conditions.Select(CloneCondition));
+        m_draftConditionThresholdTexts.AddRange(
+            rule.Conditions.Select(condition =>
+                condition.Threshold.ToString(
+                    "0.###",
+                    CultureInfo.CurrentCulture)));
+        m_editorScroll = Vector2.zero;
+        SetStatus("Meldung in den Editor geladen.");
+    }
+
+    private void ResetDraftRule()
+    {
+        m_editingRuleId = "";
+        m_draftConditions.Clear();
+        m_draftConditionThresholdTexts.Clear();
         m_draftRuleName = "NEUE MELDUNG";
-        SetStatus("Meldung gespeichert; Überwachung startet im nächsten Takt.");
+        m_draftSeverity = AlarmSeverity.Warning;
+        m_draftLogic = AlarmLogic.All;
+        m_draftColor = "#F0C541";
+        m_draftSoundIndex = 0;
+        m_originalDraftSoundId = "auto";
+        m_draftSoundChanged = false;
     }
 
     private void AddPanel()
@@ -1336,10 +1882,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawTabButton(int tab, string label)
     {
+        var width = Mathf.Clamp(
+            (m_windowRect.width - 105f) / 5f,
+            108f,
+            165f);
         if (GUILayout.Button(
                 label,
                 m_tab == tab ? m_primaryButtonStyle : m_buttonStyle,
-                GUILayout.Width(165f),
+                GUILayout.Width(width),
                 GUILayout.Height(30f)))
         {
             m_tab = tab;
@@ -1439,16 +1989,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         m_stylesReady = true;
 
+        var windowBackground = SolidTexture(
+            "window",
+            new Color(0.075f, 0.085f, 0.085f, 0.98f));
         m_windowStyle = new GUIStyle(GUI.skin.window)
         {
             padding = new RectOffset(8, 8, 8, 8),
-            normal =
-            {
-                background = SolidTexture(
-                    "window",
-                    new Color(0.075f, 0.085f, 0.085f, 0.98f)),
-            },
         };
+        SetBackgroundForAllStates(m_windowStyle, windowBackground);
         m_headerStyle = new GUIStyle(GUI.skin.label)
         {
             fontSize = 17,
@@ -1558,6 +2106,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 background = SolidTexture(key + "-active", hover * 0.85f),
             },
         };
+    }
+
+    private static void SetBackgroundForAllStates(
+        GUIStyle style,
+        Texture2D background)
+    {
+        style.normal.background = background;
+        style.hover.background = background;
+        style.active.background = background;
+        style.focused.background = background;
+        style.onNormal.background = background;
+        style.onHover.background = background;
+        style.onActive.background = background;
+        style.onFocused.background = background;
     }
 
     private Texture2D SolidTexture(string key, Color color)
@@ -1686,6 +2248,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
         return ColorUtility.TryParseHtmlString(color, out _)
             ? color
             : "#F0C541";
+    }
+
+    private static string NormalizeSystemColor(string color)
+    {
+        return string.IsNullOrWhiteSpace(color) ||
+               string.Equals(
+                   color,
+                   "auto",
+                   StringComparison.OrdinalIgnoreCase)
+            ? "auto"
+            : NormalizeColor(color);
     }
 
     private static string ShortTypeName(string fullName)
