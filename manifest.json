@@ -1,0 +1,23 @@
+{
+  "id": "UNMA",
+  "version": "0.1.0",
+  "display_name": "UNMA – Universelle Nachrichten-Meldeanlage",
+  "description_short": "Eine frei konfigurierbare Schlitzmelder-Tafel mit Quittierung, Sammelmeldungen und Alarmtönen.",
+  "description_long": "Spiegelt Vanilla-Meldungen in eine industrielle Schlitzmelder-Tafel, überwacht Gesundheit, Nahrung und Arbeiter in drei Eskalationsstufen und erlaubt eigene UND-/ODER-Sammelmeldungen für ausgewählte Gebäude, Fahrzeuge und Transporte. Kommende Meldungen blinken und wiederholen ihren Ton bis MASTER QUIT. Panels, Farben, Schwellen und Töne sind frei konfigurierbar.",
+  "authors": [
+    "Maxim",
+    "TaskEcho"
+  ],
+  "links": [
+    "https://github.com/max2605/UNMA"
+  ],
+  "primary_dlls": [
+    "UNMA.dll"
+  ],
+  "primary_mod_class_name": "UNMA.UnmaMod",
+  "non_locking_dll_load": true,
+  "can_add_to_saved_game": true,
+  "can_remove_from_saved_game": true,
+  "min_game_version": "0.8.6",
+  "max_verified_game_version": "0.8.6c"
+}

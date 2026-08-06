@@ -1,0 +1,17 @@
+*.user
+*.suo
+*.tmp
+*.log
+*.pdb
+.vs/
+bin/
+obj/
+source/bin/
+source/obj/
+tests/**/bin/
+tests/**/obj/
+unma-panels.json
+unma-panels.json.*
+unma-world-*.json
+unma-world-*.json.*
+Screenshots/

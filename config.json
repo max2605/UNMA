@@ -1,0 +1,49 @@
+{
+  "showOnGameStart": {
+    "default": true,
+    "description": "UNMA-Tafel beim Laden eines Spiels öffnen. Umschalten jederzeit mit F8."
+  },
+  "enableAudio": {
+    "default": true,
+    "description": "Alarmtöne bis zur Quittierung wiederholen."
+  },
+  "audioVolumePercent": {
+    "default": 65,
+    "is_integer": true,
+    "description": "Lautstärke der UNMA-Alarmtöne in Prozent.",
+    "min": 0,
+    "max": 100
+  },
+  "pollIntervalMs": {
+    "default": 500,
+    "is_integer": true,
+    "description": "Prüfintervall eigener Bedingungen in Millisekunden.",
+    "min": 100,
+    "max": 5000
+  },
+  "enableSystemAlarms": {
+    "default": true,
+    "description": "Gesundheit, Nahrung und Arbeiter automatisch überwachen."
+  },
+  "healthWarningPercent": {
+    "default": 65,
+    "is_integer": true,
+    "description": "Gesundheit unter diesem Wert löst eine Warnung aus.",
+    "min": 1,
+    "max": 100
+  },
+  "healthCriticalPercent": {
+    "default": 45,
+    "is_integer": true,
+    "description": "Gesundheit unter diesem Wert löst einen kritischen Alarm aus.",
+    "min": 1,
+    "max": 100
+  },
+  "healthEmergencyPercent": {
+    "default": 25,
+    "is_integer": true,
+    "description": "Gesundheit unter diesem Wert löst die Notfallsirene aus.",
+    "min": 1,
+    "max": 100
+  }
+}
