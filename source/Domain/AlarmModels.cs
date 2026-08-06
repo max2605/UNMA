@@ -74,6 +74,7 @@ public sealed class SystemAlarmDefinition
     [DataMember(Order = 3)] public bool Enabled = true;
     [DataMember(Order = 4)] public List<SystemAlarmStageDefinition> Stages =
         new();
+    [DataMember(Order = 5)] public bool AutoAcknowledgeOnClear;
 }
 
 [DataContract]
@@ -88,6 +89,7 @@ public sealed class AlarmRuleDefinition
     [DataMember(Order = 7)] public string ActiveColor = "#F0C541";
     [DataMember(Order = 8)] public string SoundId = "auto";
     [DataMember(Order = 9)] public bool Enabled = true;
+    [DataMember(Order = 10)] public bool AutoAcknowledgeOnClear;
 }
 
 [DataContract]
@@ -106,12 +108,35 @@ public sealed class AlarmSoundOverride
 {
     [DataMember(Order = 1)] public string AlarmId = "";
     [DataMember(Order = 2)] public string SoundId = "auto";
+    [DataMember(Order = 3)] public bool AutoAcknowledgeOnClear;
+}
+
+[DataContract]
+public sealed class AlarmMemoryDefinition
+{
+    [DataMember(Order = 1)] public string Key = "";
+    [DataMember(Order = 2)] public string Name = "";
+    [DataMember(Order = 3)] public string Detail = "";
+    [DataMember(Order = 4)] public string Source = "";
+    [DataMember(Order = 5)] public string PanelId = "";
+    [DataMember(Order = 6)] public string ActiveColor = "";
+    [DataMember(Order = 7)] public string SoundId = "auto";
+    [DataMember(Order = 8)] public string OverrideId = "";
+    [DataMember(Order = 9)] public AlarmSeverity Severity;
+    [DataMember(Order = 10)] public bool IsActive;
+    [DataMember(Order = 11)] public bool IsAcknowledged;
+    [DataMember(Order = 12)] public bool IsGoneUnacknowledged;
+    [DataMember(Order = 13)] public bool IsMissingSource;
+    [DataMember(Order = 14)] public double LastValue;
+    [DataMember(Order = 15)] public long Sequence;
+    [DataMember(Order = 16)] public string OccurrenceId = "";
+    [DataMember(Order = 17)] public int OccurrencePriority;
 }
 
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 4;
+    [DataMember(Order = 1)] public int SchemaVersion = 5;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -126,6 +151,8 @@ public sealed class UnmaConfiguration
     [DataMember(Order = 12)] public float LauncherX = -1f;
     [DataMember(Order = 13)] public float LauncherY = -1f;
     [DataMember(Order = 14)] public List<SystemAlarmDefinition> SystemAlarms =
+        new();
+    [DataMember(Order = 15)] public List<AlarmMemoryDefinition> AlarmMemories =
         new();
 
     public static UnmaConfiguration CreateDefault()
@@ -296,6 +323,7 @@ public sealed class UnmaConfiguration
         Rules ??= new List<AlarmRuleDefinition>();
         SoundOverrides ??= new List<AlarmSoundOverride>();
         SystemAlarms ??= new List<SystemAlarmDefinition>();
+        AlarmMemories ??= new List<AlarmMemoryDefinition>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -337,12 +365,39 @@ public sealed class UnmaConfiguration
                 : item.SoundId;
         }
 
+        AlarmMemories.RemoveAll(item =>
+            item == null ||
+            string.IsNullOrWhiteSpace(item.Key) ||
+            !item.IsActive && !item.IsGoneUnacknowledged);
+        foreach (var memory in AlarmMemories)
+        {
+            memory.Key = memory.Key.Trim();
+            memory.Name ??= "";
+            memory.Detail ??= "";
+            memory.Source ??= "";
+            memory.PanelId ??= "";
+            memory.ActiveColor ??= "";
+            memory.SoundId = string.IsNullOrWhiteSpace(memory.SoundId)
+                ? "auto"
+                : memory.SoundId;
+            memory.OverrideId ??= "";
+            memory.OccurrenceId ??= "";
+            if (memory.IsActive)
+            {
+                memory.IsGoneUnacknowledged = false;
+            }
+            else
+            {
+                memory.IsAcknowledged = false;
+            }
+        }
+
         MergeDefaultSystemAlarms();
         if (loadedSchemaVersion < 4)
         {
             MigrateSystemSoundOverrides();
         }
-        SchemaVersion = Math.Max(SchemaVersion, 4);
+        SchemaVersion = Math.Max(SchemaVersion, 5);
     }
 
     private void MigrateSystemSoundOverrides()
@@ -475,6 +530,7 @@ public sealed class UnmaConfiguration
             Id = source.Id,
             DisplayName = source.DisplayName,
             Enabled = source.Enabled,
+            AutoAcknowledgeOnClear = source.AutoAcknowledgeOnClear,
         };
         foreach (var stage in source.Stages)
         {
@@ -520,11 +576,19 @@ public sealed class AlarmView
     public string ActiveColor = "";
     public string SoundId = "auto";
     public string OverrideId = "";
+    public string OccurrenceId = "";
+    public int OccurrencePriority;
     public AlarmSeverity Severity;
     public bool IsActive;
     public bool IsAcknowledged;
+    public bool IsGoneUnacknowledged;
     public bool IsMissingSource;
     public double LastValue;
+
+    public bool RequiresAcknowledgement =>
+        IsGoneUnacknowledged || IsActive && !IsAcknowledged;
+
+    public bool IsLatched => IsActive || IsGoneUnacknowledged;
 }
 
 public static class AlarmEvaluation
@@ -633,20 +697,34 @@ public static class AlarmEvaluation
     public static AlarmTransition Transition(
         bool wasActive,
         bool wasAcknowledged,
+        bool wasGoneUnacknowledged,
         AlarmSeverity previousSeverity,
         bool isActive,
         AlarmSeverity severity,
+        bool autoAcknowledgeOnClear,
+        bool occurrenceEscalated = false,
         bool initiallyAcknowledged = false)
     {
         if (!isActive)
         {
-            return new AlarmTransition(false, false, false);
+            var remainsGoneUnacknowledged =
+                !autoAcknowledgeOnClear &&
+                (wasGoneUnacknowledged || wasActive && !wasAcknowledged);
+            return new AlarmTransition(
+                false,
+                false,
+                remainsGoneUnacknowledged,
+                false);
         }
 
-        var isNewOccurrence = !wasActive || severity > previousSeverity;
+        var isNewOccurrence =
+            !wasActive ||
+            severity > previousSeverity ||
+            occurrenceEscalated;
         return new AlarmTransition(
             true,
             isNewOccurrence ? initiallyAcknowledged : wasAcknowledged,
+            false,
             isNewOccurrence);
     }
 }
@@ -655,15 +733,18 @@ public readonly struct AlarmTransition
 {
     public bool IsActive { get; }
     public bool IsAcknowledged { get; }
+    public bool IsGoneUnacknowledged { get; }
     public bool IsNewOccurrence { get; }
 
     public AlarmTransition(
         bool isActive,
         bool isAcknowledged,
+        bool isGoneUnacknowledged,
         bool isNewOccurrence)
     {
         IsActive = isActive;
         IsAcknowledged = isAcknowledged;
+        IsGoneUnacknowledged = isGoneUnacknowledged;
         IsNewOccurrence = isNewOccurrence;
     }
 }

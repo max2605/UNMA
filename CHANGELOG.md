@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 – 2026-08-07
+
+- Kraftwerksnahe Meldungsfolge ergänzt: Eine ungequittierte Meldung bleibt auch
+  nach Wegfall der Ursache als `GEGANGEN · UNQUITTIERT` blinkend und tönend
+  gespeichert, bis `MASTER QUIT` gedrückt wird.
+- Automatische Quittierung beim Gehen ist pro eigener Regel, vordefinierter
+  Systemmeldung und Vanilla-Meldung frei wählbar; der Standard bleibt manuell.
+- Quittierte, noch anstehende Meldungen wechseln beim späteren Gehen normal in
+  den Ruhezustand, da das Alarmereignis bereits manuell quittiert wurde.
+- Die bisherige dünne 8-Sekunden-Sirene wurde durch eine deterministisch
+  erzeugte E57-nahe Motorsirene mit 4-Sekunden-Zyklus, 2 Sekunden Hochlauf,
+  2 Sekunden Auslauf, 420-Hz-Spitze und kräftigeren Rotor-/Tieftonanteilen
+  ersetzt.
+- Das kritische Industriehorn wurde zu einem tiefen 3,2-Sekunden-Hornstoß mit
+  einer klaren Pause von 1,2 Sekunden umgebaut.
+- Quittier- und GEGANGEN-Zustände werden spielstandsbezogen gespeichert und
+  nach einem Neustart korrekt wiederhergestellt.
+- Höhere Systemstufen gleicher Alarmkategorie lösen erneut KOMMT und Ton aus;
+  lautlose Meldungen blockieren keine anderen hörbaren Alarme mehr.
+- Konfigurationsschema 5 speichert das Quittierverhalten migrationssicher.
+
 ## 0.2.0 – 2026-08-06
 
 - Gesundheitswert korrigiert: `10` ist neutral, ausgewertet wird der stabile
@@ -30,7 +51,7 @@
 - MASTER-QUIT-Zustandsmaschine mit Blink- und Dauertonlogik.
 - Frei definierbare Panels, Farben, Töne sowie UND-/ODER-Sammelmeldungen.
 - Entitätsauswahl über den aktiven Inspector und generischer Messwertkatalog.
-- Synthetische Klingel, Industriehorn, E51-artige Sirene und Oszillatortöne.
+- Synthetische Klingel, Industriehorn, E57-artige Sirene und Oszillatortöne.
 - Import eigener PCM-WAV- und Ogg-Vorbis-Dateien.
 - Mehrere abkoppelbare In-Game-Panels.
 - Individuelle Ton-Overrides für Vanilla- und Systemmeldungen.

@@ -90,6 +90,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private int m_draftSoundIndex;
     private string m_originalDraftSoundId = "auto";
     private bool m_draftSoundChanged;
+    private bool m_draftAutoAcknowledgeOnClear;
     private string m_editingRuleId = "";
     private string m_newPanelName = "NEUES PANEL";
     private string m_soundOverrideFilter = "";
@@ -416,7 +417,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_runtime.AcknowledgeAll();
             m_audio.StopAlarm();
-            SetStatus("Alle aktuell anstehenden Meldungen quittiert.");
+            SetStatus(
+                "Alle kommenden und gegangenen Meldungen quittiert.");
         }
         if (GUILayout.Button(
                 "PANEL ABKOPPELN",
@@ -670,6 +672,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.Width(92f));
         GUILayout.EndHorizontal();
 
+        GUILayout.BeginHorizontal();
+        GUILayout.Space(90f);
+        m_draftAutoAcknowledgeOnClear = GUILayout.Toggle(
+            m_draftAutoAcknowledgeOnClear,
+            "BEIM GEHEN AUTOMATISCH QUITTIEREN",
+            GUILayout.Width(340f));
+        GUILayout.Label(
+            "AUS: GEGANGEN · UNQUITTIERT bleibt bis MASTER QUIT.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+
         var sounds = m_audio.GetSoundOptions();
         if (sounds.Count > 0)
         {
@@ -773,7 +786,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.Label(
                 rule.Name + " · " + SeverityLabel(rule.Severity) +
                 " · " + rule.Conditions.Count + " Bedingung(en) · " +
-                (rule.Logic == AlarmLogic.All ? "UND" : "ODER"),
+                (rule.Logic == AlarmLogic.All ? "UND" : "ODER") + " · " +
+                (rule.AutoAcknowledgeOnClear
+                    ? "GEHT: AUTOMATISCH"
+                    : "GEHT: MASTER QUIT"),
                 m_labelStyle);
             if (GUILayout.Button(
                     "BEARBEITEN",
@@ -832,7 +848,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Label(
                     alarm.DisplayName + " · " +
                     alarm.Stages.Count(stage => stage.Enabled) +
-                    " aktive Stufe(n)",
+                    " aktive Stufe(n) · " +
+                    (alarm.AutoAcknowledgeOnClear
+                        ? "GEHT: AUTOMATISCH"
+                        : "GEHT: MASTER QUIT"),
                     m_labelStyle);
                 if (GUILayout.Button(
                         alarm.Enabled ? "AN" : "AUS",
@@ -930,6 +949,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             draft.DisplayName ?? "",
             60,
             m_textFieldStyle);
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        draft.AutoAcknowledgeOnClear = GUILayout.Toggle(
+            draft.AutoAcknowledgeOnClear,
+            "BEIM GEHEN AUTOMATISCH QUITTIEREN",
+            GUILayout.Width(340f));
+        GUILayout.Label(
+            "AUS: GEGANGEN · UNQUITTIERT bleibt bis MASTER QUIT.",
+            m_smallLabelStyle);
         GUILayout.EndHorizontal();
 
         foreach (var stage in draft.Stages
@@ -1209,9 +1238,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawSoundOverrides()
     {
-        GUILayout.Label("TÖNE FÜR VANILLA-MELDUNGEN", m_sectionStyle);
         GUILayout.Label(
-            "Eigene Regeln wählen ihren Ton im Editor, vordefinierte Meldungen im SYSTEM-Tab. Hier kann jede bereits bekannte Vanilla-Meldung separat auf Automatik, lautlos, einen Oszillator oder eine eigene WAV-/OGG-Datei gelegt werden.",
+            "VANILLA-MELDUNGEN: TÖNE UND QUITTIERUNG",
+            m_sectionStyle);
+        GUILayout.Label(
+            "Eigene Regeln werden im Editor und vordefinierte Meldungen im SYSTEM-Tab eingestellt. Hier erhält jede bekannte Vanilla-Meldung separat ihren Ton und das Verhalten beim Gehen. Ist die automatische Quittierung aus, bleibt GEGANGEN bis MASTER QUIT unquittiert.",
             m_smallLabelStyle);
 
         GUILayout.BeginHorizontal();
@@ -1246,6 +1277,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             var configured = m_runtime.GetConfiguredSound(
                 candidate.OverrideId);
             var soundIndex = FindSoundIndex(sounds, configured);
+            var autoAcknowledgeOnClear =
+                m_runtime.GetConfiguredAutoAcknowledgeOnClear(
+                    candidate.OverrideId);
 
             GUILayout.BeginHorizontal();
             GUILayout.Label(
@@ -1270,6 +1304,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     sounds[Wrap(soundIndex + 1, sounds.Count)]);
             }
             GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(Mathf.Max(260f, m_windowRect.width - 555f));
+            var updatedAutoAcknowledgeOnClear = GUILayout.Toggle(
+                autoAcknowledgeOnClear,
+                "BEIM GEHEN AUTOMATISCH QUITTIEREN",
+                GUILayout.Width(340f));
+            if (updatedAutoAcknowledgeOnClear != autoAcknowledgeOnClear)
+            {
+                SaveAutoAcknowledgeOnClear(
+                    candidate.OverrideId,
+                    updatedAutoAcknowledgeOnClear);
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(4f);
         }
         GUILayout.EndScrollView();
         DrawStatusMessage();
@@ -1285,6 +1334,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             SetStatus(
                 "Tonzuordnung konnte nicht gespeichert werden: " +
+                m_runtime.LastPersistenceError);
+        }
+    }
+
+    private void SaveAutoAcknowledgeOnClear(
+        string alarmId,
+        bool autoAcknowledgeOnClear)
+    {
+        if (m_runtime.SetConfiguredAutoAcknowledgeOnClear(
+                alarmId,
+                autoAcknowledgeOnClear))
+        {
+            SetStatus(
+                autoAcknowledgeOnClear
+                    ? "Beim Gehen wird automatisch quittiert."
+                    : "Beim Gehen ist MASTER QUIT erforderlich.");
+        }
+        else
+        {
+            SetStatus(
+                "Quittierverhalten konnte nicht gespeichert werden: " +
                 m_runtime.LastPersistenceError);
         }
     }
@@ -1327,7 +1397,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(10f);
         GUILayout.Label("AUDIO", m_sectionStyle);
         GUILayout.Label(
-            "Mitgeliefert: Klingel, Industriehorn, E51-artige Auf-/Ab-Sirene sowie Sinus-, Rechteck-, Sägezahn-, Dreieck- und Impulston. Alle werden mathematisch erzeugt und enthalten keine Samples Dritter.",
+            "Mitgeliefert: Klingel, tiefes Industriehorn (3,2 s Ton / 1,2 s Pause), E57-artige Motorsirene (2 s hoch / 2 s runter) sowie Sinus-, Rechteck-, Sägezahn-, Dreieck- und Impulston. Alle werden mathematisch erzeugt und enthalten keine Samples Dritter.",
             m_labelStyle);
         GUILayout.Label(
             "Eigene PCM-WAV- oder Ogg-Vorbis-Dateien: " +
@@ -1360,7 +1430,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(10f);
         GUILayout.Label("ZUSTANDSMODELL", m_sectionStyle);
         GUILayout.Label(
-            "NORMAL: hellgrau, schwarze Schrift. KOMMT: Aktivfarbe blinkt und der Ton wiederholt sich. MASTER QUIT: Aktivfarbe bleibt stehen, Ton endet. Nach Rückkehr zu NORMAL löst eine neue Aktivierungsflanke erneut aus.",
+            "NORMAL: hellgrau, schwarze Schrift. KOMMT: Aktivfarbe blinkt und der Ton wiederholt sich. MASTER QUIT: Aktivfarbe bleibt stehen, Ton endet. GEGANGEN · UNQUITTIERT: Die Ursache ist weg, aber Anzeige und Ton warten auf MASTER QUIT. Mit BEIM GEHEN AUTOMATISCH QUITTIEREN wechselt die Meldung stattdessen direkt zu NORMAL.",
             m_labelStyle);
         DrawStatusMessage();
     }
@@ -1512,10 +1582,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawAlarmTile(Rect rect, AlarmView alarm)
     {
         var background = new Color(0.83f, 0.84f, 0.82f, 1f);
-        if (alarm.IsActive)
+        if (alarm.IsActive || alarm.IsGoneUnacknowledged)
         {
             var active = ParseColor(alarm.ActiveColor, Color.yellow);
-            var blinkOn = alarm.IsAcknowledged ||
+            var blinkOn = !alarm.RequiresAcknowledgement ||
                           Mathf.FloorToInt(Time.realtimeSinceStartup * 2.2f) %
                           2 == 0;
             background = blinkOn
@@ -1535,10 +1605,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             rect.height - 8f);
         DrawPanelRect(inner, background);
 
-        var badge = alarm.IsActive
-            ? alarm.IsAcknowledged ? "STEHT" : "KOMMT"
-            : alarm.IsMissingSource ? "QUELLE FEHLT" : "NORMAL";
-        if (alarm.IsActive && alarm.IsMissingSource)
+        var badge = alarm.IsGoneUnacknowledged
+            ? "GEGANGEN · UNQUITTIERT"
+            : alarm.IsActive
+                ? alarm.IsAcknowledged ? "STEHT" : "KOMMT"
+                : alarm.IsMissingSource ? "QUELLE FEHLT" : "NORMAL";
+        if ((alarm.IsActive || alarm.IsGoneUnacknowledged) &&
+            alarm.IsMissingSource)
         {
             badge += " / QUELLE FEHLT";
         }
@@ -1713,6 +1786,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ActiveColor = NormalizeColor(m_draftColor),
             SoundId = soundId,
             Enabled = existingRule?.Enabled ?? true,
+            AutoAcknowledgeOnClear = m_draftAutoAcknowledgeOnClear,
             Conditions = m_draftConditions.Select(CloneCondition).ToList(),
         };
         var saved = isEditing
@@ -1745,6 +1819,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftSoundIndex = FindSoundIndex(sounds, rule.SoundId);
         m_originalDraftSoundId = rule.SoundId;
         m_draftSoundChanged = false;
+        m_draftAutoAcknowledgeOnClear = rule.AutoAcknowledgeOnClear;
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
         m_draftConditions.AddRange(
@@ -1770,6 +1845,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftSoundIndex = 0;
         m_originalDraftSoundId = "auto";
         m_draftSoundChanged = false;
+        m_draftAutoAcknowledgeOnClear = false;
     }
 
     private void AddPanel()

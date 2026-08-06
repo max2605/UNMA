@@ -70,6 +70,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_configurationGate = new();
     private readonly object m_inspectionGate = new();
     private readonly object m_systemMetricsGate = new();
+    private readonly object m_persistenceGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
     private readonly IWorkersManager m_workersManager;
@@ -91,6 +92,7 @@ public sealed class UnmaRuntime : IDisposable
     private Dictionary<string, double> m_lastSystemMetrics =
         new(StringComparer.Ordinal);
     private bool m_simListenerAdded;
+    private bool m_suppressAlarmPersistence;
     private bool m_disposed;
 
     public UnmaConfiguration Configuration { get; }
@@ -116,6 +118,7 @@ public sealed class UnmaRuntime : IDisposable
         m_store = store;
         m_settings = settings ?? new UnmaSettings();
         Configuration = store.Load();
+        RestoreAlarmMemories();
     }
 
     public void Initialize()
@@ -125,16 +128,91 @@ public sealed class UnmaRuntime : IDisposable
         m_notificationsManager.NotificationSuppressChanged +=
             OnNotificationSuppressChanged;
 
-        foreach (var notification in
-                 m_notificationsManager.FetchAllNotifications())
+        m_suppressAlarmPersistence = true;
+        try
         {
-            OnNotificationAdded(notification);
+            var currentNotifications = m_notificationsManager
+                .FetchAllNotifications()
+                .ToArray();
+            foreach (var notification in currentNotifications)
+            {
+                OnNotificationAdded(notification);
+            }
+            ClearRestoredVanillaAlarmsNoLongerPresent(
+                currentNotifications);
         }
+        finally
+        {
+            m_suppressAlarmPersistence = false;
+        }
+        PersistAlarmState();
 
         m_simLoopEvents.UpdateEndForUi.AddNonSaveable(
             this,
             OnUpdateEndForUi);
         m_simListenerAdded = true;
+    }
+
+    private void RestoreAlarmMemories()
+    {
+        foreach (var memory in Configuration.AlarmMemories)
+        {
+            var state = new AlarmState
+            {
+                Sequence = memory.Sequence,
+            };
+            state.View.Key = memory.Key;
+            state.View.Name = memory.Name;
+            state.View.Detail = memory.Detail;
+            state.View.Source = memory.Source;
+            state.View.PanelId = memory.PanelId;
+            state.View.ActiveColor = memory.ActiveColor;
+            state.View.SoundId = memory.SoundId;
+            state.View.OverrideId = memory.OverrideId;
+            state.View.OccurrenceId = memory.OccurrenceId;
+            state.View.OccurrencePriority = memory.OccurrencePriority;
+            state.View.Severity = memory.Severity;
+            state.View.IsActive = memory.IsActive;
+            state.View.IsAcknowledged = memory.IsAcknowledged;
+            state.View.IsGoneUnacknowledged =
+                memory.IsGoneUnacknowledged;
+            state.View.IsMissingSource = memory.IsMissingSource;
+            state.View.LastValue = memory.LastValue;
+            m_alarms[memory.Key] = state;
+            m_sequence = Math.Max(m_sequence, memory.Sequence);
+        }
+    }
+
+    private void ClearRestoredVanillaAlarmsNoLongerPresent(
+        IReadOnlyList<INotification> currentNotifications)
+    {
+        var currentKeys = new HashSet<string>(
+            currentNotifications.Select(NotificationKey),
+            StringComparer.Ordinal);
+        AlarmView[] staleActiveViews;
+        lock (m_gate)
+        {
+            staleActiveViews = m_alarms.Values
+                .Where(state =>
+                    state.View.Source == "vanilla" &&
+                    state.View.IsActive &&
+                    !currentKeys.Contains(state.View.Key))
+                .Select(state => Clone(state.View))
+                .ToArray();
+        }
+
+        foreach (var view in staleActiveViews)
+        {
+            ClearAlarm(
+                view.Key,
+                ResolveAutoAcknowledgeOnClear(view.OverrideId),
+                false);
+        }
+        if (staleActiveViews.Length > 0)
+        {
+            PruneInactiveVanillaHistory(500);
+            PersistAlarmState();
+        }
     }
 
     public void ApplySettings(UnmaSettings settings)
@@ -145,7 +223,7 @@ public sealed class UnmaRuntime : IDisposable
         {
             foreach (var alarm in Configuration.SystemAlarms)
             {
-                SetInactive(alarm.Id);
+                ForceNormal(alarm.Id);
             }
         }
     }
@@ -210,7 +288,10 @@ public sealed class UnmaRuntime : IDisposable
                     state.View,
                     panel,
                     filters))
-                .OrderByDescending(state => state.View.IsActive)
+                .OrderByDescending(state => state.View.IsLatched)
+                .ThenByDescending(state =>
+                    state.View.RequiresAcknowledgement)
+                .ThenByDescending(state => state.View.IsActive)
                 .ThenByDescending(state => state.View.Severity)
                 .ThenByDescending(state => state.Sequence)
                 .Select(state => Clone(state.View))
@@ -229,8 +310,11 @@ public sealed class UnmaRuntime : IDisposable
         {
             var state = m_alarms.Values
                 .Where(item =>
-                    item.View.IsActive &&
-                    !item.View.IsAcknowledged)
+                    item.View.RequiresAcknowledgement &&
+                    !string.Equals(
+                        item.View.SoundId,
+                        "none",
+                        StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(item => item.View.Severity)
                 .ThenByDescending(item => item.Sequence)
                 .FirstOrDefault();
@@ -257,43 +341,102 @@ public sealed class UnmaRuntime : IDisposable
             lock (m_gate)
             {
                 return m_alarms.Values.Count(
-                    state => state.View.IsActive &&
-                             !state.View.IsAcknowledged);
+                    state => state.View.RequiresAcknowledgement);
             }
         }
     }
 
     public void AcknowledgeAll()
     {
+        var changed = false;
         lock (m_gate)
         {
             foreach (var alarm in m_alarms.Values)
             {
-                if (alarm.View.IsActive)
+                if (alarm.View.IsGoneUnacknowledged)
+                {
+                    alarm.View.IsGoneUnacknowledged = false;
+                    alarm.View.IsAcknowledged = false;
+                    changed = true;
+                }
+                else if (alarm.View.IsActive &&
+                         !alarm.View.IsAcknowledged)
                 {
                     alarm.View.IsAcknowledged = true;
+                    changed = true;
                 }
             }
+        }
+        if (changed)
+        {
+            PruneInactiveVanillaHistory(500);
+            PersistAlarmState();
         }
     }
 
     public bool SaveConfiguration()
     {
-        bool saved;
-        string error;
-        lock (m_configurationGate)
+        lock (m_persistenceGate)
         {
-            saved = m_store.Save(Configuration, out error);
-        }
+            var alarmMemories = CaptureAlarmMemories();
+            bool saved;
+            string error;
+            lock (m_configurationGate)
+            {
+                Configuration.AlarmMemories = alarmMemories;
+                saved = m_store.Save(Configuration, out error);
+            }
 
-        if (saved)
+            if (saved)
+            {
+                LastPersistenceError = "";
+                return true;
+            }
+
+            LastPersistenceError = error;
+            return false;
+        }
+    }
+
+    private List<AlarmMemoryDefinition> CaptureAlarmMemories()
+    {
+        lock (m_gate)
         {
-            LastPersistenceError = "";
-            return true;
+            return m_alarms.Values
+                .Where(state => state.View.IsLatched)
+                .OrderBy(state => state.Sequence)
+                .Select(state => new AlarmMemoryDefinition
+                {
+                    Key = state.View.Key,
+                    Name = state.View.Name,
+                    Detail = state.View.Detail,
+                    Source = state.View.Source,
+                    PanelId = state.View.PanelId,
+                    ActiveColor = state.View.ActiveColor,
+                    SoundId = state.View.SoundId,
+                    OverrideId = state.View.OverrideId,
+                    OccurrenceId = state.View.OccurrenceId,
+                    OccurrencePriority =
+                        state.View.OccurrencePriority,
+                    Severity = state.View.Severity,
+                    IsActive = state.View.IsActive,
+                    IsAcknowledged = state.View.IsAcknowledged,
+                    IsGoneUnacknowledged =
+                        state.View.IsGoneUnacknowledged,
+                    IsMissingSource = state.View.IsMissingSource,
+                    LastValue = state.View.LastValue,
+                    Sequence = state.Sequence,
+                })
+                .ToList();
         }
+    }
 
-        LastPersistenceError = error;
-        return false;
+    private void PersistAlarmState()
+    {
+        if (!m_suppressAlarmPersistence)
+        {
+            SaveConfiguration();
+        }
     }
 
     public bool AddRule(AlarmRuleDefinition rule)
@@ -364,6 +507,14 @@ public sealed class UnmaRuntime : IDisposable
 
     public bool RemoveRule(string ruleId)
     {
+        lock (m_persistenceGate)
+        {
+            return RemoveRuleWithPersistenceLock(ruleId);
+        }
+    }
+
+    private bool RemoveRuleWithPersistenceLock(string ruleId)
+    {
         AlarmRuleDefinition removedRule;
         var removedIndex = -1;
         lock (m_configurationGate)
@@ -381,18 +532,28 @@ public sealed class UnmaRuntime : IDisposable
             Configuration.Rules.RemoveAt(removedIndex);
         }
 
+        AlarmState removedAlarmState = null;
+        lock (m_gate)
+        {
+            var alarmKey = "rule:" + ruleId;
+            m_alarms.TryGetValue(alarmKey, out removedAlarmState);
+            m_alarms.Remove(alarmKey);
+        }
+
         if (!SaveConfiguration())
         {
             lock (m_configurationGate)
             {
                 Configuration.Rules.Insert(removedIndex, removedRule);
             }
+            if (removedAlarmState != null)
+            {
+                lock (m_gate)
+                {
+                    m_alarms["rule:" + ruleId] = removedAlarmState;
+                }
+            }
             return false;
-        }
-
-        lock (m_gate)
-        {
-            m_alarms.Remove("rule:" + ruleId);
         }
         return true;
     }
@@ -427,7 +588,7 @@ public sealed class UnmaRuntime : IDisposable
 
         if (!enabled)
         {
-            SetInactive("rule:" + ruleId);
+            ForceNormal("rule:" + ruleId);
         }
         Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
         return true;
@@ -490,7 +651,7 @@ public sealed class UnmaRuntime : IDisposable
 
         if (!replacement.Enabled)
         {
-            SetInactive(replacement.Id);
+            ForceNormal(replacement.Id);
         }
         Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
         return true;
@@ -507,6 +668,14 @@ public sealed class UnmaRuntime : IDisposable
     }
 
     public bool RemovePanel(string panelId)
+    {
+        lock (m_persistenceGate)
+        {
+            return RemovePanelWithPersistenceLock(panelId);
+        }
+    }
+
+    private bool RemovePanelWithPersistenceLock(string panelId)
     {
         PanelDefinition panel;
         AlarmRuleDefinition[] removedRules;
@@ -541,6 +710,21 @@ public sealed class UnmaRuntime : IDisposable
                 StringComparison.Ordinal));
         }
 
+        var removedAlarmStates = new Dictionary<string, AlarmState>(
+            StringComparer.Ordinal);
+        lock (m_gate)
+        {
+            foreach (var rule in removedRules)
+            {
+                var alarmKey = "rule:" + rule.Id;
+                if (m_alarms.TryGetValue(alarmKey, out var state))
+                {
+                    removedAlarmStates[alarmKey] = state;
+                }
+                m_alarms.Remove(alarmKey);
+            }
+        }
+
         if (!SaveConfiguration())
         {
             lock (m_configurationGate)
@@ -548,15 +732,14 @@ public sealed class UnmaRuntime : IDisposable
                 Configuration.Panels.Insert(panelIndex, panel);
                 Configuration.Rules.AddRange(removedRules);
             }
-            return false;
-        }
-
-        lock (m_gate)
-        {
-            foreach (var rule in removedRules)
+            lock (m_gate)
             {
-                m_alarms.Remove("rule:" + rule.Id);
+                foreach (var pair in removedAlarmStates)
+                {
+                    m_alarms[pair.Key] = pair.Value;
+                }
             }
+            return false;
         }
         return true;
     }
@@ -661,6 +844,7 @@ public sealed class UnmaRuntime : IDisposable
             return false;
         }
 
+        var updatedLatchedAlarm = false;
         lock (m_gate)
         {
             foreach (var state in m_alarms.Values.Where(state =>
@@ -670,7 +854,96 @@ public sealed class UnmaRuntime : IDisposable
                              StringComparison.Ordinal)))
             {
                 state.View.SoundId = soundId;
+                updatedLatchedAlarm |= state.View.IsLatched;
             }
+        }
+        if (updatedLatchedAlarm)
+        {
+            PersistAlarmState();
+        }
+        return true;
+    }
+
+    public bool GetConfiguredAutoAcknowledgeOnClear(string alarmId)
+    {
+        return ResolveAutoAcknowledgeOnClear(alarmId);
+    }
+
+    public bool SetConfiguredAutoAcknowledgeOnClear(
+        string alarmId,
+        bool autoAcknowledgeOnClear)
+    {
+        if (string.IsNullOrWhiteSpace(alarmId))
+        {
+            return false;
+        }
+
+        AlarmSoundOverride existing;
+        var previousValue = false;
+        var created = false;
+        lock (m_configurationGate)
+        {
+            existing = Configuration.SoundOverrides.FirstOrDefault(item =>
+                string.Equals(
+                    item.AlarmId,
+                    alarmId,
+                    StringComparison.Ordinal));
+            if (existing == null)
+            {
+                existing = new AlarmSoundOverride
+                {
+                    AlarmId = alarmId,
+                    SoundId = "auto",
+                    AutoAcknowledgeOnClear = autoAcknowledgeOnClear,
+                };
+                Configuration.SoundOverrides.Add(existing);
+                created = true;
+            }
+            else
+            {
+                previousValue = existing.AutoAcknowledgeOnClear;
+                existing.AutoAcknowledgeOnClear = autoAcknowledgeOnClear;
+            }
+        }
+
+        if (!SaveConfiguration())
+        {
+            lock (m_configurationGate)
+            {
+                if (created)
+                {
+                    Configuration.SoundOverrides.Remove(existing);
+                }
+                else
+                {
+                    existing.AutoAcknowledgeOnClear = previousValue;
+                }
+            }
+            return false;
+        }
+
+        var clearedGoneAlarm = false;
+        if (autoAcknowledgeOnClear)
+        {
+            lock (m_gate)
+            {
+                foreach (var state in m_alarms.Values.Where(state =>
+                             string.Equals(
+                                 state.View.OverrideId,
+                                 alarmId,
+                                 StringComparison.Ordinal) &&
+                             state.View.IsGoneUnacknowledged))
+                {
+                    state.View.IsGoneUnacknowledged = false;
+                    state.View.IsAcknowledged = false;
+                    clearedGoneAlarm = true;
+                }
+            }
+        }
+        if (clearedGoneAlarm)
+        {
+            PruneInactiveVanillaHistory(500);
+            PersistAlarmState();
         }
         return true;
     }
@@ -811,17 +1084,25 @@ public sealed class UnmaRuntime : IDisposable
         {
             foreach (var alarm in alarms)
             {
-                SetInactive(alarm.Id);
+                ForceNormal(alarm.Id);
             }
             return;
         }
 
         foreach (var alarm in alarms)
         {
+            if (!alarm.Enabled)
+            {
+                ForceNormal(alarm.Id);
+                continue;
+            }
+
             var stage = AlarmEvaluation.SelectSystemStage(alarm, metrics);
             if (stage == null)
             {
-                SetInactive(alarm.Id);
+                ClearAlarm(
+                    alarm.Id,
+                    alarm.AutoAcknowledgeOnClear);
                 continue;
             }
 
@@ -850,7 +1131,11 @@ public sealed class UnmaRuntime : IDisposable
                 soundId,
                 activeColor,
                 LastValueForSystemAlarm(alarm.Id, metrics),
-                overrideId: alarm.Id);
+                overrideId: alarm.Id,
+                autoAcknowledgeOnClear:
+                    alarm.AutoAcknowledgeOnClear,
+                occurrenceId: stage.Id,
+                occurrencePriority: stage.Priority);
         }
     }
 
@@ -1069,7 +1354,7 @@ public sealed class UnmaRuntime : IDisposable
     {
         if (!rule.Enabled)
         {
-            SetInactive("rule:" + rule.Id);
+            ForceNormal("rule:" + rule.Id);
             return;
         }
 
@@ -1168,7 +1453,10 @@ public sealed class UnmaRuntime : IDisposable
             missingSource,
             rule.SoundId,
             rule.ActiveColor,
-            lastValue);
+            lastValue,
+            autoAcknowledgeOnClear:
+                rule.AutoAcknowledgeOnClear,
+            occurrenceId: rule.Id);
     }
 
     private void OnNotificationAdded(INotification notification)
@@ -1200,12 +1488,17 @@ public sealed class UnmaRuntime : IDisposable
             ColorFor(severity),
             1d,
             notification.IsSuppressed,
+            overrideId,
+            ResolveAutoAcknowledgeOnClear(overrideId),
             overrideId);
     }
 
     private void OnNotificationRemoved(INotification notification)
     {
-        SetInactive(NotificationKey(notification));
+        var overrideId = "vanilla:" + notification.Proto.Id.Value;
+        ClearAlarm(
+            NotificationKey(notification),
+            ResolveAutoAcknowledgeOnClear(overrideId));
         PruneInactiveVanillaHistory(500);
     }
 
@@ -1216,7 +1509,7 @@ public sealed class UnmaRuntime : IDisposable
             var inactive = m_alarms
                 .Where(pair =>
                     pair.Value.View.Source == "vanilla" &&
-                    !pair.Value.View.IsActive)
+                    !pair.Value.View.IsLatched)
                 .OrderBy(pair => pair.Value.Sequence)
                 .ToArray();
             var removeCount = Math.Max(0, inactive.Length - maximum);
@@ -1229,14 +1522,21 @@ public sealed class UnmaRuntime : IDisposable
 
     private void OnNotificationSuppressChanged(INotification notification)
     {
+        var changed = false;
         lock (m_gate)
         {
             if (m_alarms.TryGetValue(
                     NotificationKey(notification),
                     out var alarm))
             {
+                changed = alarm.View.IsAcknowledged !=
+                          notification.IsSuppressed;
                 alarm.View.IsAcknowledged = notification.IsSuppressed;
             }
+        }
+        if (changed)
+        {
+            PersistAlarmState();
         }
     }
 
@@ -1253,40 +1553,73 @@ public sealed class UnmaRuntime : IDisposable
         string activeColor,
         double lastValue,
         bool initiallyAcknowledged = false,
-        string overrideId = "")
+        string overrideId = "",
+        bool autoAcknowledgeOnClear = false,
+        string occurrenceId = "",
+        int occurrencePriority = 0)
     {
+        var shouldPersist = false;
         lock (m_gate)
         {
+            var created = false;
             if (!m_alarms.TryGetValue(key, out var state))
             {
                 state = new AlarmState();
                 state.View.Key = key;
                 state.View.IsAcknowledged = initiallyAcknowledged;
                 m_alarms[key] = state;
+                created = true;
             }
 
             var wasActive = state.View.IsActive;
             var previousSeverity = state.View.Severity;
             var wasAcknowledged = state.View.IsAcknowledged;
+            var wasGoneUnacknowledged =
+                state.View.IsGoneUnacknowledged;
+            var previousName = state.View.Name;
+            var previousPanelId = state.View.PanelId;
+            var previousActiveColor = state.View.ActiveColor;
+            var previousSoundId = state.View.SoundId;
+            var previousOverrideId = state.View.OverrideId;
+            var previousOccurrenceId = state.View.OccurrenceId;
+            var previousOccurrencePriority =
+                state.View.OccurrencePriority;
             state.View.Name = name ?? "MELDUNG";
             state.View.Detail = detail ?? "";
             state.View.Source = source ?? "";
             state.View.PanelId = panelId ?? "";
+            occurrenceId ??= "";
+            var occurrenceEscalated =
+                wasActive &&
+                severity == previousSeverity &&
+                !string.IsNullOrWhiteSpace(occurrenceId) &&
+                !string.Equals(
+                    previousOccurrenceId,
+                    occurrenceId,
+                    StringComparison.Ordinal) &&
+                occurrencePriority >= previousOccurrencePriority;
             var transition = AlarmEvaluation.Transition(
                 wasActive,
                 wasAcknowledged,
+                wasGoneUnacknowledged,
                 previousSeverity,
                 isActive,
                 severity,
+                autoAcknowledgeOnClear,
+                occurrenceEscalated,
                 initiallyAcknowledged);
             state.View.Severity = severity;
             state.View.IsActive = transition.IsActive;
             state.View.IsAcknowledged = transition.IsAcknowledged;
+            state.View.IsGoneUnacknowledged =
+                transition.IsGoneUnacknowledged;
             state.View.IsMissingSource = missingSource;
             state.View.SoundId = string.IsNullOrWhiteSpace(soundId)
                 ? "auto"
                 : soundId;
             state.View.OverrideId = overrideId ?? "";
+            state.View.OccurrenceId = occurrenceId;
+            state.View.OccurrencePriority = occurrencePriority;
             state.View.ActiveColor = string.IsNullOrWhiteSpace(activeColor)
                 ? ColorFor(severity)
                 : activeColor;
@@ -1296,18 +1629,105 @@ public sealed class UnmaRuntime : IDisposable
             {
                 state.Sequence = ++m_sequence;
             }
+
+            shouldPersist =
+                (wasActive || wasGoneUnacknowledged ||
+                 state.View.IsLatched) &&
+                (created ||
+                 wasActive != state.View.IsActive ||
+                 wasAcknowledged != state.View.IsAcknowledged ||
+                 wasGoneUnacknowledged !=
+                 state.View.IsGoneUnacknowledged ||
+                 previousSeverity != state.View.Severity ||
+                 !string.Equals(
+                     previousName,
+                     state.View.Name,
+                     StringComparison.Ordinal) ||
+                 !string.Equals(
+                     previousPanelId,
+                     state.View.PanelId,
+                     StringComparison.Ordinal) ||
+                 !string.Equals(
+                     previousActiveColor,
+                     state.View.ActiveColor,
+                     StringComparison.Ordinal) ||
+                 !string.Equals(
+                     previousSoundId,
+                     state.View.SoundId,
+                     StringComparison.Ordinal) ||
+                 !string.Equals(
+                     previousOverrideId,
+                     state.View.OverrideId,
+                     StringComparison.Ordinal) ||
+                 !string.Equals(
+                     previousOccurrenceId,
+                     state.View.OccurrenceId,
+                     StringComparison.Ordinal) ||
+                 previousOccurrencePriority !=
+                 state.View.OccurrencePriority);
+        }
+        if (shouldPersist)
+        {
+            PersistAlarmState();
         }
     }
 
-    private void SetInactive(string key)
+    private void ClearAlarm(
+        string key,
+        bool autoAcknowledgeOnClear,
+        bool persist = true)
     {
+        var changed = false;
         lock (m_gate)
         {
             if (m_alarms.TryGetValue(key, out var state))
             {
+                var wasActive = state.View.IsActive;
+                var wasAcknowledged = state.View.IsAcknowledged;
+                var wasGoneUnacknowledged =
+                    state.View.IsGoneUnacknowledged;
+                var transition = AlarmEvaluation.Transition(
+                    state.View.IsActive,
+                    state.View.IsAcknowledged,
+                    state.View.IsGoneUnacknowledged,
+                    state.View.Severity,
+                    false,
+                    state.View.Severity,
+                    autoAcknowledgeOnClear);
+                state.View.IsActive = transition.IsActive;
+                state.View.IsAcknowledged = transition.IsAcknowledged;
+                state.View.IsGoneUnacknowledged =
+                    transition.IsGoneUnacknowledged;
+                changed =
+                    wasActive != state.View.IsActive ||
+                    wasAcknowledged != state.View.IsAcknowledged ||
+                    wasGoneUnacknowledged !=
+                    state.View.IsGoneUnacknowledged;
+            }
+        }
+        if (changed && persist)
+        {
+            PersistAlarmState();
+        }
+    }
+
+    private void ForceNormal(string key, bool persist = true)
+    {
+        var changed = false;
+        lock (m_gate)
+        {
+            if (m_alarms.TryGetValue(key, out var state))
+            {
+                changed = state.View.IsLatched ||
+                          state.View.IsAcknowledged;
                 state.View.IsActive = false;
                 state.View.IsAcknowledged = false;
+                state.View.IsGoneUnacknowledged = false;
             }
+        }
+        if (changed && persist)
+        {
+            PersistAlarmState();
         }
     }
 
@@ -1352,6 +1772,19 @@ public sealed class UnmaRuntime : IDisposable
                            alarmId,
                            StringComparison.Ordinal))?.SoundId ??
                    "auto";
+        }
+    }
+
+    private bool ResolveAutoAcknowledgeOnClear(string alarmId)
+    {
+        lock (m_configurationGate)
+        {
+            return Configuration.SoundOverrides.FirstOrDefault(item =>
+                string.Equals(
+                    item.AlarmId,
+                    alarmId,
+                    StringComparison.Ordinal))?.AutoAcknowledgeOnClear ??
+                   false;
         }
     }
 
@@ -1423,9 +1856,12 @@ public sealed class UnmaRuntime : IDisposable
             ActiveColor = source.ActiveColor,
             SoundId = source.SoundId,
             OverrideId = source.OverrideId,
+            OccurrenceId = source.OccurrenceId,
+            OccurrencePriority = source.OccurrencePriority,
             Severity = source.Severity,
             IsActive = source.IsActive,
             IsAcknowledged = source.IsAcknowledged,
+            IsGoneUnacknowledged = source.IsGoneUnacknowledged,
             IsMissingSource = source.IsMissingSource,
             LastValue = source.LastValue,
         };
@@ -1444,6 +1880,7 @@ public sealed class UnmaRuntime : IDisposable
             ActiveColor = source.ActiveColor,
             SoundId = source.SoundId,
             Enabled = source.Enabled,
+            AutoAcknowledgeOnClear = source.AutoAcknowledgeOnClear,
             Conditions = source.Conditions.Select(condition =>
                 new ConditionDefinition
                 {
@@ -1468,6 +1905,7 @@ public sealed class UnmaRuntime : IDisposable
             Id = source.Id,
             DisplayName = source.DisplayName,
             Enabled = source.Enabled,
+            AutoAcknowledgeOnClear = source.AutoAcknowledgeOnClear,
             Stages = source.Stages.Select(stage =>
                 new SystemAlarmStageDefinition
                 {

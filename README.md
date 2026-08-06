@@ -3,7 +3,9 @@
 UNMA ergänzt Captain of Industry um eine frei konfigurierbare industrielle
 Schlitzmelder-Tafel. Das Vorbild ist die klassische Meldeanlage: im Ruhezustand
 hellgrau mit schwarzer Schrift, beim Kommen blinkend in Aktivfarbe und nach
-`MASTER QUIT` dauerhaft stehend und stumm.
+`MASTER QUIT` dauerhaft stehend und stumm. Geht eine noch ungequittierte
+Meldung, bleibt sie als `GEGANGEN · UNQUITTIERT` gespeichert; nur der Bediener
+oder eine ausdrücklich gewählte automatische Quittierung setzt sie zurück.
 
 Zielversion: Captain of Industry **0.8.6c**.
 
@@ -24,13 +26,16 @@ Zielversion: Captain of Industry **0.8.6c**.
   mit positiven Geburten-/Ediktbeiträgen verrechnete Nettoentwicklung. Ein
   reiner Arbeitermangel eskaliert höchstens auf
   kritisch.
-- Klingel für Warnungen, Industriehorn für kritische Zustände und eine
-  auf-/abschwellende E51-artige Sirene für Notfälle.
+- Klingel für Warnungen, Industriehorn für kritische Zustände und eine E57-nahe
+  Motorsirene für Notfälle. Ihr kräftigerer Lauf steigt zwei Sekunden an und
+  fällt zwei Sekunden ab. Das tiefe Industriehorn tönt 3,2 Sekunden und macht
+  anschließend 1,2 Sekunden Pause.
 - Zusätzliche synthetische Sinus-, Rechteck-, Sägezahn-, Dreieck- und
   Impulssignale. Alle eingebauten Signale entstehen mathematisch zur Laufzeit.
 - Eigene `.wav`- und `.ogg`-Dateien aus dem Ordner `Sounds`.
-- Eigene Tonzuordnung je bekannter Vanilla- und Systemmeldung; eigene Regeln
-  wählen Ton, Alarmstufe und Aktivfarbe direkt im Editor.
+- Eigene Tonzuordnung und frei wählbare automatische Quittierung je bekannter
+  Vanilla- und Systemmeldung; eigene Regeln wählen Ton, Alarmstufe,
+  Aktivfarbe und Quittierverhalten direkt im Editor.
 - Eigene Meldungen für die aktuell im Spiel inspizierte Entität.
 - Automatische Erkennung öffentlicher numerischer und boolescher Messwerte von
   Gebäuden, Lagern, Fahrzeugen, Rohren und Förderbändern.
@@ -45,6 +50,8 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Spielstandsbezogene Persistenz in `unma-world-<GameId>.json`; Entity-Regeln
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
+  Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern
+  und Neuladen.
   Beschädigte Konfigurationen werden gesichert und durch sichere Standardwerte
   ersetzt.
 
@@ -56,16 +63,17 @@ Zielversion: Captain of Industry **0.8.6c**.
    `↕`-Griff aus anderen HUD-Bereichen herausziehen; ihre Position wird
    gespeichert.
 3. In **MELDETAFEL** ein Panel wählen und aktuelle Meldungen beobachten.
-4. `MASTER QUIT · QUITTIEREN` stoppt den Ton aller aktuell anstehenden
-   Meldungen. Die Aktivfarbe bleibt sichtbar, bis die Ursache verschwindet.
+4. `MASTER QUIT · QUITTIEREN` quittiert alle kommenden und bereits gegangenen
+   Meldungen und stoppt deren Ton. Bei einer weiterhin anstehenden Meldung
+   bleibt die Aktivfarbe sichtbar, bis die Ursache verschwindet.
 5. Für eine eigene Meldung zuerst eine Entität im Spiel anklicken und deren
    Inspector offen lassen.
 6. In **EDITOR** die aktuelle Spiel-Auswahl übernehmen, Messwert, Operator und
    Schwelle wählen und die Bedingung hinzufügen.
 7. Für eine Sammelmeldung weitere Entitäten nacheinander auswählen und
    Bedingungen ergänzen. Danach UND/ODER, Stufe, Farbe und Ton festlegen.
-8. Unter **MELDUNGSTÖNE** kann der Ton jeder bereits bekannten
-   Vanilla-Meldung separat überschrieben oder auf lautlos gestellt werden.
+8. Unter **MELDUNGSTÖNE** können Ton und Verhalten beim Gehen für jede bereits
+   bekannte Vanilla-Meldung separat festgelegt werden.
 9. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
    ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
    oder auf die Werkvorgabe zurückgesetzt werden.

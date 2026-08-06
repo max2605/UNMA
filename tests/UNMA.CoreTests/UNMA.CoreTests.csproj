@@ -10,6 +10,8 @@
   <ItemGroup>
     <Compile Include="..\..\source\Domain\AlarmModels.cs"
              Link="Domain\AlarmModels.cs" />
+    <Compile Include="..\..\source\Audio\MechanicalSirenSynth.cs"
+             Link="Audio\MechanicalSirenSynth.cs" />
     <Compile Include="..\..\source\Runtime\SystemMetricCatalog.cs"
              Link="Runtime\SystemMetricCatalog.cs" />
   </ItemGroup>

@@ -33,7 +33,7 @@ public sealed class UnmaAudioController : MonoBehaviour
         new("none", "Kein Ton"),
         new("bell", "Klingel"),
         new("horn", "Industriehorn"),
-        new("siren", "E51-Auf/Ab-Sirene"),
+        new("siren", "E57-Motorsirene \u00b7 2 s hoch / 2 s runter"),
         new("sine", "Oszillator · Sinus"),
         new("square", "Oszillator · Rechteck"),
         new("saw", "Oszillator · Sägezahn"),
@@ -51,6 +51,8 @@ public sealed class UnmaAudioController : MonoBehaviour
     private string m_soundsDirectory = "";
     private string m_requestedSoundId = "";
     private string m_playingSoundId = "";
+    private bool m_playingDefaultFallback;
+    private AlarmSeverity m_playingFallbackSeverity;
     private string m_loadingSoundId = "";
     private Coroutine m_loadingCoroutine;
 
@@ -167,6 +169,8 @@ public sealed class UnmaAudioController : MonoBehaviour
                 m_playingSoundId,
                 soundId,
                 StringComparison.OrdinalIgnoreCase) &&
+            (!m_playingDefaultFallback ||
+             m_playingFallbackSeverity == alarm.Severity) &&
             m_source.isPlaying)
         {
             return;
@@ -181,7 +185,7 @@ public sealed class UnmaAudioController : MonoBehaviour
         if (!soundId.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
             m_failedCustomSounds.Contains(soundId))
         {
-            StopAlarm();
+            PlayDefaultFallback(soundId, alarm.Severity);
             return;
         }
 
@@ -202,7 +206,7 @@ public sealed class UnmaAudioController : MonoBehaviour
         if (!TryResolveCustomSoundPath(soundId, out var fullPath))
         {
             m_failedCustomSounds.Add(soundId);
-            StopAlarm();
+            PlayDefaultFallback(soundId, alarm.Severity);
             return;
         }
 
@@ -227,6 +231,7 @@ public sealed class UnmaAudioController : MonoBehaviour
     private void StopPlayback()
     {
         m_playingSoundId = "";
+        m_playingDefaultFallback = false;
         if (m_source != null)
         {
             m_source.Stop();
@@ -380,6 +385,24 @@ public sealed class UnmaAudioController : MonoBehaviour
         m_source.loop = true;
         m_source.Play();
         m_playingSoundId = soundId;
+        m_playingDefaultFallback = false;
+    }
+
+    private void PlayDefaultFallback(
+        string requestedSoundId,
+        AlarmSeverity severity)
+    {
+        var fallbackId = ResolveDefaultSoundId(severity);
+        if (m_clips.TryGetValue(fallbackId, out var fallbackClip))
+        {
+            // Keep the requested ID as the playback key. This prevents a
+            // missing custom file from restarting the fallback every frame.
+            Play(requestedSoundId, fallbackClip);
+            m_playingDefaultFallback = true;
+            m_playingFallbackSeverity = severity;
+            return;
+        }
+        StopAlarm();
     }
 
     private static string ResolveSoundId(AlarmView alarm)
@@ -393,7 +416,12 @@ public sealed class UnmaAudioController : MonoBehaviour
             return alarm.SoundId;
         }
 
-        return alarm.Severity switch
+        return ResolveDefaultSoundId(alarm.Severity);
+    }
+
+    private static string ResolveDefaultSoundId(AlarmSeverity severity)
+    {
+        return severity switch
         {
             AlarmSeverity.Emergency => "siren",
             AlarmSeverity.Critical => "horn",
@@ -405,8 +433,8 @@ public sealed class UnmaAudioController : MonoBehaviour
     private void CreateBuiltInClips()
     {
         AddClip("bell", 2.4f, BellSample);
-        AddClip("horn", 3.2f, HornSample);
-        AddClip("siren", 8f, SirenSample);
+        AddClip("horn", 4.4f, HornSample);
+        AddClip("siren", MechanicalSirenSynth.Generate(SampleRate));
         AddClip("sine", 1.4f,
             (time, _) => GatedOscillator(time, 720f, Waveform.Sine));
         AddClip("square", 1.4f,
@@ -435,9 +463,21 @@ public sealed class UnmaAudioController : MonoBehaviour
                 0.92f);
         }
 
+        AddClip(id, samples);
+    }
+
+    private void AddClip(string id, float[] samples)
+    {
+        if (samples == null || samples.Length == 0)
+        {
+            throw new ArgumentException(
+                "Generated UNMA audio data must not be empty.",
+                nameof(samples));
+        }
+
         var clip = AudioClip.Create(
             "UNMA " + id,
-            sampleCount,
+            samples.Length,
             1,
             SampleRate,
             false);
@@ -475,37 +515,36 @@ public sealed class UnmaAudioController : MonoBehaviour
 
     private static float HornSample(float time, int _)
     {
-        var active = time < 2.55f;
-        if (!active)
+        const float activeSeconds = 3.2f;
+        if (time >= activeSeconds)
         {
             return 0f;
         }
-        var envelope = SmoothEdge(time, 0.18f, 2.5f);
-        var wobble = 1f + 0.012f * Mathf.Sin(2f * Mathf.PI * 2.3f * time);
-        var baseFrequency = 154f * wobble;
-        return envelope *
-               (0.43f * Mathf.Sin(2f * Mathf.PI * baseFrequency * time) +
-                0.27f * Mathf.Sin(2f * Mathf.PI * baseFrequency * 2f * time) +
-                0.13f * Mathf.Sin(2f * Mathf.PI * baseFrequency * 3f * time));
-    }
 
-    private static float SirenSample(float time, int _)
-    {
-        const float cycleSeconds = 8f;
-        var phase = (time % cycleSeconds) / cycleSeconds;
-        var sweep = 0.5f - 0.5f * Mathf.Cos(2f * Mathf.PI * phase);
-        var frequency = Mathf.Lerp(390f, 910f, sweep);
-        var integratedPhase = 2f * Mathf.PI *
-            (390f * time +
-             260f * time -
-             260f * cycleSeconds /
-             (2f * Mathf.PI) *
-             Mathf.Sin(2f * Mathf.PI * time / cycleSeconds));
+        var attackUnit = Mathf.Clamp01(time / 0.14f);
+        var releaseUnit = Mathf.Clamp01(
+            (activeSeconds - time) / 0.18f);
+        var attack = attackUnit * attackUnit * (3f - 2f * attackUnit);
+        var release = releaseUnit * releaseUnit * (3f - 2f * releaseUnit);
+        var envelope = attack * release;
+
+        const float fundamental = 112f;
+        const float wobbleRate = 1.15f;
+        const float wobbleDepth = 0.0045f;
+        var phaseCycles = fundamental * time +
+            fundamental * wobbleDepth /
+            (2f * Mathf.PI * wobbleRate) *
+            (1f - Mathf.Cos(2f * Mathf.PI * wobbleRate * time));
+        var phase = 2f * Mathf.PI * phaseCycles;
+        var pressure = 0.97f +
+            0.03f * Mathf.Sin(2f * Mathf.PI * 0.68f * time + 0.4f);
         var signal =
-            0.52f * Mathf.Sin(integratedPhase) +
-            0.17f * Mathf.Sin(2f * integratedPhase) +
-            0.08f * Mathf.Sin(3f * integratedPhase);
-        return signal * (0.82f + 0.18f * frequency / 910f);
+            0.54f * Mathf.Sin(phase) +
+            0.25f * Mathf.Sin(2f * phase - 0.10f) +
+            0.13f * Mathf.Sin(3f * phase - 0.28f) +
+            0.065f * Mathf.Sin(4f * phase - 0.48f) +
+            0.025f * Mathf.Sin(5f * phase - 0.70f);
+        return envelope * pressure * signal;
     }
 
     private static float GatedOscillator(
