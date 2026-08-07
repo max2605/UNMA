@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "LAGERVORRAT NIEDRIG",
+  "alarm.storage_low.detail": "Mindestens ein Lager liegt unter 15 Prozent.",
+  "alarm.tank_pressure_high": "TANKDRUCK HOCH",
+  "alarm.tank_pressure_high.detail": "Der Tankdruck liegt über 90 Prozent.",
+  "alarm.tank_pressure_very_high": "TANKDRUCK NOTFALL",
+  "alarm.tank_pressure_very_high.detail": "Der Tankdruck liegt über 98 Prozent.",
+  "alarm.pump_trip": "FÖRDERPUMPE STÖRUNG",
+  "alarm.pump_trip.detail": "Die Förderpumpe wurde durch ihre Schutzschaltung abgeschaltet.",
+  "metric.storage_fill": "Lagerfüllstand",
+  "metric.storage_capacity": "Lagerkapazität",
+  "metric.pressure_percent": "Tankdruck"
+}

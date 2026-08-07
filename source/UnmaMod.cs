@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Mafi;
 using Mafi.Collections;
 using Mafi.Core;
@@ -14,6 +15,8 @@ using Mafi.Logging;
 using Mafi.Unity.Audio;
 using Mafi.Unity.Ui;
 using UnityEngine;
+using UNMA.Localization;
+using UNMA.Extensions;
 using UNMA.Runtime;
 using UNMA.Ui;
 
@@ -37,6 +40,7 @@ public sealed class UnmaMod : IMod
     {
         Manifest = manifest;
         JsonConfig = new ModJsonConfig(this);
+        UnmaText.Initialize(manifest.RootDirectoryPath);
         Log.Info("UNMA: constructed");
     }
 
@@ -70,7 +74,8 @@ public sealed class UnmaMod : IMod
             resolver.Resolve<PopsHealthManager>(),
             resolver.Resolve<ISimLoopEvents>(),
             store,
-            ReadSettings());
+            ReadSettings(),
+            DiscoverActiveExternalProviders());
         m_runtime.Initialize();
 
         m_overlay = UnmaOverlayController.Create(
@@ -126,5 +131,35 @@ public sealed class UnmaMod : IMod
                 "enableSystemAlarms",
                 true),
         };
+    }
+
+    private ExternalProviderDescriptor[] DiscoverActiveExternalProviders()
+    {
+        try
+        {
+            return ModsLoader.LoadedAndFailedMods
+                .AsEnumerable()
+                .Where(item => item.LoadError.IsNone)
+                .Select(item => item.Manifest)
+                .Where(manifest => manifest != null)
+                .GroupBy(manifest => manifest.Id, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .Select(manifest => new ExternalProviderDescriptor(
+                    manifest.Id,
+                    manifest.RootDirectoryPath))
+                .ToArray();
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                "UNMA: aktive Mod-Wurzeln konnten nicht vollständig " +
+                "ermittelt werden: " + exception.Message);
+            return new[]
+            {
+                new ExternalProviderDescriptor(
+                    Manifest.Id,
+                    Manifest.RootDirectoryPath),
+            };
+        }
     }
 }

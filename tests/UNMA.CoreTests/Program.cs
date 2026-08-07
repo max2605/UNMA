@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization.Json;
+using UNMA.Api;
 using UNMA.Audio;
 using UNMA.Domain;
+using UNMA.Extensions;
 using UNMA.Runtime;
 
 internal static class Program
@@ -25,6 +28,11 @@ internal static class Program
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
         TestMechanicalSiren();
+        TestExternalRegistryValidationAndSnapshots();
+        TestExternalMetricPrecedenceAndIsolation();
+        TestExternalAlarmTemplateNormalization();
+        TestExternalPushedStateLifecycle();
+        TestExternalDefinitionLoader();
         Console.WriteLine(
             $"UNMA core tests passed: {s_assertions} assertions.");
     }
@@ -979,6 +987,7 @@ internal static class Program
             OccurrencePriority = 210,
             Severity = AlarmSeverity.Critical,
             IsGoneUnacknowledged = true,
+            AutoAcknowledgeOnClear = true,
             Sequence = 73,
         });
 
@@ -1035,6 +1044,7 @@ internal static class Program
         AreEqual(210, restoredMemory.OccurrencePriority);
         AreEqual(73L, restoredMemory.Sequence);
         AreEqual("vanilla:test:entity:17", restoredMemory.SlotId);
+        IsTrue(restoredMemory.AutoAcknowledgeOnClear);
         AreEqual(5, restored.Panels[0].Slots.Count);
         AreEqual("system:health", restored.Panels[0].Slots[0].AlarmId);
         AreEqual("system:food", restored.Panels[0].Slots[1].AlarmId);
@@ -1490,6 +1500,908 @@ internal static class Program
         }
     }
 
+    private static void TestExternalRegistryValidationAndSnapshots()
+    {
+        const string owner = "RegistryProvider";
+        UnmaApi.UnregisterOwner(owner);
+        try
+        {
+            var revisionBefore = UnmaApi.GetSnapshot().Revision;
+            var candidate = new ExternalMetricDefinition
+            {
+                Id = " level ",
+                PrototypeId = " ",
+                LabelKey = "langlib.RegistryProvider.metric.level",
+                LabelFallback = " Level ",
+                Unit = " items ",
+                SuggestedReferenceMetric = " capacity ",
+                Reader = _ => 12.5d,
+            };
+
+            IsFalse(UnmaApi.TryRegisterMetric(
+                "invalid owner",
+                candidate,
+                out var invalidOwnerError));
+            IsTrue(invalidOwnerError.Length > 0);
+            IsFalse(UnmaApi.TryRegisterMetric(
+                "ÜnicodeProvider",
+                candidate,
+                out var unicodeOwnerError));
+            IsTrue(unicodeOwnerError.Length > 0);
+            IsFalse(UnmaApi.TryRegisterMetric(
+                ".hidden-provider",
+                candidate,
+                out var leadingPunctuationError));
+            IsTrue(leadingPunctuationError.Length > 0);
+            IsFalse(UnmaApi.TryRegisterMetric(
+                owner,
+                new ExternalMetricDefinition { Id = "missing-reader" },
+                out var missingReaderError));
+            IsTrue(missingReaderError.Length > 0);
+
+            IsTrue(UnmaApi.TryRegisterMetric(
+                " RegistryProvider ",
+                candidate,
+                out var registrationError));
+            AreEqual("", registrationError);
+            var afterMetric = UnmaApi.GetSnapshot();
+            IsTrue(afterMetric.Revision > revisionBefore);
+            var registeredMetric = afterMetric.Metrics.Single(item =>
+                item.OwnerModId == owner && item.Id == "level");
+            AreEqual("*", registeredMetric.PrototypeId);
+            AreEqual("Level", registeredMetric.LabelFallback);
+            AreEqual("items", registeredMetric.Unit);
+            AreEqual("capacity", registeredMetric.SuggestedReferenceMetric);
+
+            var duplicateRevision = afterMetric.Revision;
+            IsFalse(UnmaApi.TryRegisterMetric(
+                owner,
+                candidate,
+                out var duplicateError));
+            IsTrue(duplicateError.Contains("already registered"));
+            AreEqual(duplicateRevision, UnmaApi.GetSnapshot().Revision);
+
+            var templateDefinition = CreateValidExternalTemplate(
+                "frozen-template");
+            IsTrue(UnmaApi.TryRegisterAlarmTemplate(
+                owner,
+                templateDefinition,
+                out var templateError));
+            AreEqual("", templateError);
+            IsFalse(UnmaApi.TryRegisterAlarmTemplate(
+                owner,
+                templateDefinition,
+                out var duplicateTemplateError));
+            IsTrue(duplicateTemplateError.Contains("already registered"));
+
+            var heldSnapshot = UnmaApi.GetSnapshot();
+            var heldMetric = heldSnapshot.Metrics.Single(item =>
+                item.OwnerModId == owner && item.Id == "level");
+            var heldTemplate = heldSnapshot.AlarmTemplates.Single(item =>
+                item.OwnerModId == owner &&
+                item.Id == "frozen-template");
+
+            candidate.Id = "mutated";
+            candidate.LabelFallback = "mutated";
+            templateDefinition.PrototypeIds[0] = "Mutated.Prototype";
+            templateDefinition.Conditions[0].Metric = "mutated.metric";
+            templateDefinition.MessageFallback = "mutated";
+
+            AreEqual("level", heldMetric.Id);
+            AreEqual("Level", heldMetric.LabelFallback);
+            AreEqual("Provider.Storage", heldTemplate.PrototypeIds[0]);
+            AreEqual("$stored.amount", heldTemplate.Conditions[0].Metric);
+            AreEqual("External test alarm", heldTemplate.MessageFallback);
+            Throws<NotSupportedException>(() =>
+                ((IList<ExternalMetricSnapshot>)heldSnapshot.Metrics).Clear());
+            Throws<NotSupportedException>(() =>
+                ((IList<string>)heldTemplate.PrototypeIds).Clear());
+
+            IsTrue(UnmaApi.UnregisterOwner(owner));
+            var current = UnmaApi.GetSnapshot();
+            AreEqual(0, current.Metrics.Count(item =>
+                item.OwnerModId == owner));
+            AreEqual(0, current.AlarmTemplates.Count(item =>
+                item.OwnerModId == owner));
+            AreEqual(1, heldSnapshot.Metrics.Count(item =>
+                item.OwnerModId == owner));
+            AreEqual(1, heldSnapshot.AlarmTemplates.Count(item =>
+                item.OwnerModId == owner));
+        }
+        finally
+        {
+            UnmaApi.UnregisterOwner(owner);
+        }
+    }
+
+    private static void TestExternalMetricPrecedenceAndIsolation()
+    {
+        const string owner = "MetricProvider";
+        UnmaApi.UnregisterOwner(owner);
+        try
+        {
+            IsTrue(UnmaApi.RegisterMetric(
+                owner,
+                new ExternalMetricDefinition
+                {
+                    Id = "load",
+                    PrototypeId = "*",
+                    Reader = _ => 10d,
+                }));
+            IsTrue(UnmaApi.RegisterMetric(
+                owner,
+                new ExternalMetricDefinition
+                {
+                    Id = "load",
+                    PrototypeId = "Provider.Exact",
+                    Reader = _ => 20d,
+                }));
+            IsTrue(UnmaApi.RegisterMetric(
+                owner,
+                new ExternalMetricDefinition
+                {
+                    Id = "throws",
+                    PrototypeId = "*",
+                    Reader = _ => 33d,
+                }));
+            IsTrue(UnmaApi.RegisterMetric(
+                owner,
+                new ExternalMetricDefinition
+                {
+                    Id = "throws",
+                    PrototypeId = "Provider.Exact",
+                    Reader = _ => throw new InvalidOperationException(
+                        "Provider callback failure"),
+                }));
+            IsTrue(UnmaApi.RegisterMetric(
+                owner,
+                new ExternalMetricDefinition
+                {
+                    Id = "not-finite",
+                    PrototypeId = "*",
+                    Reader = _ => 44d,
+                }));
+            IsTrue(UnmaApi.RegisterMetric(
+                owner,
+                new ExternalMetricDefinition
+                {
+                    Id = "not-finite",
+                    PrototypeId = "Provider.Exact",
+                    Reader = _ => double.NaN,
+                }));
+
+            var snapshot = UnmaApi.GetSnapshot();
+            IsTrue(snapshot.TryReadMetric(
+                owner,
+                "Provider.Exact",
+                "load",
+                new object(),
+                out var exactValue));
+            AreEqual(20d, exactValue);
+            IsTrue(snapshot.TryReadMetric(
+                owner,
+                "Provider.Other",
+                "load",
+                new object(),
+                out var wildcardValue));
+            AreEqual(10d, wildcardValue);
+
+            IsTrue(snapshot.TryReadMetric(
+                owner,
+                "Provider.Exact",
+                "throws",
+                new object(),
+                out var exceptionFallback));
+            AreEqual(33d, exceptionFallback);
+            IsTrue(snapshot.TryReadMetric(
+                owner,
+                "Provider.Exact",
+                "not-finite",
+                new object(),
+                out var nanFallback));
+            AreEqual(44d, nanFallback);
+
+            var throwingReader = snapshot.Metrics.Single(item =>
+                item.OwnerModId == owner && item.Id == "throws" &&
+                item.PrototypeId == "Provider.Exact");
+            IsFalse(throwingReader.TryRead(new object(), out _));
+            var nanReader = snapshot.Metrics.Single(item =>
+                item.OwnerModId == owner && item.Id == "not-finite" &&
+                item.PrototypeId == "Provider.Exact");
+            IsFalse(nanReader.TryRead(new object(), out _));
+            IsFalse(nanReader.TryRead(null, out _));
+            IsFalse(snapshot.TryReadMetric(
+                owner,
+                "Provider.Exact",
+                "missing",
+                new object(),
+                out _));
+        }
+        finally
+        {
+            UnmaApi.UnregisterOwner(owner);
+        }
+    }
+
+    private static void TestExternalAlarmTemplateNormalization()
+    {
+        const string owner = "NormalizeProvider";
+        UnmaApi.UnregisterOwner(owner);
+        try
+        {
+            var definition = new ExternalAlarmTemplateDefinition
+            {
+                Id = " storage-low ",
+                PrototypeIds = new List<string>
+                {
+                    " Provider.Storage ",
+                    "Provider.Vehicle",
+                },
+                Scope = " PER-ENTITY ",
+                PanelId = " ",
+                LocalizationNamespace = " NormalizeProvider ",
+                MessageKey =
+                    " langlib.NormalizeProvider.alarm.storage_low ",
+                MessageFallback = " Storage low ",
+                DetailFallback = " Remaining stock ",
+                Severity = " INFO ",
+                SoundId = " custom.ogg ",
+                ActiveColor = "#a1b2c3",
+                AutoAcknowledgeOnClear = true,
+                Logic = " AND ",
+                Conditions = new List<ExternalAlarmConditionDefinition>
+                {
+                    new()
+                    {
+                        Metric = " fill ",
+                        Operator = " less-or-equal ",
+                        Threshold = 25d,
+                        ValueMode = " % ",
+                        ReferenceMetric = " capacity ",
+                        LabelKey =
+                            "langlib.NormalizeProvider.metric.fill",
+                        ReferenceLabelKey =
+                            "langlib.NormalizeProvider.metric.capacity",
+                    },
+                },
+            };
+
+            IsTrue(UnmaApi.TryRegisterAlarmTemplate(
+                " NormalizeProvider ",
+                definition,
+                out var error));
+            AreEqual("", error);
+            var normalized = UnmaApi.GetSnapshot().AlarmTemplates.Single(
+                item => item.OwnerModId == owner &&
+                        item.Id == "storage-low");
+            AreEqual("per_entity", normalized.Scope);
+            AreEqual("main", normalized.PanelId);
+            AreEqual(owner, normalized.LocalizationNamespace);
+            AreEqual(
+                "langlib.NormalizeProvider.alarm.storage_low",
+                normalized.MessageKey);
+            AreEqual("Storage low", normalized.MessageFallback);
+            AreEqual("Remaining stock", normalized.DetailFallback);
+            AreEqual("notice", normalized.Severity);
+            AreEqual("custom.ogg", normalized.SoundId);
+            AreEqual("#A1B2C3", normalized.ActiveColor);
+            IsTrue(normalized.AutoAcknowledgeOnClear);
+            AreEqual("all", normalized.Logic);
+            AreEqual("Provider.Storage", normalized.PrototypeIds[0]);
+            AreEqual("<=", normalized.Conditions[0].Operator);
+            AreEqual("percent_of_reference",
+                normalized.Conditions[0].ValueMode);
+            AreEqual("fill", normalized.Conditions[0].Metric);
+            AreEqual("capacity",
+                normalized.Conditions[0].ReferenceMetric);
+
+            definition.PrototypeIds[0] = "Mutated.Prototype";
+            definition.Conditions[0].Metric = "mutated";
+            AreEqual("Provider.Storage", normalized.PrototypeIds[0]);
+            AreEqual("fill", normalized.Conditions[0].Metric);
+
+            var duplicatePrototype = CreateValidExternalTemplate(
+                "duplicate-prototype");
+            duplicatePrototype.PrototypeIds.Add("Provider.Storage");
+            IsFalse(UnmaApi.TryRegisterAlarmTemplate(
+                owner,
+                duplicatePrototype,
+                out var duplicatePrototypeError));
+            IsTrue(duplicatePrototypeError.Contains("Duplicate prototype"));
+
+            var tooManyPrototypes = CreateValidExternalTemplate(
+                "too-many-prototypes");
+            tooManyPrototypes.PrototypeIds = Enumerable.Range(
+                    0,
+                    ExternalDefinitionLoader.MaxPrototypeIdsPerAlarm + 1)
+                .Select(index => "Provider.Prototype" + index)
+                .ToList();
+            IsFalse(UnmaApi.TryRegisterAlarmTemplate(
+                owner,
+                tooManyPrototypes,
+                out var prototypeLimitError));
+            IsTrue(prototypeLimitError.Contains("at most"));
+
+            var tooManyConditions = CreateValidExternalTemplate(
+                "too-many-conditions");
+            tooManyConditions.Conditions = Enumerable.Range(
+                    0,
+                    ExternalDefinitionLoader.MaxConditionsPerAlarm + 1)
+                .Select(_ => new ExternalAlarmConditionDefinition
+                {
+                    Metric = "$stored.amount",
+                    Operator = "<",
+                    Threshold = 1d,
+                })
+                .ToList();
+            IsFalse(UnmaApi.TryRegisterAlarmTemplate(
+                owner,
+                tooManyConditions,
+                out var conditionLimitError));
+            IsTrue(conditionLimitError.Contains("at most"));
+
+            var missingReference = CreateValidExternalTemplate(
+                "missing-reference");
+            missingReference.Conditions[0].ValueMode = "%";
+            IsFalse(UnmaApi.TryRegisterAlarmTemplate(
+                owner,
+                missingReference,
+                out var missingReferenceError));
+            IsTrue(missingReferenceError.Contains("reference_metric"));
+        }
+        finally
+        {
+            UnmaApi.UnregisterOwner(owner);
+        }
+    }
+
+    private static void TestExternalPushedStateLifecycle()
+    {
+        const string owner = "StateProvider";
+        UnmaApi.UnregisterOwner(owner);
+        try
+        {
+            var invalidUtf16 = new string((char)0xD800, 1);
+            IsFalse(UnmaApi.TryPublishAlarmState(
+                owner,
+                new ExternalAlarmState
+                {
+                    Id = invalidUtf16,
+                    Active = true,
+                    MessageFallback = "Invalid identifier",
+                },
+                out var invalidIdError));
+            IsTrue(invalidIdError.Contains("UTF-16"));
+            IsFalse(UnmaApi.TryPublishAlarmState(
+                owner,
+                new ExternalAlarmState
+                {
+                    Id = "invalid-entity-key",
+                    EntityKey = invalidUtf16,
+                    Active = true,
+                    MessageFallback = "Invalid entity key",
+                },
+                out var invalidEntityKeyError));
+            IsTrue(invalidEntityKeyError.Contains("UTF-16"));
+            IsFalse(UnmaApi.TryPublishAlarmStates(
+                "invalid owner",
+                Array.Empty<ExternalAlarmState>(),
+                out var invalidBatchOwnerError));
+            IsTrue(invalidBatchOwnerError.Length > 0);
+
+            var active = new ExternalAlarmState
+            {
+                Id = " machine-trip ",
+                InstanceId = " unit-7 ",
+                Active = true,
+                PanelId = " ",
+                MessageFallback = " Pump trip ",
+                Severity = " CRITICAL ",
+                ActiveColor = "#f05c41",
+                CurrentValue = 7d,
+            };
+            IsTrue(UnmaApi.TryPublishAlarmState(
+                owner,
+                active,
+                out var publishError));
+            AreEqual("", publishError);
+            var heldSnapshot = UnmaApi.GetSnapshot();
+            var heldState = heldSnapshot.AlarmStates.Single(item =>
+                item.OwnerModId == owner);
+            IsTrue(heldState.Active);
+            AreEqual("machine-trip", heldState.Id);
+            AreEqual("unit-7", heldState.InstanceId);
+            AreEqual("main", heldState.PanelId);
+            AreEqual("Pump trip", heldState.MessageFallback);
+            AreEqual("critical", heldState.Severity);
+            AreEqual("#F05C41", heldState.ActiveColor);
+            AreEqual(7d, heldState.CurrentValue.Value);
+
+            var revisionBeforeIdentical = heldSnapshot.Revision;
+            IsTrue(UnmaApi.PublishAlarmState(
+                owner,
+                new ExternalAlarmState
+                {
+                    Id = "machine-trip",
+                    InstanceId = "unit-7",
+                    Active = true,
+                    PanelId = "main",
+                    MessageFallback = "Pump trip",
+                    Severity = "critical",
+                    ActiveColor = "#F05C41",
+                    CurrentValue = 7d,
+                }));
+            AreEqual(
+                revisionBeforeIdentical,
+                UnmaApi.GetSnapshot().Revision);
+
+            var revisionBeforeBatch = UnmaApi.GetSnapshot().Revision;
+            IsTrue(UnmaApi.TryPublishAlarmStates(
+                owner,
+                new[]
+                {
+                    new ExternalAlarmState
+                    {
+                        Id = "batch-a",
+                        Active = true,
+                        MessageFallback = "Batch A",
+                    },
+                    new ExternalAlarmState
+                    {
+                        Id = "batch-b",
+                        Active = false,
+                        MessageFallback = "Batch B",
+                    },
+                },
+                out var batchError));
+            AreEqual("", batchError);
+            AreEqual(
+                revisionBeforeBatch + 1,
+                UnmaApi.GetSnapshot().Revision);
+            AreEqual(3, UnmaApi.GetSnapshot().AlarmStates.Count(item =>
+                item.OwnerModId == owner));
+            IsFalse(UnmaApi.TryPublishAlarmStates(
+                owner,
+                new[]
+                {
+                    new ExternalAlarmState
+                    {
+                        Id = "duplicate",
+                        MessageFallback = "First",
+                    },
+                    new ExternalAlarmState
+                    {
+                        Id = "duplicate",
+                        MessageFallback = "Second",
+                    },
+                },
+                out var duplicateBatchError));
+            IsTrue(duplicateBatchError.Contains("duplicate"));
+            AreEqual(3, UnmaApi.GetSnapshot().AlarmStates.Count(item =>
+                item.OwnerModId == owner));
+
+            var revisionBeforeReplacement = heldSnapshot.Revision;
+            IsTrue(UnmaApi.PublishAlarmState(
+                owner,
+                new ExternalAlarmState
+                {
+                    Id = "machine-trip",
+                    InstanceId = "unit-7",
+                    Active = false,
+                    MessageFallback = "Pump restored",
+                    Severity = "warning",
+                    CurrentValue = 4.5d,
+                }));
+            var replacedSnapshot = UnmaApi.GetSnapshot();
+            IsTrue(replacedSnapshot.Revision > revisionBeforeReplacement);
+            AreEqual(3, replacedSnapshot.AlarmStates.Count(item =>
+                item.OwnerModId == owner));
+            var replaced = replacedSnapshot.AlarmStates.Single(item =>
+                item.OwnerModId == owner &&
+                item.Id == "machine-trip" &&
+                item.InstanceId == "unit-7");
+            IsFalse(replaced.Active);
+            AreEqual("Pump restored", replaced.MessageFallback);
+            AreEqual(4.5d, replaced.CurrentValue.Value);
+            IsTrue(heldState.Active);
+            AreEqual("Pump trip", heldState.MessageFallback);
+
+            IsFalse(UnmaApi.TryPublishAlarmState(
+                owner,
+                new ExternalAlarmState
+                {
+                    Id = "invalid-value",
+                    Active = true,
+                    MessageFallback = "Invalid",
+                    CurrentValue = double.NaN,
+                },
+                out var invalidValueError));
+            IsTrue(invalidValueError.Contains("finite"));
+            AreEqual(3, UnmaApi.GetSnapshot().AlarmStates.Count(item =>
+                item.OwnerModId == owner));
+
+            IsTrue(UnmaApi.RemoveAlarmState(
+                " StateProvider ",
+                " machine-trip ",
+                " unit-7 "));
+            IsFalse(UnmaApi.RemoveAlarmState(
+                owner,
+                "machine-trip",
+                "unit-7"));
+            AreEqual(2, UnmaApi.GetSnapshot().AlarmStates.Count(item =>
+                item.OwnerModId == owner));
+            AreEqual(1, heldSnapshot.AlarmStates.Count(item =>
+                item.OwnerModId == owner));
+        }
+        finally
+        {
+            UnmaApi.UnregisterOwner(owner);
+        }
+    }
+
+    private static void TestExternalDefinitionLoader()
+    {
+        var temporaryRoot = Path.Combine(
+            Path.GetTempPath(),
+            "UNMA-CoreTests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporaryRoot);
+        try
+        {
+            var validProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderValid");
+            WriteExternalDefinition(
+                validProvider,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "LoaderValid",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    BuildExternalAlarmJson("tank-low", 1, 1)));
+            var valid = ExternalDefinitionLoader.Load(
+                new[] { validProvider });
+            AreEqual(1, valid.ProviderCount);
+            AreEqual(1, valid.ScannedFileCount);
+            AreEqual(1, valid.LoadedFileCount);
+            IsFalse(valid.HasErrors);
+            AreEqual(0, valid.Diagnostics.Count);
+            AreEqual(1, valid.AlarmTemplates.Count);
+            var loadedAlarm = valid.AlarmTemplates[0];
+            AreEqual("LoaderValid", loadedAlarm.OwnerModId);
+            AreEqual("tank-low", loadedAlarm.Id);
+            AreEqual("Provider.Entity0", loadedAlarm.PrototypeIds[0]);
+            AreEqual("External alarm", loadedAlarm.MessageFallback);
+            AreEqual("metric0", loadedAlarm.Conditions[0].Metric);
+
+            var mismatchProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderMismatch");
+            WriteExternalDefinition(
+                mismatchProvider,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "DifferentProvider",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    BuildExternalAlarmJson("mismatch", 1, 1)));
+            var mismatch = ExternalDefinitionLoader.Load(
+                new[] { mismatchProvider });
+            AreEqual(0, mismatch.LoadedFileCount);
+            AreEqual(0, mismatch.AlarmTemplates.Count);
+            IsTrue(mismatch.HasErrors);
+            IsTrue(HasDiagnostic(
+                mismatch,
+                "file.provider_mismatch"));
+
+            var schemaProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderSchema");
+            WriteExternalDefinition(
+                schemaProvider,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "LoaderSchema",
+                    ExternalDefinitionLoader.SchemaVersion + 1,
+                    BuildExternalAlarmJson("schema", 1, 1)));
+            var invalidSchema = ExternalDefinitionLoader.Load(
+                new[] { schemaProvider });
+            AreEqual(0, invalidSchema.LoadedFileCount);
+            AreEqual(0, invalidSchema.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(
+                invalidSchema,
+                "file.unsupported_schema"));
+
+            var duplicateProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderDuplicate");
+            var duplicateAlarm = BuildExternalAlarmJson(
+                "duplicate",
+                1,
+                1);
+            WriteExternalDefinition(
+                duplicateProvider,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "LoaderDuplicate",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    duplicateAlarm,
+                    duplicateAlarm));
+            var duplicate = ExternalDefinitionLoader.Load(
+                new[] { duplicateProvider });
+            AreEqual(1, duplicate.LoadedFileCount);
+            AreEqual(1, duplicate.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(duplicate, "alarm.duplicate"));
+
+            var largeProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderLarge");
+            WriteExternalDefinition(
+                largeProvider,
+                "large.json",
+                new string(
+                    'x',
+                    checked((int)
+                        ExternalDefinitionLoader.MaxFileSizeBytes + 1)));
+            var tooLarge = ExternalDefinitionLoader.Load(
+                new[] { largeProvider });
+            AreEqual(0, tooLarge.LoadedFileCount);
+            AreEqual(0, tooLarge.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(tooLarge, "file.too_large"));
+
+            var conditionProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderConditions");
+            WriteExternalDefinition(
+                conditionProvider,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "LoaderConditions",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    BuildExternalAlarmJson(
+                        "condition-limit",
+                        1,
+                        ExternalDefinitionLoader.MaxConditionsPerAlarm + 1)));
+            var conditionLimit = ExternalDefinitionLoader.Load(
+                new[] { conditionProvider });
+            AreEqual(1, conditionLimit.LoadedFileCount);
+            AreEqual(0, conditionLimit.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(conditionLimit, "alarm.invalid"));
+            IsTrue(conditionLimit.Diagnostics.Any(item =>
+                item.Message.Contains("conditions")));
+
+            var prototypeProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderPrototypes");
+            WriteExternalDefinition(
+                prototypeProvider,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "LoaderPrototypes",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    BuildExternalAlarmJson(
+                        "prototype-limit",
+                        ExternalDefinitionLoader.MaxPrototypeIdsPerAlarm + 1,
+                        1)));
+            var prototypeLimit = ExternalDefinitionLoader.Load(
+                new[] { prototypeProvider });
+            AreEqual(1, prototypeLimit.LoadedFileCount);
+            AreEqual(0, prototypeLimit.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(prototypeLimit, "alarm.invalid"));
+            IsTrue(prototypeLimit.Diagnostics.Any(item =>
+                item.Message.Contains("prototype ids")));
+
+            var missingRequiredProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderRequired");
+            WriteExternalDefinition(
+                missingRequiredProvider,
+                "alarms.json",
+                "{\"schema_version\":1,\"mod_id\":\"LoaderRequired\"}");
+            var missingRequired = ExternalDefinitionLoader.Load(
+                new[] { missingRequiredProvider });
+            AreEqual(0, missingRequired.LoadedFileCount);
+            IsTrue(HasDiagnostic(
+                missingRequired,
+                "file.invalid_json"));
+
+            var nullAlarmsProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderNullAlarms");
+            WriteExternalDefinition(
+                nullAlarmsProvider,
+                "alarms.json",
+                "{\"schema_version\":1,\"mod_id\":\"LoaderNullAlarms\"," +
+                "\"alarms\":null}");
+            var nullAlarms = ExternalDefinitionLoader.Load(
+                new[] { nullAlarmsProvider });
+            AreEqual(0, nullAlarms.LoadedFileCount);
+            AreEqual(0, nullAlarms.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(
+                nullAlarms,
+                "file.alarms_required"));
+
+            var providerLimitProvider = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderProviderLimit");
+            var providerLimitAlarms = Enumerable.Range(
+                    0,
+                    ExternalDefinitionLoader.MaxAlarmsPerProvider)
+                .Select(index => BuildExternalAlarmJson(
+                    "alarm-" + index,
+                    1,
+                    1))
+                .ToArray();
+            WriteExternalDefinition(
+                providerLimitProvider,
+                "a.json",
+                BuildExternalFileJson(
+                    "LoaderProviderLimit",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    providerLimitAlarms));
+            WriteExternalDefinition(
+                providerLimitProvider,
+                "b.json",
+                BuildExternalFileJson(
+                    "LoaderProviderLimit",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    BuildExternalAlarmJson("overflow", 1, 1)));
+            var providerLimit = ExternalDefinitionLoader.Load(
+                new[] { providerLimitProvider });
+            AreEqual(
+                ExternalDefinitionLoader.MaxAlarmsPerProvider,
+                providerLimit.AlarmTemplates.Count);
+            AreEqual(1, providerLimit.ScannedFileCount);
+            IsTrue(HasDiagnostic(
+                providerLimit,
+                "provider.alarm_limit"));
+
+            var protectedProvider = CreateExternalProvider(
+                temporaryRoot,
+                "UNMA");
+            var aliasAttacker = CreateExternalProvider(
+                temporaryRoot,
+                "LoaderAliasAttacker");
+            var hijackingAlarm = BuildExternalAlarmJson(
+                    "hijack",
+                    1,
+                    1)
+                .Replace(
+                    "\"message_fallback\"",
+                    "\"localization_namespace\":\"UNMA\"," +
+                    "\"message_fallback\"");
+            WriteExternalDefinition(
+                aliasAttacker,
+                "alarms.json",
+                BuildExternalFileJson(
+                    "LoaderAliasAttacker",
+                    ExternalDefinitionLoader.SchemaVersion,
+                    hijackingAlarm));
+            var hijack = ExternalDefinitionLoader.Load(
+                new[] { protectedProvider, aliasAttacker });
+            AreEqual(0, hijack.AlarmTemplates.Count);
+            IsTrue(HasDiagnostic(
+                hijack,
+                "alarm.localization_namespace_conflict"));
+        }
+        finally
+        {
+            DeleteTemporaryTestDirectory(temporaryRoot);
+        }
+
+        IsFalse(Directory.Exists(temporaryRoot));
+    }
+
+    private static ExternalProviderDescriptor CreateExternalProvider(
+        string temporaryRoot,
+        string providerId)
+    {
+        var providerRoot = Path.Combine(temporaryRoot, providerId);
+        Directory.CreateDirectory(Path.Combine(providerRoot, "UNMA"));
+        return new ExternalProviderDescriptor(providerId, providerRoot);
+    }
+
+    private static void WriteExternalDefinition(
+        ExternalProviderDescriptor provider,
+        string fileName,
+        string contents)
+    {
+        File.WriteAllText(
+            Path.Combine(provider.RootDirectoryPath, "UNMA", fileName),
+            contents);
+    }
+
+    private static string BuildExternalFileJson(
+        string providerId,
+        int schemaVersion,
+        params string[] alarms)
+    {
+        return "{\"schema_version\":" + schemaVersion +
+               ",\"mod_id\":\"" + providerId +
+               "\",\"alarms\":[" + string.Join(",", alarms) + "]}";
+    }
+
+    private static string BuildExternalAlarmJson(
+        string alarmId,
+        int prototypeCount,
+        int conditionCount)
+    {
+        var prototypes = string.Join(",", Enumerable.Range(
+                0,
+                prototypeCount)
+            .Select(index => "\"Provider.Entity" + index + "\""));
+        var conditions = string.Join(",", Enumerable.Range(
+                0,
+                conditionCount)
+            .Select(index =>
+                "{\"metric\":\"metric" + index +
+                "\",\"operator\":\"<\",\"threshold\":5}"));
+        return "{\"id\":\"" + alarmId +
+               "\",\"prototype_ids\":[" + prototypes +
+               "],\"scope\":\"aggregate\"," +
+               "\"message_fallback\":\"External alarm\"," +
+               "\"severity\":\"warning\",\"conditions\":[" +
+               conditions + "]}";
+    }
+
+    private static bool HasDiagnostic(
+        ExternalDefinitionLoadResult result,
+        string code)
+    {
+        return result.Diagnostics.Any(item => item.Code == code);
+    }
+
+    private static void DeleteTemporaryTestDirectory(string directory)
+    {
+        var resolved = Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+        var temporaryRoot = Path.GetFullPath(Path.GetTempPath())
+            .TrimEnd(Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) +
+            Path.DirectorySeparatorChar;
+        if (!resolved.StartsWith(
+                temporaryRoot,
+                StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(resolved).StartsWith(
+                "UNMA-CoreTests-",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Refusing to delete an unexpected test directory: " +
+                resolved);
+        }
+
+        if (Directory.Exists(resolved))
+        {
+            Directory.Delete(resolved, recursive: true);
+        }
+    }
+
+    private static ExternalAlarmTemplateDefinition
+        CreateValidExternalTemplate(string id)
+    {
+        return new ExternalAlarmTemplateDefinition
+        {
+            Id = id,
+            PrototypeIds = new List<string> { "Provider.Storage" },
+            Scope = "aggregate",
+            PanelId = "main",
+            MessageFallback = "External test alarm",
+            DetailFallback = "External test detail",
+            Severity = "warning",
+            SoundId = "auto",
+            ActiveColor = "auto",
+            Logic = "all",
+            Conditions = new List<ExternalAlarmConditionDefinition>
+            {
+                new()
+                {
+                    Metric = "$stored.amount",
+                    Operator = "<",
+                    Threshold = 5d,
+                },
+            },
+        };
+    }
+
     private static Dictionary<string, double> BaseSystemMetrics()
     {
         return new Dictionary<string, double>(StringComparer.Ordinal)
@@ -1553,5 +2465,22 @@ internal static class Program
             throw new InvalidOperationException(
                 $"Expected approximately '{expected}', got '{actual}'.");
         }
+    }
+
+    private static void Throws<TException>(Action action)
+        where TException : Exception
+    {
+        s_assertions++;
+        try
+        {
+            action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "Expected exception " + typeof(TException).Name + ".");
     }
 }

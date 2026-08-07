@@ -155,6 +155,7 @@ public sealed class AlarmMemoryDefinition
     [DataMember(Order = 16)] public string OccurrenceId = "";
     [DataMember(Order = 17)] public int OccurrencePriority;
     [DataMember(Order = 18)] public string SlotId = "";
+    [DataMember(Order = 19)] public bool AutoAcknowledgeOnClear;
 }
 
 [DataContract]

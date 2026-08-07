@@ -1,0 +1,21 @@
+{
+  "id": "ExampleProvider",
+  "version": "1.0.0",
+  "display_name": "UNMA V1 Example Provider",
+  "description_short": "Beispiel für automatische und gepushte UNMA-Meldungen.",
+  "authors": [
+    "Example Author"
+  ],
+  "primary_dlls": [
+    "ExampleProvider.dll"
+  ],
+  "primary_mod_class_name": "ExampleProvider.ExampleProviderMod",
+  "mod_dependencies": [
+    "UNMA>=0.8.0"
+  ],
+  "non_locking_dll_load": true,
+  "can_add_to_saved_game": true,
+  "can_remove_from_saved_game": true,
+  "min_game_version": "0.8.6c",
+  "max_verified_game_version": "0.8.6c"
+}

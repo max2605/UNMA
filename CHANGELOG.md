@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0 – 2026-08-07
+
+- Versionierte Fremdmod-API V1 für prototypgebundene Alarmvorlagen,
+  fehlertolerante Messwert-Reader und direkt veröffentlichte Alarmzustände.
+- Deklarative Definitionen aktiver Mods werden deterministisch aus deren
+  `UNMA/*.json`-Ordnern geladen; Größen-, Mengen-, Schema-, Eigentümer- und
+  Übersetzungsschlüsselprüfungen isolieren fehlerhafte Providerdateien.
+- Automatische Provideralarme unterstützen feste Sammelschlitze sowie bewusst
+  aktivierte instanzbezogene Schlitze. Stabile IDs erhalten K/G/Q und eine
+  Quittierung auch dann, wenn sich der angezeigte Messwert ändert.
+- LangLib 0.1.0 ist jetzt eine deklarierte Abhängigkeit. Fensterhülle und
+  Providertexte werden über kanonische Schlüssel mit sicheren Fallbacks
+  aufgelöst.
+- Der Optionen-Tab zeigt Provider-, Definitions- und Fehlerzahlen und kann
+  JSON- sowie Sprachdateien ohne Neustart erneut einlesen.
+- Entwicklerdokumentation, JSON-Schema und ein vollständiges Providerbeispiel
+  ergänzt.
+
 ## 0.7.0 – 2026-08-07
 
 - Die UNMA-Glocke im Gebäude-/Entity-Inspector fügt das angeklickte Objekt

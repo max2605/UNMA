@@ -11,7 +11,10 @@ using Mafi.Core.Entities;
 using Mafi.Core.Notifications;
 using Mafi.Core.Population;
 using Mafi.Core.Simulation;
+using UNMA.Api;
 using UNMA.Domain;
+using UNMA.Extensions;
+using UNMA.Localization;
 
 namespace UNMA.Runtime;
 
@@ -24,12 +27,52 @@ public sealed class UnmaSettings
     public bool EnableSystemAlarms = true;
 }
 
+public sealed class ExternalIntegrationStatus
+{
+    public int ActiveProviderCount { get; }
+    public int ScannedFileCount { get; }
+    public int LoadedFileCount { get; }
+    public int JsonAlarmCount { get; }
+    public int ApiMetricCount { get; }
+    public int ApiAlarmCount { get; }
+    public int ApiStateCount { get; }
+    public int DiagnosticCount { get; }
+
+    public ExternalIntegrationStatus(
+        int activeProviderCount,
+        int scannedFileCount,
+        int loadedFileCount,
+        int jsonAlarmCount,
+        int apiMetricCount,
+        int apiAlarmCount,
+        int apiStateCount,
+        int diagnosticCount)
+    {
+        ActiveProviderCount = activeProviderCount;
+        ScannedFileCount = scannedFileCount;
+        LoadedFileCount = loadedFileCount;
+        JsonAlarmCount = jsonAlarmCount;
+        ApiMetricCount = apiMetricCount;
+        ApiAlarmCount = apiAlarmCount;
+        ApiStateCount = apiStateCount;
+        DiagnosticCount = diagnosticCount;
+    }
+}
+
 public sealed class UnmaRuntime : IDisposable
 {
     private sealed class AlarmState
     {
         public readonly AlarmView View = new();
         public long Sequence;
+    }
+
+    private sealed class ExternalEntityEvaluation
+    {
+        public bool IsActive;
+        public bool IsMissingSource;
+        public double LastValue;
+        public string Detail = "";
     }
 
     private static readonly string[] s_emergencyNotificationTokens =
@@ -71,6 +114,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_inspectionGate = new();
     private readonly object m_systemMetricsGate = new();
     private readonly object m_persistenceGate = new();
+    private readonly object m_externalDefinitionsGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
     private readonly IWorkersManager m_workersManager;
@@ -78,14 +122,25 @@ public sealed class UnmaRuntime : IDisposable
     private readonly PopsHealthManager m_healthManager;
     private readonly ISimLoopEvents m_simLoopEvents;
     private readonly UnmaStateStore m_store;
+    private readonly ExternalProviderDescriptor[] m_externalProviders;
     private readonly Dictionary<string, AlarmState> m_alarms =
         new(StringComparer.Ordinal);
     private readonly List<AlarmHistoryDefinition> m_alarmHistory = new();
+    private readonly HashSet<string> m_previousExternalKeys =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<string> m_retiredExternalKeys =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool>
+        m_externalAutoAcknowledgeByKey = new(StringComparer.Ordinal);
 
     private long m_sequence;
     private long m_alarmHistoryRevision;
     private long m_nextEvaluationTimestamp;
     private long m_nextEvaluationErrorLogTimestamp;
+    private long m_externalDefinitionRevision;
+    private string m_lastExternalCollisionStamp = "";
+    private long m_registeredExternalApiRevision = -1;
+    private string m_registeredExternalNamespaceSignature = "";
     private volatile bool m_gameplayActive;
     private volatile UnmaSettings m_settings;
     private int m_requestedInspectionEntityId = -1;
@@ -95,7 +150,9 @@ public sealed class UnmaRuntime : IDisposable
         new(StringComparer.Ordinal);
     private bool m_simListenerAdded;
     private bool m_suppressAlarmPersistence;
+    private bool m_alarmPersistencePending;
     private bool m_disposed;
+    private ExternalDefinitionLoadResult m_externalDefinitions;
 
     public UnmaConfiguration Configuration { get; }
     public UnmaSettings Settings => m_settings;
@@ -109,7 +166,8 @@ public sealed class UnmaRuntime : IDisposable
         PopsHealthManager healthManager,
         ISimLoopEvents simLoopEvents,
         UnmaStateStore store,
-        UnmaSettings settings)
+        UnmaSettings settings,
+        IEnumerable<ExternalProviderDescriptor> externalProviders = null)
     {
         m_notificationsManager = notificationsManager;
         m_entitiesManager = entitiesManager;
@@ -118,10 +176,27 @@ public sealed class UnmaRuntime : IDisposable
         m_healthManager = healthManager;
         m_simLoopEvents = simLoopEvents;
         m_store = store;
+        m_externalProviders = (externalProviders ??
+                Enumerable.Empty<ExternalProviderDescriptor>())
+            .Where(provider => provider != null)
+            .Select(provider => new ExternalProviderDescriptor(
+                provider.Id,
+                provider.RootDirectoryPath))
+            .ToArray();
         m_settings = settings ?? new UnmaSettings();
         Configuration = store.Load();
         RestoreAlarmHistory();
         RestoreAlarmMemories();
+        foreach (var key in m_alarms
+                     .Where(pair => string.Equals(
+                         pair.Value.View.Source,
+                         "external",
+                         StringComparison.Ordinal))
+                     .Select(pair => pair.Key))
+        {
+            m_previousExternalKeys.Add(key);
+        }
+        ReloadExternalDefinitions(reloadLanguageFiles: false);
     }
 
     private void RestoreAlarmHistory()
@@ -198,6 +273,14 @@ public sealed class UnmaRuntime : IDisposable
             state.View.IsMissingSource = memory.IsMissingSource;
             state.View.LastValue = memory.LastValue;
             m_alarms[memory.Key] = state;
+            if (string.Equals(
+                    memory.Source,
+                    "external",
+                    StringComparison.Ordinal))
+            {
+                m_externalAutoAcknowledgeByKey[memory.Key] =
+                    memory.AutoAcknowledgeOnClear;
+            }
             m_sequence = Math.Max(m_sequence, memory.Sequence);
             if (FindHistoryLocked(memory.Sequence) == null)
             {
@@ -254,6 +337,174 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public ExternalIntegrationStatus GetExternalIntegrationStatus()
+    {
+        ExternalDefinitionLoadResult definitions;
+        lock (m_externalDefinitionsGate)
+        {
+            definitions = m_externalDefinitions;
+        }
+        var api = UnmaApi.GetSnapshot();
+        return new ExternalIntegrationStatus(
+            definitions?.ProviderCount ?? 0,
+            definitions?.ScannedFileCount ?? 0,
+            definitions?.LoadedFileCount ?? 0,
+            definitions?.AlarmTemplates.Count ?? 0,
+            api.Metrics.Count,
+            api.AlarmTemplates.Count,
+            api.AlarmStates.Count,
+            definitions?.Diagnostics.Count ?? 0);
+    }
+
+    public IReadOnlyList<ExternalLoadDiagnostic>
+        GetExternalIntegrationDiagnostics()
+    {
+        lock (m_externalDefinitionsGate)
+        {
+            return m_externalDefinitions?.Diagnostics.ToArray() ??
+                   Array.Empty<ExternalLoadDiagnostic>();
+        }
+    }
+
+    public bool ReloadExternalDefinitions(bool reloadLanguageFiles = true)
+    {
+        var loaded = ExternalDefinitionLoader.Load(m_externalProviders);
+        lock (m_externalDefinitionsGate)
+        {
+            m_externalDefinitions = loaded;
+            m_externalDefinitionRevision++;
+        }
+
+        var api = UnmaApi.GetSnapshot();
+        RegisterExternalLocalizationNamespaces(loaded, api);
+        if (reloadLanguageFiles)
+        {
+            UnmaText.Reload();
+        }
+
+        foreach (var diagnostic in loaded.Diagnostics.Take(20))
+        {
+            Log.Warning(
+                "UNMA: Fremdmod-Definition " + diagnostic.Code +
+                " [" + diagnostic.ProviderId + "] " +
+                diagnostic.Message);
+        }
+        if (loaded.Diagnostics.Count > 20)
+        {
+            Log.Warning(
+                "UNMA: " + (loaded.Diagnostics.Count - 20) +
+                " weitere Fremdmod-Diagnosen wurden zusammengefasst.");
+        }
+
+        Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+        return !loaded.HasErrors;
+    }
+
+    private void RegisterExternalLocalizationNamespaces(
+        ExternalDefinitionLoadResult definitions,
+        ExternalRegistrySnapshot api)
+    {
+        var providersById = m_externalProviders
+            .Where(provider =>
+                provider != null &&
+                !string.IsNullOrWhiteSpace(provider.Id))
+            .GroupBy(provider => provider.Id, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First(),
+                StringComparer.Ordinal);
+        var namespaceOwners = new Dictionary<string, string>(
+            StringComparer.OrdinalIgnoreCase);
+        var registeredNamespaces = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var provider in providersById.Values)
+        {
+            if (!UnmaText.IsValidNamespace(provider.Id))
+            {
+                continue;
+            }
+            namespaceOwners[provider.Id] = provider.Id;
+            if (registeredNamespaces.Add(provider.Id))
+            {
+                UnmaText.TryRegisterProvider(
+                    provider.Id,
+                    provider.RootDirectoryPath,
+                    out _);
+            }
+        }
+
+        var aliases = (definitions?.AlarmTemplates ??
+                Array.Empty<ExternalAlarmTemplateSnapshot>())
+            .Select(item => new
+            {
+                Owner = item.OwnerModId,
+                Namespace = item.LocalizationNamespace,
+            })
+            .Concat(api.AlarmTemplates.Select(item => new
+            {
+                Owner = item.OwnerModId,
+                Namespace = item.LocalizationNamespace,
+            }))
+            .Concat(api.AlarmStates.Select(item => new
+            {
+                Owner = item.OwnerModId,
+                Namespace = item.LocalizationNamespace,
+            }))
+            .GroupBy(
+                item => item.Owner + "\u001f" + item.Namespace,
+                StringComparer.Ordinal)
+            .Select(group => group.First());
+        foreach (var alias in aliases)
+        {
+            if (!providersById.TryGetValue(alias.Owner, out var provider) ||
+                !UnmaText.IsValidNamespace(alias.Namespace))
+            {
+                continue;
+            }
+            if (namespaceOwners.TryGetValue(
+                    alias.Namespace,
+                    out var existingOwner) &&
+                !string.Equals(
+                    existingOwner,
+                    alias.Owner,
+                    StringComparison.Ordinal))
+            {
+                Log.Warning(
+                    "UNMA: LangLib-Namensraum '" + alias.Namespace +
+                    "' gehört bereits zu '" + existingOwner +
+                    "'; Registrierung von '" + alias.Owner +
+                    "' wurde abgewiesen.");
+                continue;
+            }
+            namespaceOwners[alias.Namespace] = alias.Owner;
+            if (registeredNamespaces.Add(alias.Namespace))
+            {
+                UnmaText.TryRegisterProvider(
+                    alias.Namespace,
+                    provider.RootDirectoryPath,
+                    out _);
+            }
+        }
+        m_registeredExternalApiRevision = api.Revision;
+        m_registeredExternalNamespaceSignature =
+            ExternalNamespaceSignature(api);
+    }
+
+    private static string ExternalNamespaceSignature(
+        ExternalRegistrySnapshot api)
+    {
+        return string.Join(
+            "\u001e",
+            api.AlarmTemplates
+                .Select(item => item.OwnerModId + "\u001f" +
+                                item.LocalizationNamespace)
+                .Concat(api.AlarmStates.Select(item =>
+                    item.OwnerModId + "\u001f" +
+                    item.LocalizationNamespace))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(item => item, StringComparer.Ordinal));
+    }
+
     public void SetGameplayActive(bool isActive)
     {
         if (m_gameplayActive == isActive)
@@ -308,6 +559,7 @@ public sealed class UnmaRuntime : IDisposable
         }
         EvaluateSustainedVanillaAlarms();
         EvaluateCustomRules();
+        EvaluateExternalAlarms();
     }
 
     public IReadOnlyList<AlarmView> GetViews(PanelDefinition panel)
@@ -349,17 +601,26 @@ public sealed class UnmaRuntime : IDisposable
 
         lock (m_gate)
         {
-            var state = m_alarms.Values
-                .Where(item =>
-                    item.View.RequiresAcknowledgement &&
-                    !string.Equals(
-                        item.View.SoundId,
+            AlarmState best = null;
+            foreach (var candidate in m_alarms.Values)
+            {
+                if (!candidate.View.RequiresAcknowledgement ||
+                    string.Equals(
+                        candidate.View.SoundId,
                         "none",
                         StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(item => item.View.Severity)
-                .ThenByDescending(item => item.Sequence)
-                .FirstOrDefault();
-            return state == null ? null : Clone(state.View);
+                {
+                    continue;
+                }
+                if (best == null ||
+                    candidate.View.Severity > best.View.Severity ||
+                    candidate.View.Severity == best.View.Severity &&
+                    candidate.Sequence > best.Sequence)
+                {
+                    best = candidate;
+                }
+            }
+            return best == null ? null : Clone(best.View);
         }
     }
 
@@ -420,7 +681,8 @@ public sealed class UnmaRuntime : IDisposable
                 m_alarmHistoryRevision++;
             }
         }
-        if (changed)
+        var prunedExternal = PruneRetiredExternalAlarms();
+        if (changed || prunedExternal)
         {
             PruneInactiveVanillaHistory(500);
             PersistAlarmState();
@@ -497,6 +759,14 @@ public sealed class UnmaRuntime : IDisposable
                     IsMissingSource = state.View.IsMissingSource,
                     LastValue = state.View.LastValue,
                     Sequence = state.Sequence,
+                    AutoAcknowledgeOnClear = string.Equals(
+                            state.View.Source,
+                            "external",
+                            StringComparison.Ordinal) &&
+                        m_externalAutoAcknowledgeByKey.TryGetValue(
+                            state.View.Key,
+                            out var autoAcknowledgeOnClear) &&
+                        autoAcknowledgeOnClear,
                 })
                 .ToList();
             alarmHistory = m_alarmHistory
@@ -600,10 +870,13 @@ public sealed class UnmaRuntime : IDisposable
 
     private void PersistAlarmState()
     {
-        if (!m_suppressAlarmPersistence)
+        if (m_suppressAlarmPersistence)
         {
-            SaveConfiguration();
+            m_alarmPersistencePending = true;
+            return;
         }
+        m_alarmPersistencePending = false;
+        SaveConfiguration();
     }
 
     public bool AddRule(
@@ -1080,7 +1353,8 @@ public sealed class UnmaRuntime : IDisposable
         {
             return m_alarms.Values
                 .Where(state =>
-                    state.View.Source == "vanilla" &&
+                    (state.View.Source == "vanilla" ||
+                     state.View.Source == "external") &&
                     !string.IsNullOrWhiteSpace(state.View.OverrideId))
                 .GroupBy(
                     state => state.View.OverrideId,
@@ -1097,7 +1371,19 @@ public sealed class UnmaRuntime : IDisposable
 
     public string GetConfiguredSound(string alarmId)
     {
-        return ResolveConfiguredSound(alarmId);
+        string fallback;
+        lock (m_gate)
+        {
+            fallback = m_alarms.Values
+                .Where(state => string.Equals(
+                    state.View.OverrideId,
+                    alarmId,
+                    StringComparison.Ordinal))
+                .OrderByDescending(state => state.Sequence)
+                .Select(state => state.View.SoundId)
+                .FirstOrDefault();
+        }
+        return ResolveConfiguredSound(alarmId, fallback);
     }
 
     public bool SetConfiguredSound(string alarmId, string soundId)
@@ -1108,6 +1394,8 @@ public sealed class UnmaRuntime : IDisposable
         }
 
         soundId = string.IsNullOrWhiteSpace(soundId) ? "auto" : soundId;
+        var defaultAutoAcknowledge =
+            ResolveExternalDefaultAutoAcknowledge(alarmId);
         AlarmSoundOverride existing;
         string previousSound = null;
         var created = false;
@@ -1124,6 +1412,7 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     AlarmId = alarmId,
                     SoundId = soundId,
+                    AutoAcknowledgeOnClear = defaultAutoAcknowledge,
                 };
                 Configuration.SoundOverrides.Add(existing);
                 created = true;
@@ -1173,7 +1462,9 @@ public sealed class UnmaRuntime : IDisposable
 
     public bool GetConfiguredAutoAcknowledgeOnClear(string alarmId)
     {
-        return ResolveAutoAcknowledgeOnClear(alarmId);
+        return ResolveAutoAcknowledgeOnClear(
+            alarmId,
+            ResolveExternalDefaultAutoAcknowledge(alarmId));
     }
 
     public bool SetConfiguredAutoAcknowledgeOnClear(
@@ -1184,6 +1475,8 @@ public sealed class UnmaRuntime : IDisposable
         {
             return false;
         }
+
+        var defaultSound = GetConfiguredSound(alarmId);
 
         AlarmSoundOverride existing;
         var previousValue = false;
@@ -1200,7 +1493,7 @@ public sealed class UnmaRuntime : IDisposable
                 existing = new AlarmSoundOverride
                 {
                     AlarmId = alarmId,
-                    SoundId = "auto",
+                    SoundId = defaultSound,
                     AutoAcknowledgeOnClear = autoAcknowledgeOnClear,
                 };
                 Configuration.SoundOverrides.Add(existing);
@@ -1967,6 +2260,634 @@ public sealed class UnmaRuntime : IDisposable
             slotId: "rule:" + rule.Id);
     }
 
+    private void EvaluateExternalAlarms()
+    {
+        var wasSuppressed = m_suppressAlarmPersistence;
+        m_suppressAlarmPersistence = true;
+        try
+        {
+            EvaluateExternalAlarmsCore();
+        }
+        finally
+        {
+            m_suppressAlarmPersistence = wasSuppressed;
+            if (!wasSuppressed && m_alarmPersistencePending)
+            {
+                PersistAlarmState();
+            }
+        }
+    }
+
+    private void EvaluateExternalAlarmsCore()
+    {
+        ExternalAlarmTemplateSnapshot[] jsonTemplates;
+        lock (m_externalDefinitionsGate)
+        {
+            jsonTemplates = m_externalDefinitions?.AlarmTemplates.ToArray() ??
+                            Array.Empty<ExternalAlarmTemplateSnapshot>();
+        }
+        var api = UnmaApi.GetSnapshot();
+        if (api.Revision != m_registeredExternalApiRevision)
+        {
+            var namespaceSignature = ExternalNamespaceSignature(api);
+            if (!string.Equals(
+                    namespaceSignature,
+                    m_registeredExternalNamespaceSignature,
+                    StringComparison.Ordinal))
+            {
+                ExternalDefinitionLoadResult definitions;
+                lock (m_externalDefinitionsGate)
+                {
+                    definitions = m_externalDefinitions;
+                }
+                RegisterExternalLocalizationNamespaces(definitions, api);
+            }
+            else
+            {
+                m_registeredExternalApiRevision = api.Revision;
+            }
+        }
+        var templates = new Dictionary<string,
+            ExternalAlarmTemplateSnapshot>(StringComparer.Ordinal);
+        foreach (var template in jsonTemplates)
+        {
+            templates[ExternalTemplateIdentity(template)] = template;
+        }
+        var collisionStamp = api.Revision.ToString(
+                                 CultureInfo.InvariantCulture) + ":" +
+                             m_externalDefinitionRevision.ToString(
+                                 CultureInfo.InvariantCulture);
+        var logCollisions = !string.Equals(
+            collisionStamp,
+            m_lastExternalCollisionStamp,
+            StringComparison.Ordinal);
+        foreach (var template in api.AlarmTemplates)
+        {
+            // A declarative file owns the same provider/id namespace as the
+            // compiled API. The deterministic JSON definition wins instead
+            // of silently changing semantics with mod load order.
+            var identity = ExternalTemplateIdentity(template);
+            if (!templates.ContainsKey(identity))
+            {
+                templates.Add(identity, template);
+            }
+            else if (logCollisions)
+            {
+                Log.Warning(
+                    "UNMA: C#-Alarmvorlage '" + template.OwnerModId +
+                    ":" + template.Id +
+                    "' kollidiert mit JSON; die JSON-Definition gilt.");
+            }
+        }
+        m_lastExternalCollisionStamp = collisionStamp;
+
+        IEntity[] entities = Array.Empty<IEntity>();
+        if (templates.Count > 0)
+        {
+            try
+            {
+                entities = m_entitiesManager.Entities
+                    .AsEnumerable()
+                    .Where(entity => entity != null)
+                    .ToArray();
+            }
+            catch (Exception exception)
+            {
+                Log.Warning(
+                    "UNMA: Entitäten für Fremdmod-Alarme konnten nicht " +
+                    "gelesen werden: " + exception.Message);
+            }
+        }
+        var liveEntitiesByPrototype = IndexExternalEntities(
+            entities,
+            includeDestroyed: false);
+        var templatesUsingDestroyedEntities = templates.Values.Any(
+            UsesDestroyedEntityMetric);
+        var allEntitiesByPrototype = templatesUsingDestroyedEntities
+            ? IndexExternalEntities(entities, includeDestroyed: true)
+            : liveEntitiesByPrototype;
+
+        var currentKeys = new HashSet<string>(StringComparer.Ordinal);
+        var currentAutoAcknowledge = new Dictionary<string, bool>(
+            StringComparer.Ordinal);
+        foreach (var template in templates.Values
+                     .OrderBy(item => item.OwnerModId, StringComparer.Ordinal)
+                     .ThenBy(item => item.Id, StringComparer.Ordinal))
+        {
+            EvaluateExternalTemplate(
+                template,
+                api,
+                UsesDestroyedEntityMetric(template)
+                    ? allEntitiesByPrototype
+                    : liveEntitiesByPrototype,
+                currentKeys,
+                currentAutoAcknowledge);
+        }
+        EvaluatePushedExternalStates(
+            api,
+            currentKeys,
+            currentAutoAcknowledge);
+
+        var staleKeys = m_previousExternalKeys
+            .Where(key => !currentKeys.Contains(key))
+            .ToArray();
+        foreach (var staleKey in staleKeys)
+        {
+            var rememberedAutoAcknowledge =
+                m_externalAutoAcknowledgeByKey.TryGetValue(
+                    staleKey,
+                    out var remembered)
+                    ? remembered
+                    : ResolveExternalAutoAcknowledgeForKey(staleKey);
+            string overrideId;
+            lock (m_gate)
+            {
+                overrideId = m_alarms.TryGetValue(staleKey, out var state)
+                    ? state.View.OverrideId
+                    : "";
+            }
+            var autoAcknowledge = string.IsNullOrWhiteSpace(overrideId)
+                ? rememberedAutoAcknowledge
+                : ResolveAutoAcknowledgeOnClear(
+                    overrideId,
+                    rememberedAutoAcknowledge);
+            ClearAlarm(
+                staleKey,
+                autoAcknowledgeOnClear: autoAcknowledge,
+                persist: false);
+            m_retiredExternalKeys.Add(staleKey);
+        }
+        var prunedStaleAlarms = PruneRetiredExternalAlarms();
+        if (staleKeys.Length > 0 || prunedStaleAlarms)
+        {
+            PersistAlarmState();
+        }
+
+        m_previousExternalKeys.Clear();
+        foreach (var key in currentKeys)
+        {
+            m_previousExternalKeys.Add(key);
+            m_retiredExternalKeys.Remove(key);
+        }
+        m_externalAutoAcknowledgeByKey.Clear();
+        foreach (var pair in currentAutoAcknowledge)
+        {
+            m_externalAutoAcknowledgeByKey.Add(pair.Key, pair.Value);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<IEntity>>
+        IndexExternalEntities(
+            IEnumerable<IEntity> entities,
+            bool includeDestroyed)
+    {
+        var index = new Dictionary<string, List<IEntity>>(
+            StringComparer.Ordinal);
+        foreach (var entity in entities ?? Enumerable.Empty<IEntity>())
+        {
+            try
+            {
+                if (entity == null ||
+                    !includeDestroyed && entity.IsDestroyed)
+                {
+                    continue;
+                }
+
+                var prototypeId = entity.Prototype.Id.Value;
+                if (string.IsNullOrWhiteSpace(prototypeId))
+                {
+                    continue;
+                }
+                if (!index.TryGetValue(prototypeId, out var matching))
+                {
+                    matching = new List<IEntity>();
+                    index.Add(prototypeId, matching);
+                }
+                matching.Add(entity);
+            }
+            catch
+            {
+                // A disposed tombstone must not abort another provider's
+                // complete alarm evaluation.
+            }
+        }
+
+        return index.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<IEntity>)pair.Value.ToArray(),
+            StringComparer.Ordinal);
+    }
+
+    private static bool UsesDestroyedEntityMetric(
+        ExternalAlarmTemplateSnapshot template)
+    {
+        return template?.Conditions != null &&
+               template.Conditions.Any(condition =>
+                   string.Equals(
+                       condition.Metric,
+                       "$entity.destroyed",
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       condition.ReferenceMetric,
+                       "$entity.destroyed",
+                       StringComparison.Ordinal));
+    }
+
+    private bool PruneRetiredExternalAlarms()
+    {
+        var removed = false;
+        lock (m_gate)
+        {
+            foreach (var key in m_retiredExternalKeys.ToArray())
+            {
+                if (m_alarms.TryGetValue(key, out var state) &&
+                    !state.View.IsLatched)
+                {
+                    m_alarms.Remove(key);
+                    m_retiredExternalKeys.Remove(key);
+                    removed = true;
+                }
+                else if (!m_alarms.ContainsKey(key))
+                {
+                    m_retiredExternalKeys.Remove(key);
+                }
+            }
+        }
+        return removed;
+    }
+
+    private void EvaluateExternalTemplate(
+        ExternalAlarmTemplateSnapshot template,
+        ExternalRegistrySnapshot api,
+        IReadOnlyDictionary<string, IReadOnlyList<IEntity>>
+            entitiesByPrototype,
+        ISet<string> currentKeys,
+        IDictionary<string, bool> currentAutoAcknowledge)
+    {
+        var matchingEntities = template.PrototypeIds
+            .SelectMany(prototypeId =>
+                entitiesByPrototype.TryGetValue(
+                    prototypeId,
+                    out var matching)
+                    ? matching
+                    : Array.Empty<IEntity>())
+            .ToArray();
+        var overrideId = ExternalAlarmId(
+            template.OwnerModId,
+            template.Id);
+        var panelId = ResolveExternalPanelId(template.PanelId);
+        var severity = ParseExternalSeverity(template.Severity);
+        var message = UnmaText.Resolve(
+            template.MessageKey,
+            string.IsNullOrWhiteSpace(template.MessageFallback)
+                ? template.Id
+                : template.MessageFallback);
+        var detailPrefix = UnmaText.Resolve(
+            template.DetailKey,
+            template.DetailFallback);
+        var soundId = ResolveConfiguredSound(
+            overrideId,
+            template.SoundId);
+        var autoAcknowledge = ResolveAutoAcknowledgeOnClear(
+            overrideId,
+            template.AutoAcknowledgeOnClear);
+        var activeColor = string.IsNullOrWhiteSpace(template.ActiveColor) ||
+                          string.Equals(
+                              template.ActiveColor,
+                              "auto",
+                              StringComparison.OrdinalIgnoreCase)
+            ? ColorFor(severity)
+            : template.ActiveColor;
+
+        if (string.Equals(
+                template.Scope,
+                "per_entity",
+                StringComparison.Ordinal))
+        {
+            foreach (var entity in matchingEntities)
+            {
+                var evaluation = EvaluateExternalEntity(
+                    template,
+                    api,
+                    entity);
+                var key = overrideId + ":entity:" + entity.Id.Value;
+                currentKeys.Add(key);
+                currentAutoAcknowledge[key] = autoAcknowledge;
+                SetAlarm(
+                    key,
+                    message,
+                    JoinExternalDetail(
+                        detailPrefix,
+                        EntityMetricCatalog.GetEntityTitle(entity),
+                        evaluation.Detail),
+                    "external",
+                    panelId,
+                    severity,
+                    evaluation.IsActive,
+                    evaluation.IsMissingSource,
+                    soundId,
+                    activeColor,
+                    evaluation.LastValue,
+                    overrideId: overrideId,
+                    autoAcknowledgeOnClear: autoAcknowledge,
+                    occurrenceId: template.Id + ":" + entity.Id.Value,
+                    slotId: key);
+            }
+            return;
+        }
+
+        var evaluations = matchingEntities
+            .Select(entity => new
+            {
+                Entity = entity,
+                Result = EvaluateExternalEntity(template, api, entity),
+            })
+            .ToArray();
+        var active = evaluations
+            .Where(item => item.Result.IsActive)
+            .ToArray();
+        var representative = active.FirstOrDefault() ??
+                             evaluations.FirstOrDefault();
+        var aggregateDetail = matchingEntities.Length == 0
+            ? UnmaText.Get(
+                "external.no_matching_entity",
+                "Keine passende Entität aktiv")
+            : active.Length + "/" + matchingEntities.Length + " " +
+              UnmaText.Get("external.active", "aktiv");
+        if (representative != null)
+        {
+            aggregateDetail = JoinExternalDetail(
+                aggregateDetail,
+                EntityMetricCatalog.GetEntityTitle(representative.Entity),
+                representative.Result.Detail);
+        }
+        aggregateDetail = JoinExternalDetail(
+            detailPrefix,
+            aggregateDetail);
+
+        currentKeys.Add(overrideId);
+        currentAutoAcknowledge[overrideId] = autoAcknowledge;
+        SetAlarm(
+            overrideId,
+            message,
+            aggregateDetail,
+            "external",
+            panelId,
+            severity,
+            active.Length > 0,
+            matchingEntities.Length == 0 ||
+            evaluations.All(item => item.Result.IsMissingSource),
+            soundId,
+            activeColor,
+            representative?.Result.LastValue ?? 0d,
+            overrideId: overrideId,
+            autoAcknowledgeOnClear: autoAcknowledge,
+            occurrenceId: template.Id,
+            slotId: overrideId);
+    }
+
+    private static ExternalEntityEvaluation EvaluateExternalEntity(
+        ExternalAlarmTemplateSnapshot template,
+        ExternalRegistrySnapshot api,
+        IEntity entity)
+    {
+        var values = new List<bool>(template.Conditions.Count);
+        var details = new List<string>(template.Conditions.Count);
+        var result = new ExternalEntityEvaluation();
+        foreach (var condition in template.Conditions)
+        {
+            var label = UnmaText.Resolve(
+                condition.LabelKey,
+                string.IsNullOrWhiteSpace(condition.LabelFallback)
+                    ? condition.Metric
+                    : condition.LabelFallback);
+            if (!TryReadExternalMetric(
+                    api,
+                    template.OwnerModId,
+                    entity,
+                    condition.Metric,
+                    out var actual))
+            {
+                values.Add(false);
+                result.IsMissingSource = true;
+                details.Add(label + ": Messwert fehlt");
+                continue;
+            }
+
+            var reference = 0d;
+            var isPercent = string.Equals(
+                condition.ValueMode,
+                "percent_of_reference",
+                StringComparison.Ordinal);
+            if (isPercent &&
+                !TryReadExternalMetric(
+                    api,
+                    template.OwnerModId,
+                    entity,
+                    condition.ReferenceMetric,
+                    out reference))
+            {
+                values.Add(false);
+                result.IsMissingSource = true;
+                details.Add(label + ": Bezugsmesswert fehlt");
+                continue;
+            }
+
+            if (!AlarmEvaluation.TryCalculateComparable(
+                    actual,
+                    isPercent
+                        ? ConditionValueMode.PercentOfReference
+                        : ConditionValueMode.Absolute,
+                    reference,
+                    out var comparable))
+            {
+                values.Add(false);
+                result.IsMissingSource = true;
+                details.Add(label + ": Bezug nicht berechenbar");
+                continue;
+            }
+
+            result.LastValue = comparable;
+            var matches = AlarmEvaluation.Compare(
+                comparable,
+                ParseExternalComparison(condition.Operator),
+                condition.Threshold);
+            values.Add(matches);
+            if (isPercent)
+            {
+                var referenceLabel = UnmaText.Resolve(
+                    condition.ReferenceLabelKey,
+                    string.IsNullOrWhiteSpace(
+                        condition.ReferenceLabelFallback)
+                        ? condition.ReferenceMetric
+                        : condition.ReferenceLabelFallback);
+                details.Add(
+                    label + " % von " + referenceLabel + " " +
+                    condition.Operator + " " +
+                    condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) +
+                    " % (ist " + comparable.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + " %; " +
+                    actual.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + " / " +
+                    reference.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + ")");
+            }
+            else
+            {
+                details.Add(
+                    label + " " + condition.Operator + " " +
+                    condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) +
+                    " (ist " + comparable.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + ")");
+            }
+        }
+
+        result.IsActive = AlarmEvaluation.Combine(
+            values,
+            string.Equals(template.Logic, "any", StringComparison.Ordinal)
+                ? AlarmLogic.Any
+                : AlarmLogic.All);
+        result.Detail = string.Join(
+            string.Equals(template.Logic, "any", StringComparison.Ordinal)
+                ? " ODER "
+                : " UND ",
+            details);
+        return result;
+    }
+
+    private void EvaluatePushedExternalStates(
+        ExternalRegistrySnapshot api,
+        ISet<string> currentKeys,
+        IDictionary<string, bool> currentAutoAcknowledge)
+    {
+        foreach (var state in api.AlarmStates)
+        {
+            var overrideId = ExternalAlarmId(state.OwnerModId, state.Id);
+            var instanceId = Uri.EscapeDataString(state.InstanceId);
+            var key = overrideId + ":push:" + instanceId;
+            var slotId = string.IsNullOrWhiteSpace(state.EntityKey)
+                ? key
+                : overrideId + ":entity:" +
+                  Uri.EscapeDataString(state.EntityKey);
+            var severity = ParseExternalSeverity(state.Severity);
+            currentKeys.Add(key);
+            var autoAcknowledge = ResolveAutoAcknowledgeOnClear(
+                overrideId,
+                state.AutoAcknowledgeOnClear);
+            currentAutoAcknowledge[key] = autoAcknowledge;
+            SetAlarm(
+                key,
+                UnmaText.Resolve(
+                    state.MessageKey,
+                    string.IsNullOrWhiteSpace(state.MessageFallback)
+                        ? state.Id
+                        : state.MessageFallback),
+                UnmaText.Resolve(state.DetailKey, state.DetailFallback),
+                "external",
+                ResolveExternalPanelId(state.PanelId),
+                severity,
+                state.Active,
+                false,
+                ResolveConfiguredSound(overrideId, state.SoundId),
+                string.IsNullOrWhiteSpace(state.ActiveColor) ||
+                string.Equals(
+                    state.ActiveColor,
+                    "auto",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? ColorFor(severity)
+                    : state.ActiveColor,
+                state.CurrentValue ?? 0d,
+                overrideId: overrideId,
+                autoAcknowledgeOnClear: autoAcknowledge,
+                occurrenceId: state.Id + ":" + state.InstanceId,
+                slotId: slotId);
+        }
+    }
+
+    private static bool TryReadExternalMetric(
+        ExternalRegistrySnapshot api,
+        string ownerModId,
+        IEntity entity,
+        string metric,
+        out double value)
+    {
+        return api.TryReadMetric(
+                   ownerModId,
+                   entity.Prototype.Id.Value,
+                   metric,
+                   entity,
+                   out value) ||
+               EntityMetricCatalog.TryRead(entity, metric, out value);
+    }
+
+    private string ResolveExternalPanelId(string requestedPanelId)
+    {
+        lock (m_configurationGate)
+        {
+            var requested = Configuration.Panels.FirstOrDefault(panel =>
+                string.Equals(
+                    panel.Id,
+                    requestedPanelId,
+                    StringComparison.Ordinal));
+            return requested?.Id ??
+                   Configuration.Panels.FirstOrDefault()?.Id ?? "";
+        }
+    }
+
+    private static string ExternalTemplateIdentity(
+        ExternalAlarmTemplateSnapshot template)
+    {
+        return template.OwnerModId + "\u001f" + template.Id;
+    }
+
+    private static string ExternalAlarmId(string ownerModId, string alarmId)
+    {
+        return "external:" + Uri.EscapeDataString(ownerModId) + ":" +
+               Uri.EscapeDataString(alarmId);
+    }
+
+    private static AlarmSeverity ParseExternalSeverity(string severity)
+    {
+        return severity switch
+        {
+            "emergency" => AlarmSeverity.Emergency,
+            "critical" => AlarmSeverity.Critical,
+            "warning" => AlarmSeverity.Warning,
+            _ => AlarmSeverity.Notice,
+        };
+    }
+
+    private static ComparisonOperator ParseExternalComparison(
+        string comparison)
+    {
+        return comparison switch
+        {
+            "<" => ComparisonOperator.Less,
+            "<=" => ComparisonOperator.LessOrEqual,
+            "==" => ComparisonOperator.Equal,
+            "!=" => ComparisonOperator.NotEqual,
+            ">=" => ComparisonOperator.GreaterOrEqual,
+            ">" => ComparisonOperator.Greater,
+            _ => ComparisonOperator.Equal,
+        };
+    }
+
+    private static string JoinExternalDetail(params string[] parts)
+    {
+        return string.Join(
+            " · ",
+            (parts ?? Array.Empty<string>())
+            .Where(part => !string.IsNullOrWhiteSpace(part)));
+    }
+
     private void OnNotificationAdded(INotification notification)
     {
         var id = notification.Proto.Id.Value;
@@ -2515,7 +3436,9 @@ public sealed class UnmaRuntime : IDisposable
         };
     }
 
-    private string ResolveConfiguredSound(string alarmId)
+    private string ResolveConfiguredSound(
+        string alarmId,
+        string fallback = "auto")
     {
         lock (m_configurationGate)
         {
@@ -2524,11 +3447,15 @@ public sealed class UnmaRuntime : IDisposable
                            item.AlarmId,
                            alarmId,
                            StringComparison.Ordinal))?.SoundId ??
-                   "auto";
+                   (string.IsNullOrWhiteSpace(fallback)
+                       ? "auto"
+                       : fallback);
         }
     }
 
-    private bool ResolveAutoAcknowledgeOnClear(string alarmId)
+    private bool ResolveAutoAcknowledgeOnClear(
+        string alarmId,
+        bool fallback = false)
     {
         lock (m_configurationGate)
         {
@@ -2537,8 +3464,63 @@ public sealed class UnmaRuntime : IDisposable
                     item.AlarmId,
                     alarmId,
                     StringComparison.Ordinal))?.AutoAcknowledgeOnClear ??
-                   false;
+                       fallback;
         }
+    }
+
+    private bool ResolveExternalDefaultAutoAcknowledge(string alarmId)
+    {
+        ExternalAlarmTemplateSnapshot jsonTemplate;
+        lock (m_externalDefinitionsGate)
+        {
+            jsonTemplate = m_externalDefinitions?.AlarmTemplates
+                .FirstOrDefault(template => string.Equals(
+                    ExternalAlarmId(template.OwnerModId, template.Id),
+                    alarmId,
+                    StringComparison.Ordinal));
+        }
+        if (jsonTemplate != null)
+        {
+            return jsonTemplate.AutoAcknowledgeOnClear;
+        }
+
+        var api = UnmaApi.GetSnapshot();
+        var apiTemplate = api.AlarmTemplates.FirstOrDefault(template =>
+            string.Equals(
+                ExternalAlarmId(template.OwnerModId, template.Id),
+                alarmId,
+                StringComparison.Ordinal));
+        if (apiTemplate != null)
+        {
+            return apiTemplate.AutoAcknowledgeOnClear;
+        }
+
+        return api.AlarmStates
+            .Where(state => string.Equals(
+                ExternalAlarmId(state.OwnerModId, state.Id),
+                alarmId,
+                StringComparison.Ordinal))
+            .Any(state => state.AutoAcknowledgeOnClear);
+    }
+
+    private bool ResolveExternalAutoAcknowledgeForKey(string alarmKey)
+    {
+        string overrideId;
+        lock (m_gate)
+        {
+            overrideId = m_alarms.TryGetValue(
+                alarmKey,
+                out var state)
+                ? state.View.OverrideId
+                : "";
+        }
+        if (string.IsNullOrWhiteSpace(overrideId))
+        {
+            return false;
+        }
+        return ResolveAutoAcknowledgeOnClear(
+            overrideId,
+            ResolveExternalDefaultAutoAcknowledge(overrideId));
     }
 
     private static string NotificationKey(INotification notification)
@@ -2679,9 +3661,19 @@ public sealed class UnmaRuntime : IDisposable
                 if (string.Equals(
                         view.Source,
                         "vanilla",
+                        StringComparison.Ordinal) ||
+                    string.Equals(
+                        view.Source,
+                        "external",
                         StringComparison.Ordinal))
                 {
-                    changed |= UpdatePanelSlotMetadata(existing, slot);
+                    changed |= UpdatePanelSlotMetadata(
+                        existing,
+                        slot,
+                        updateDetail: !string.Equals(
+                            view.Source,
+                            "external",
+                            StringComparison.Ordinal));
                 }
             }
         }
@@ -2690,7 +3682,8 @@ public sealed class UnmaRuntime : IDisposable
 
     private static bool UpdatePanelSlotMetadata(
         PanelSlotDefinition target,
-        PanelSlotDefinition source)
+        PanelSlotDefinition source,
+        bool updateDetail = true)
     {
         var changed = false;
         if (!string.Equals(
@@ -2701,7 +3694,7 @@ public sealed class UnmaRuntime : IDisposable
             target.DisplayName = source.DisplayName;
             changed = true;
         }
-        if (!string.Equals(
+        if (updateDetail && !string.Equals(
                 target.Detail,
                 source.Detail,
                 StringComparison.Ordinal))
@@ -2738,7 +3731,7 @@ public sealed class UnmaRuntime : IDisposable
         PanelDefinition panel,
         IReadOnlyList<string> filters)
     {
-        if (view.Source == "custom")
+        if (view.Source == "custom" || view.Source == "external")
         {
             return string.Equals(
                 view.PanelId,

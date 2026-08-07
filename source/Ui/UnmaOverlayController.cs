@@ -10,6 +10,7 @@ using Mafi.Unity.Ui;
 using UnityEngine;
 using UNMA.Audio;
 using UNMA.Domain;
+using UNMA.Localization;
 using UNMA.Runtime;
 
 namespace UNMA.Ui;
@@ -402,7 +403,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawMainWindow(int _)
     {
-        DrawWindowHeader("UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE");
+        DrawWindowHeader(UnmaText.Get(
+            "window.title",
+            "UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE"));
 
         GUILayout.BeginArea(new Rect(
             12f,
@@ -411,12 +414,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_windowRect.height - 56f));
 
         GUILayout.BeginHorizontal();
-        DrawTabButton(0, "MELDETAFEL");
-        DrawTabButton(1, "VERLAUF");
-        DrawTabButton(2, "EDITOR");
-        DrawTabButton(3, "SYSTEM");
-        DrawTabButton(4, "TÖNE");
-        DrawTabButton(5, "OPTIONEN");
+        DrawTabButton(0, UnmaText.Get("tab.board", "MELDETAFEL"));
+        DrawTabButton(1, UnmaText.Get("tab.history", "VERLAUF"));
+        DrawTabButton(2, UnmaText.Get("tab.editor", "EDITOR"));
+        DrawTabButton(3, UnmaText.Get("tab.system", "SYSTEM"));
+        DrawTabButton(4, UnmaText.Get("tab.sounds", "TÖNE"));
+        DrawTabButton(5, UnmaText.Get("tab.options", "OPTIONEN"));
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
         {
@@ -2338,10 +2341,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawSoundOverrides()
     {
         GUILayout.Label(
-            "VANILLA-MELDUNGEN: TÖNE UND QUITTIERUNG",
+            UnmaText.Get(
+                "sounds.override.title",
+                "VANILLA- UND FREMDMOD-MELDUNGEN: TÖNE / QUITTIERUNG"),
             m_sectionStyle);
         GUILayout.Label(
-            "Eigene Regeln werden im Editor und vordefinierte Meldungen im SYSTEM-Tab eingestellt. Hier erhält jede bekannte Vanilla-Meldung separat ihren Ton und das Verhalten beim Gehen. Ist die automatische Quittierung aus, bleibt GEGANGEN bis MASTER QUIT unquittiert.",
+            UnmaText.Get(
+                "sounds.override.description",
+                "Eigene Regeln werden im Editor und vordefinierte " +
+                "Meldungen im SYSTEM-Tab eingestellt. Hier erhält jede " +
+                "bekannte Vanilla- oder Fremdmod-Meldung separat ihren " +
+                "Ton und das Verhalten beim Gehen. Ohne automatische " +
+                "Quittierung bleibt GEGANGEN bis MASTER QUIT unquittiert."),
             m_smallLabelStyle);
 
         GUILayout.BeginHorizontal();
@@ -2367,7 +2378,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (candidates.Length == 0)
         {
             GUILayout.Label(
-                "Noch keine passende Meldung bekannt. Vanilla-Meldungen erscheinen hier, sobald das Spiel sie einmal erzeugt hat.",
+                UnmaText.Get(
+                    "sounds.override.empty",
+                    "Noch keine passende Meldung bekannt. Vanilla- und " +
+                    "Fremdmod-Meldungen erscheinen hier, sobald UNMA sie " +
+                    "einmal ausgewertet hat."),
                 m_labelStyle);
         }
 
@@ -2531,6 +2546,59 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Label(
             "NORMAL: hellgrau, schwarze Schrift. KOMMT: Aktivfarbe blinkt und der Ton wiederholt sich. MASTER QUIT: Aktivfarbe bleibt stehen, Ton endet. GEGANGEN · UNQUITTIERT: Die Ursache ist weg, aber Anzeige und Ton warten auf MASTER QUIT. Mit BEIM GEHEN AUTOMATISCH QUITTIEREN wechselt die Meldung stattdessen direkt zu NORMAL.",
             m_labelStyle);
+
+        GUILayout.Space(10f);
+        GUILayout.Label(
+            UnmaText.Get("options.integration.title", "FREMDMOD-API"),
+            m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get(
+                "options.integration.description",
+                "Aktive Mods können Alarmvorlagen aus UNMA/*.json, " +
+                "eigene Messwerte und direkte Alarmzustände bereitstellen."),
+            m_labelStyle);
+        var integration = m_runtime.GetExternalIntegrationStatus();
+        GUILayout.Label(
+            UnmaText.Format(
+                "options.integration.status",
+                "Provider {0} · JSON {1}/{2} Dateien · {3} Alarme · " +
+                "API {4} Messwerte / {5} Vorlagen / {6} Zustände · " +
+                "Diagnosen {7}",
+                integration.ActiveProviderCount,
+                integration.LoadedFileCount,
+                integration.ScannedFileCount,
+                integration.JsonAlarmCount,
+                integration.ApiMetricCount,
+                integration.ApiAlarmCount,
+                integration.ApiStateCount,
+                integration.DiagnosticCount),
+            m_smallLabelStyle);
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "options.integration.reload",
+                    "API / JSON / SPRACHE NEU LADEN"),
+                m_buttonStyle,
+                GUILayout.Width(260f)))
+        {
+            var clean = m_runtime.ReloadExternalDefinitions();
+            SetStatus(clean
+                ? UnmaText.Get(
+                    "options.integration.reload_ok",
+                    "Fremdmod-Definitionen und Sprache neu geladen.")
+                : UnmaText.Get(
+                    "options.integration.reload_partial",
+                    "Gültige Fremdmod-Definitionen geladen; Diagnosen " +
+                    "siehe darunter und im Log."));
+        }
+        foreach (var diagnostic in m_runtime
+                     .GetExternalIntegrationDiagnostics()
+                     .Take(3))
+        {
+            GUILayout.Label(
+                diagnostic.ProviderId + " · " + diagnostic.Code + " · " +
+                diagnostic.Message,
+                m_smallLabelStyle);
+        }
         DrawStatusMessage();
     }
 

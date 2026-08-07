@@ -1,0 +1,20 @@
+{
+  "window.title": "UNMA · UNIVERSAL ALARM ANNUNCIATOR",
+  "tab.board": "ANNUNCIATOR",
+  "tab.history": "HISTORY",
+  "tab.editor": "EDITOR",
+  "tab.system": "SYSTEM",
+  "tab.sounds": "SOUNDS",
+  "tab.options": "OPTIONS",
+  "sounds.override.title": "VANILLA AND EXTERNAL MOD ALARMS: SOUND / ACKNOWLEDGEMENT",
+  "sounds.override.description": "Custom rules are configured in the editor and built-in alarms in the SYSTEM tab. Every known Vanilla or external mod alarm can have its own sound and clear acknowledgement behavior here. Without automatic acknowledgement, GONE waits for MASTER QUIT.",
+  "sounds.override.empty": "No matching alarm is known yet. Vanilla and external mod alarms appear after UNMA has evaluated them once.",
+  "external.no_matching_entity": "No matching entity is active",
+  "external.active": "active",
+  "options.integration.title": "EXTERNAL MOD API",
+  "options.integration.description": "Active mods can provide alarm templates from UNMA/*.json, custom metrics, and direct alarm states.",
+  "options.integration.status": "Providers {0} · JSON files {1}/{2} · alarms {3} · API {4} metrics / {5} templates / {6} states · diagnostics {7}",
+  "options.integration.reload": "RELOAD API / JSON / LANGUAGE",
+  "options.integration.reload_ok": "External mod definitions and language reloaded.",
+  "options.integration.reload_partial": "Valid external mod definitions loaded; see diagnostics below and in the log."
+}

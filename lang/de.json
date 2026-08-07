@@ -1,0 +1,20 @@
+{
+  "window.title": "UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE",
+  "tab.board": "MELDETAFEL",
+  "tab.history": "VERLAUF",
+  "tab.editor": "EDITOR",
+  "tab.system": "SYSTEM",
+  "tab.sounds": "TÖNE",
+  "tab.options": "OPTIONEN",
+  "sounds.override.title": "VANILLA- UND FREMDMOD-MELDUNGEN: TÖNE / QUITTIERUNG",
+  "sounds.override.description": "Eigene Regeln werden im Editor und vordefinierte Meldungen im SYSTEM-Tab eingestellt. Hier erhält jede bekannte Vanilla- oder Fremdmod-Meldung separat ihren Ton und das Verhalten beim Gehen. Ohne automatische Quittierung bleibt GEGANGEN bis MASTER QUIT unquittiert.",
+  "sounds.override.empty": "Noch keine passende Meldung bekannt. Vanilla- und Fremdmod-Meldungen erscheinen hier, sobald UNMA sie einmal ausgewertet hat.",
+  "external.no_matching_entity": "Keine passende Entität aktiv",
+  "external.active": "aktiv",
+  "options.integration.title": "FREMDMOD-API",
+  "options.integration.description": "Aktive Mods können Alarmvorlagen aus UNMA/*.json, eigene Messwerte und direkte Alarmzustände bereitstellen.",
+  "options.integration.status": "Provider {0} · JSON {1}/{2} Dateien · {3} Alarme · API {4} Messwerte / {5} Vorlagen / {6} Zustände · Diagnosen {7}",
+  "options.integration.reload": "API / JSON / SPRACHE NEU LADEN",
+  "options.integration.reload_ok": "Fremdmod-Definitionen und Sprache neu geladen.",
+  "options.integration.reload_partial": "Gültige Fremdmod-Definitionen geladen; Diagnosen siehe darunter und im Log."
+}

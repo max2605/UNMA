@@ -56,6 +56,14 @@ Zielversion: Captain of Industry **0.8.6c**.
   werden für Lager, Förderer/Rohre und Fahrzeugfracht automatisch empfohlen.
 - Automatische Erkennung öffentlicher numerischer und boolescher Messwerte von
   Gebäuden, Lagern, Fahrzeugen, Rohren und Förderbändern.
+- Offene Erweiterungsschnittstelle für andere Mods: aktive Provider können
+  automatische Alarmvorlagen in `UNMA/*.json` mitliefern, eigene Messwert-
+  Reader über die versionierte C#-API registrieren oder Alarmzustände direkt
+  veröffentlichen. `aggregate` erzeugt einen festen Sammelschlitz,
+  `per_entity` auf Wunsch je Instanz einen stabilen Schlitz.
+- LangLib-Grundanbindung für die UNMA-Fensterhülle und alle Providertexte. In Definitionen
+  bleiben stabile Übersetzungsschlüssel gespeichert; ein verpflichtender
+  Fallback verhindert sichtbare Schlüssel bei fehlenden Sprachdateien.
 - Typisierte Produktmengen für Lager, Förderbänder/Rohre sowie Frachten von
   Trucks, Baggern, Tree Plantern, Tree Harvestern und Güterwaggons.
 - Mehrere Bedingungen pro Sammelmeldung mit UND- oder ODER-Verknüpfung.
@@ -132,6 +140,19 @@ vergleichbaren Wert als `Istwert / Bezugswert × 100`. Ein fehlender, null oder
 negativer Bezugswert erfüllt die Bedingung bewusst nicht und wird als nicht
 berechenbar angezeigt; Werte über 100 % werden nicht künstlich begrenzt.
 
+## API für andere Mods
+
+UNMA lädt ausschließlich Definitionen tatsächlich aktiver Mods aus
+`<Provider-Mod>/UNMA/*.json`. Eine defekte Datei wird isoliert protokolliert
+und kann weder andere Provider noch den Spielstart blockieren. Erweiterte
+Messwerte und direkt veröffentlichte Zustände stehen über
+`UNMA.Api.UnmaApi` mit `ApiVersion = 1` bereit.
+
+Der vollständige Vertrag, das JSON-Schema und ein lauffähiges Providerbeispiel
+stehen in [docs/external-mod-api.md](docs/external-mod-api.md),
+[docs/unma-extension-v1.schema.json](docs/unma-extension-v1.schema.json) und
+[examples/ProviderMod](examples/ProviderMod).
+
 ## Audio und Lizenzen
 
 Eigene Dateien kommen nach:
@@ -169,6 +190,7 @@ oder Dateien mit einer Lizenz, die Weitergabe und Nutzung erlaubt.
 Voraussetzungen:
 
 - Captain of Industry 0.8.6c;
+- LangLib 0.1.0 oder neuer als aktivierte Mod-Abhängigkeit;
 - .NET Framework 4.8 Reference Assemblies;
 - Visual Studio Build Tools 2022 oder `dotnet` mit passenden Referenzen.
 

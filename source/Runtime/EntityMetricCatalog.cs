@@ -14,6 +14,8 @@ using Mafi.Core.Vehicles.Excavators;
 using Mafi.Core.Vehicles.TreeHarvesters;
 using Mafi.Core.Vehicles.TreePlanters;
 using Mafi.Core.Vehicles.Trucks;
+using UNMA.Api;
+using UNMA.Localization;
 
 namespace UNMA.Runtime;
 
@@ -174,6 +176,8 @@ public static class EntityMetricCatalog
             AddSingleCargoMetrics(result, paths, singleCargo, capacity);
         }
 
+        AddExternalMetrics(result, paths, entity);
+
         foreach (var property in entity.GetType().GetProperties(
                      BindingFlags.Instance | BindingFlags.Public))
         {
@@ -217,7 +221,10 @@ public static class EntityMetricCatalog
         }
 
         return result
-            .OrderBy(metric => metric.Label, StringComparer.CurrentCulture)
+            .OrderBy(metric => metric.Path.StartsWith(
+                "external:",
+                StringComparison.Ordinal) ? 0 : 1)
+            .ThenBy(metric => metric.Label, StringComparer.CurrentCulture)
             .Take(160)
             .ToArray();
     }
@@ -231,6 +238,22 @@ public static class EntityMetricCatalog
         if (entity == null || string.IsNullOrWhiteSpace(path))
         {
             return false;
+        }
+
+        if (path.StartsWith("external:", StringComparison.Ordinal))
+        {
+            var snapshot = UnmaApi.GetSnapshot();
+            var metric = snapshot.Metrics.FirstOrDefault(candidate =>
+                string.Equals(
+                    ExternalPath(candidate.OwnerModId, candidate.Id),
+                    path,
+                    StringComparison.Ordinal));
+            return metric != null && snapshot.TryReadMetric(
+                metric.OwnerModId,
+                entity.Prototype.Id.Value,
+                metric.Id,
+                entity,
+                out value);
         }
 
         if (path.StartsWith("$transport.", StringComparison.Ordinal))
@@ -326,6 +349,77 @@ public static class EntityMetricCatalog
         }
 
         return TryConvertToDouble(current, out value);
+    }
+
+    public static string ExternalPath(string ownerModId, string metricId)
+    {
+        return "external:" + Uri.EscapeDataString(ownerModId ?? "") + ":" +
+               Uri.EscapeDataString(metricId ?? "");
+    }
+
+    private static void AddExternalMetrics(
+        ICollection<MetricDescriptor> result,
+        ISet<string> paths,
+        IEntity entity)
+    {
+        var snapshot = UnmaApi.GetSnapshot();
+        var prototypeId = entity.Prototype.Id.Value;
+        var candidates = snapshot.Metrics
+            .Where(metric => string.Equals(
+                    metric.PrototypeId,
+                    prototypeId,
+                    StringComparison.Ordinal) ||
+                string.Equals(
+                    metric.PrototypeId,
+                    "*",
+                    StringComparison.Ordinal))
+            .OrderBy(metric => string.Equals(
+                metric.PrototypeId,
+                prototypeId,
+                StringComparison.Ordinal) ? 0 : 1)
+            .GroupBy(
+                metric => ExternalPath(metric.OwnerModId, metric.Id),
+                StringComparer.Ordinal)
+            .Select(group => group.First())
+            .GroupBy(metric => metric.OwnerModId, StringComparer.Ordinal)
+            .SelectMany(group => group.Take(16))
+            .Take(48);
+        foreach (var metric in candidates)
+        {
+            if (!snapshot.TryReadMetric(
+                    metric.OwnerModId,
+                    prototypeId,
+                    metric.Id,
+                    entity,
+                    out var value))
+            {
+                continue;
+            }
+
+            var path = ExternalPath(metric.OwnerModId, metric.Id);
+            var referencePath = string.IsNullOrWhiteSpace(
+                metric.SuggestedReferenceMetric)
+                ? ""
+                : metric.SuggestedReferenceMetric.StartsWith(
+                    "$",
+                    StringComparison.Ordinal)
+                    ? metric.SuggestedReferenceMetric
+                    : ExternalPath(
+                        metric.OwnerModId,
+                        metric.SuggestedReferenceMetric);
+            Add(
+                result,
+                paths,
+                path,
+                UnmaText.Resolve(
+                    metric.LabelKey,
+                    string.IsNullOrWhiteSpace(metric.LabelFallback)
+                        ? metric.Id
+                        : metric.LabelFallback),
+                value,
+                metric.Unit,
+                referencePath);
+        }
     }
 
     public static string TryGetStoredProductId(IEntity entity)

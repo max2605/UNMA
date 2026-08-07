@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "STORAGE LEVEL LOW",
+  "alarm.storage_low.detail": "At least one storage unit is below 15 percent.",
+  "alarm.tank_pressure_high": "TANK PRESSURE HIGH",
+  "alarm.tank_pressure_high.detail": "Tank pressure is above 90 percent.",
+  "alarm.tank_pressure_very_high": "TANK PRESSURE EMERGENCY",
+  "alarm.tank_pressure_very_high.detail": "Tank pressure is above 98 percent.",
+  "alarm.pump_trip": "TRANSFER PUMP TRIP",
+  "alarm.pump_trip.detail": "The transfer pump was stopped by its protection circuit.",
+  "metric.storage_fill": "Storage fill level",
+  "metric.storage_capacity": "Storage capacity",
+  "metric.pressure_percent": "Tank pressure"
+}
