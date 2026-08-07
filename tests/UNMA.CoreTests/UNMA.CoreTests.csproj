@@ -12,6 +12,8 @@
              Link="Domain\AlarmModels.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
              Link="Domain\PanelSlotProjection.cs" />
+    <Compile Include="..\..\source\Domain\SustainedVanillaAlarmPolicy.cs"
+             Link="Domain\SustainedVanillaAlarmPolicy.cs" />
     <Compile Include="..\..\source\Audio\MechanicalSirenSynth.cs"
              Link="Audio\MechanicalSirenSynth.cs" />
     <Compile Include="..\..\source\Runtime\SystemMetricCatalog.cs"

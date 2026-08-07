@@ -190,7 +190,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 8;
+    [DataMember(Order = 1)] public int SchemaVersion = 9;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -210,6 +210,8 @@ public sealed class UnmaConfiguration
         new();
     [DataMember(Order = 16)] public List<AlarmHistoryDefinition> AlarmHistory =
         new();
+    [DataMember(Order = 17)]
+    public bool LegacySustainedAlarmReconciliationPending;
 
     public static UnmaConfiguration CreateDefault()
     {
@@ -478,6 +480,23 @@ public sealed class UnmaConfiguration
             }
         }
 
+        if (loadedSchemaVersion < 9)
+        {
+            MigrateSustainedVanillaAlarmMemories();
+            LegacySustainedAlarmReconciliationPending = AlarmHistory.Any(
+                item =>
+                    item != null &&
+                    string.Equals(
+                        item.Source,
+                        "vanilla",
+                        StringComparison.Ordinal) &&
+                    SustainedVanillaAlarmPolicy.MatchesHistory(
+                        SustainedVanillaAlarmPolicy
+                            .HomelessLeftPrototypeId,
+                        item.AlarmKey,
+                        item.Detail));
+        }
+
         AlarmHistory.RemoveAll(item =>
             item == null ||
             item.Sequence <= 0 ||
@@ -509,7 +528,63 @@ public sealed class UnmaConfiguration
             SeedPanelSlots(includeMemories: true);
         }
         SynchronizeRuleSlots();
-        SchemaVersion = Math.Max(SchemaVersion, 8);
+        SchemaVersion = Math.Max(SchemaVersion, 9);
+    }
+
+    private void MigrateSustainedVanillaAlarmMemories()
+    {
+        var groups = AlarmMemories
+            .Where(memory =>
+                SustainedVanillaAlarmPolicy.IsSustainedOverrideId(
+                    memory.OverrideId))
+            .GroupBy(memory => memory.OverrideId, StringComparer.Ordinal)
+            .ToArray();
+        foreach (var group in groups)
+        {
+            var memories = group
+                .OrderBy(memory => memory.Sequence)
+                .ToArray();
+            if (memories.Length == 0)
+            {
+                continue;
+            }
+            var target = memories[memories.Length - 1];
+            var isActive = memories.Any(memory => memory.IsActive);
+            var requiresAcknowledgement = memories.Any(memory =>
+                memory.IsGoneUnacknowledged ||
+                memory.IsActive && !memory.IsAcknowledged);
+            target.Key =
+                SustainedVanillaAlarmPolicy.AlarmKeyForOverrideId(
+                    target.OverrideId);
+            target.IsActive = isActive;
+            target.IsAcknowledged = isActive && !requiresAcknowledgement;
+            target.IsGoneUnacknowledged =
+                !isActive && requiresAcknowledgement;
+            target.OccurrenceId = target.OverrideId;
+            target.SlotId = string.IsNullOrWhiteSpace(target.SlotId)
+                ? target.OverrideId
+                : target.SlotId;
+
+            var history = AlarmHistory.Find(item =>
+                item != null && item.Sequence == target.Sequence);
+            if (history != null)
+            {
+                history.AlarmKey = target.Key;
+            }
+            foreach (var memory in memories)
+            {
+                if (!ReferenceEquals(memory, target))
+                {
+                    var supersededHistory = AlarmHistory.Find(item =>
+                        item != null && item.Sequence == memory.Sequence);
+                    if (supersededHistory != null)
+                    {
+                        supersededHistory.IsGone = true;
+                    }
+                    AlarmMemories.Remove(memory);
+                }
+            }
+        }
     }
 
     private static void NormalizePanelSlots(

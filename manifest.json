@@ -1,6 +1,6 @@
 {
   "id": "UNMA",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "display_name": "UNMA – Universelle Nachrichten-Meldeanlage",
   "description_short": "Eine frei konfigurierbare Schlitzmelder-Tafel mit Quittierung, Sammelmeldungen und Alarmtönen.",
   "description_long": "Spiegelt Vanilla-Meldungen in eine industrielle Schlitzmelder-Tafel mit dauerhaft festen, frei sortierbaren Panelplätzen und ergänzt jeden Entity-Inspector um eine UNMA-Alarmglocke. Wiederholte Ereignisse derselben Meldung und Entität teilen genau einen Schlitz, während ihr K/G/Q-Verlauf vollständig erhalten bleibt. Das separate, AWL-artige Alarmfenster unterstützt alle sechs Vergleiche, UND-/ODER-Sammelmeldungen und sichere Prozent-von-Bezugswert-Bedingungen. Gesundheit, Nahrung und Arbeiter besitzen frei editierbare Stufen; NOTFALL wird in den Werkvorgaben nur für aktive Todesspiralen verwendet. KOMMT und ungequittiertes GEGANGEN blinken und wiederholen ihren Ton bis MASTER QUIT; automatische Quittierung bleibt pro Meldung optional.",

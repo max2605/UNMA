@@ -16,6 +16,7 @@ internal static class Program
         TestComparableValues();
         TestBooleanLogic();
         TestAlarmLatch();
+        TestSustainedVanillaAlarmPolicy();
         TestAlarmHistoryState();
         TestSystemAlarmSelection();
         TestSystemMetricMath();
@@ -265,6 +266,107 @@ internal static class Program
             false);
         IsTrue(downgraded.IsAcknowledged);
         IsFalse(downgraded.IsNewOccurrence);
+    }
+
+    private static void TestSustainedVanillaAlarmPolicy()
+    {
+        const string prototypeId = "HomelessLeft";
+        const string overrideId = "vanilla:HomelessLeft";
+        const string stableKey = "vanilla:sustained:HomelessLeft";
+
+        AreEqual(
+            stableKey,
+            SustainedVanillaAlarmPolicy.AlarmKeyForNotification(
+                prototypeId,
+                "vanilla:10"));
+        AreEqual(
+            stableKey,
+            SustainedVanillaAlarmPolicy.AlarmKeyForNotification(
+                prototypeId,
+                "vanilla:11"));
+        AreEqual(
+            "vanilla:99",
+            SustainedVanillaAlarmPolicy.AlarmKeyForNotification(
+                "NotEnoughWorkers",
+                "vanilla:99"));
+        AreEqual(
+            stableKey,
+            SustainedVanillaAlarmPolicy.AlarmKeyForOverrideId(overrideId));
+        IsTrue(SustainedVanillaAlarmPolicy.IsSustainedPrototype(
+            prototypeId));
+        IsTrue(SustainedVanillaAlarmPolicy.IsSustainedOverrideId(
+            overrideId));
+        IsTrue(SustainedVanillaAlarmPolicy.IgnoresNotificationRemoval(
+            prototypeId));
+        IsFalse(SustainedVanillaAlarmPolicy.IgnoresNotificationRemoval(
+            "NotEnoughWorkers"));
+        IsTrue(SustainedVanillaAlarmPolicy.MatchesHistory(
+            prototypeId,
+            "vanilla:12",
+            prototypeId));
+        IsFalse(SustainedVanillaAlarmPolicy.MatchesHistory(
+            prototypeId,
+            "vanilla:12",
+            "NotEnoughWorkers"));
+        IsFalse(SustainedVanillaAlarmPolicy.ShouldClear(prototypeId, -1d));
+        IsFalse(SustainedVanillaAlarmPolicy.ShouldClear(
+            prototypeId,
+            -double.Epsilon));
+        IsTrue(SustainedVanillaAlarmPolicy.ShouldClear(prototypeId, 0d));
+        IsTrue(SustainedVanillaAlarmPolicy.ShouldClear(prototypeId, 1d));
+        IsTrue(SustainedVanillaAlarmPolicy.ShouldProcessNotification(
+            prototypeId,
+            -1d));
+        IsFalse(SustainedVanillaAlarmPolicy.ShouldProcessNotification(
+            prototypeId,
+            0d));
+        IsTrue(SustainedVanillaAlarmPolicy.ShouldProcessNotification(
+            "NotEnoughWorkers",
+            0d));
+
+        var firstMonth = AlarmEvaluation.Transition(
+            false,
+            false,
+            false,
+            AlarmSeverity.Critical,
+            true,
+            AlarmSeverity.Critical,
+            false);
+        IsTrue(firstMonth.IsNewOccurrence);
+        IsFalse(firstMonth.IsAcknowledged);
+
+        var acknowledgedNextMonth = AlarmEvaluation.Transition(
+            firstMonth.IsActive,
+            true,
+            firstMonth.IsGoneUnacknowledged,
+            AlarmSeverity.Critical,
+            true,
+            AlarmSeverity.Critical,
+            false);
+        IsFalse(acknowledgedNextMonth.IsNewOccurrence);
+        IsTrue(acknowledgedNextMonth.IsAcknowledged);
+
+        var clearedAtZero = AlarmEvaluation.Transition(
+            acknowledgedNextMonth.IsActive,
+            acknowledgedNextMonth.IsAcknowledged,
+            acknowledgedNextMonth.IsGoneUnacknowledged,
+            AlarmSeverity.Critical,
+            false,
+            AlarmSeverity.Critical,
+            false);
+        IsFalse(clearedAtZero.IsActive);
+        IsFalse(clearedAtZero.IsGoneUnacknowledged);
+
+        var genuinelyReturned = AlarmEvaluation.Transition(
+            clearedAtZero.IsActive,
+            clearedAtZero.IsAcknowledged,
+            clearedAtZero.IsGoneUnacknowledged,
+            AlarmSeverity.Critical,
+            true,
+            AlarmSeverity.Critical,
+            false);
+        IsTrue(genuinelyReturned.IsNewOccurrence);
+        IsFalse(genuinelyReturned.IsAcknowledged);
     }
 
     private static void TestSystemAlarmSelection()
@@ -760,7 +862,7 @@ internal static class Program
         AreEqual(1, restored.SoundOverrides.Count);
         AreEqual("siren", restored.SoundOverrides[0].SoundId);
         IsTrue(restored.SoundOverrides[0].AutoAcknowledgeOnClear);
-        AreEqual(8, restored.SchemaVersion);
+        AreEqual(9, restored.SchemaVersion);
         AreEqual(
             ConditionValueMode.PercentOfReference,
             restored.Rules[0].Conditions[1].ValueMode);
@@ -863,7 +965,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(8, restored.SchemaVersion);
+        AreEqual(9, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -890,7 +992,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(8, oldConfiguration.SchemaVersion);
+        AreEqual(9, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
@@ -951,7 +1053,7 @@ internal static class Program
             IsAcknowledged = true,
         });
         schemaSeven.Normalize();
-        AreEqual(8, schemaSeven.SchemaVersion);
+        AreEqual(9, schemaSeven.SchemaVersion);
         AreEqual(7, schemaSeven.Panels[0].Slots.Count);
         AreEqual("system:health", schemaSeven.Panels[0].Slots[0].AlarmId);
         AreEqual("system:food", schemaSeven.Panels[0].Slots[1].AlarmId);
@@ -1026,7 +1128,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(8, legacy.SchemaVersion);
+        AreEqual(9, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -1070,7 +1172,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(8, versionFive.SchemaVersion);
+        AreEqual(9, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -1093,6 +1195,112 @@ internal static class Program
             item.AlarmKey == "migration:kq").Count);
         AreEqual(1, versionFive.AlarmHistory.FindAll(item =>
             item.AlarmKey == "migration:kg").Count);
+
+        var schemaEight = UnmaConfiguration.CreateDefault();
+        schemaEight.SchemaVersion = 8;
+        schemaEight.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "vanilla:10",
+            Name = "3 OBDACHLOSE VERLIESSEN DIE INSEL",
+            Detail = "HomelessLeft",
+            Source = "vanilla",
+            OverrideId = "vanilla:HomelessLeft",
+            OccurrenceId = "vanilla:HomelessLeft",
+            SlotId = "vanilla:HomelessLeft",
+            Severity = AlarmSeverity.Critical,
+            IsActive = true,
+            IsAcknowledged = true,
+            Sequence = 201,
+        });
+        schemaEight.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "vanilla:11",
+            Name = "1 OBDACHLOSER VERLIESS DIE INSEL",
+            Detail = "HomelessLeft",
+            Source = "vanilla",
+            OverrideId = "vanilla:HomelessLeft",
+            OccurrenceId = "vanilla:HomelessLeft",
+            SlotId = "vanilla:HomelessLeft",
+            Severity = AlarmSeverity.Critical,
+            IsActive = true,
+            IsAcknowledged = true,
+            Sequence = 202,
+        });
+        schemaEight.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            Sequence = 201,
+            AlarmKey = "vanilla:10",
+            Message = "3 OBDACHLOSE VERLIESSEN DIE INSEL",
+            Detail = "HomelessLeft",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Critical,
+            IsAcknowledged = true,
+        });
+        schemaEight.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            Sequence = 202,
+            AlarmKey = "vanilla:11",
+            Message = "1 OBDACHLOSER VERLIESS DIE INSEL",
+            Detail = "HomelessLeft",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Critical,
+            IsAcknowledged = true,
+        });
+
+        schemaEight.Normalize();
+
+        AreEqual(9, schemaEight.SchemaVersion);
+        IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
+        AreEqual(1, schemaEight.AlarmMemories.Count);
+        var sustainedMemory = schemaEight.AlarmMemories[0];
+        AreEqual(
+            "vanilla:sustained:HomelessLeft",
+            sustainedMemory.Key);
+        IsTrue(sustainedMemory.IsActive);
+        IsTrue(sustainedMemory.IsAcknowledged);
+        AreEqual("vanilla:HomelessLeft", sustainedMemory.SlotId);
+        AreEqual(2, schemaEight.AlarmHistory.Count);
+        AreEqual(1, schemaEight.AlarmHistory.FindAll(item =>
+            !item.IsGone).Count);
+        AreEqual(
+            "vanilla:sustained:HomelessLeft",
+            schemaEight.AlarmHistory.Find(item =>
+                !item.IsGone).AlarmKey);
+
+        schemaEight.Normalize();
+        AreEqual(1, schemaEight.AlarmMemories.Count);
+        AreEqual(1, schemaEight.AlarmHistory.FindAll(item =>
+            !item.IsGone).Count);
+
+        var historyOnlySchemaEight = UnmaConfiguration.CreateDefault();
+        historyOnlySchemaEight.SchemaVersion = 8;
+        historyOnlySchemaEight.AlarmHistory.Add(
+            new AlarmHistoryDefinition
+            {
+                Sequence = 301,
+                AlarmKey = "vanilla:12",
+                Message = "1 OBDACHLOSER VERLIESS DIE INSEL",
+                Detail = "HomelessLeft",
+                Source = "vanilla",
+                Severity = AlarmSeverity.Critical,
+                IsGone = true,
+                IsAcknowledged = true,
+            });
+        historyOnlySchemaEight.Normalize();
+        AreEqual(0, historyOnlySchemaEight.AlarmMemories.Count);
+        IsTrue(historyOnlySchemaEight
+            .LegacySustainedAlarmReconciliationPending);
+
+        using var migratedStream = new MemoryStream();
+        new DataContractJsonSerializer(typeof(UnmaConfiguration))
+            .WriteObject(migratedStream, historyOnlySchemaEight);
+        migratedStream.Position = 0;
+        var persistedSchemaNine = (UnmaConfiguration)
+            new DataContractJsonSerializer(typeof(UnmaConfiguration))
+                .ReadObject(migratedStream);
+        persistedSchemaNine.Normalize();
+        IsTrue(persistedSchemaNine
+            .LegacySustainedAlarmReconciliationPending);
     }
 
     private static void TestMechanicalSiren()

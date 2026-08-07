@@ -17,6 +17,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   Platz auch zwischen `NORMAL`, `KOMMT`, `STEHT` und `GEGANGEN`. Wiederholte
   Vanilla-Ereignisse derselben Meldungsart und Entität erscheinen genau einmal;
   einzelne K/G/Q-Ereignisse bleiben im Verlauf vollständig erhalten.
+- `HomelessLeft` bleibt bei negativem Bevölkerungs-`+/-` auch über den
+  Monatswechsel hinweg dieselbe stehende Meldung. Wechselnde Personenzahlen
+  aktualisieren nur den Text; erst ein Wert von `0` oder größer setzt sie auf
+  gegangen und erlaubt danach ein wirklich neues Ereignis.
 - Drei automatische Kernüberwachungen:
   - Gesundheit: `10` ist neutral; Krankheit und Pollution/Müll werden getrennt
     ausgewertet und mit der prozentualen Arbeitsreserve verknüpft;

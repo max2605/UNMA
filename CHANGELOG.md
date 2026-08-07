@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1 – 2026-08-07
+
+- `HomelessLeft` bleibt jetzt über Monatswechsel hinweg genau eine stehende
+  Meldung. Eine geänderte Personenzahl aktualisiert nur den Meldetext und
+  erzeugt weder einen neuen Verlaufseintrag noch einen neuen Alarmton.
+- Eine manuell quittierte Meldung bleibt `KQ`, solange der Bevölkerungswert
+  `+/-` negativ ist. Das Entfernen des kurzlebigen Vanilla-Hinweises beendet
+  die Meldung nicht mehr.
+- Erst `LastPopulationDiff >= 0` setzt den Zustand auf gegangen. Ein späterer
+  echter Rückfall kann danach wieder ein neues, unquittiertes `K` auslösen.
+- Schema 9 führt alte aktive Monatszustände zusammen. Beim nächsten passenden
+  `HomelessLeft`-Ereignis übernimmt es einmalig die letzte Quittierung, ohne
+  einen zusätzlichen Verlaufseintrag zu erzeugen; ein zuvor beobachteter
+  Normalwert verwirft diese Übernahme sicher.
+
 ## 0.6.0 – 2026-08-07
 
 - Panelplätze sind jetzt echte persistente Meldeschlitze mit dauerhaft fester
