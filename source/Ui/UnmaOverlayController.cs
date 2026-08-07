@@ -2452,20 +2452,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Label(
             UnmaText.Get(
                 "sounds.override.title",
-                "VANILLA- UND FREMDMOD-MELDUNGEN: TÖNE / QUITTIERUNG"),
+                "MELDUNGSTYPEN: GLOBAL / TÖNE / QUITTIERUNG"),
             m_sectionStyle);
         GUILayout.Label(
             UnmaText.Get(
                 "sounds.override.description",
                 "Eigene Regeln werden im Editor und vordefinierte " +
-                "Meldungen im SYSTEM-Tab eingestellt. Hier erhält jede " +
-                "bekannte Vanilla- oder Fremdmod-Meldung separat ihren " +
-                "Ton und das Verhalten beim Gehen. Ohne automatische " +
-                "Quittierung bleibt GEGANGEN bis MASTER QUIT unquittiert."),
+                "Meldungen im SYSTEM-Tab eingestellt. Vanilla-" +
+                "Meldungstypen lassen sich hier für alle Gebäude und " +
+                "Fahrzeuge global in UNMA ein- oder ausblenden. Ton und " +
+                "Quittierung bleiben für Vanilla- und Fremdmod-Meldungen " +
+                "separat einstellbar. Die Spielmeldung selbst wird nicht " +
+                "verändert."),
             m_smallLabelStyle);
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Filter", m_labelStyle, GUILayout.Width(70f));
+        GUILayout.Label(
+            UnmaText.Get(
+                "sounds.override.filter_label",
+                "Meldungstyp suchen"),
+            m_labelStyle,
+            GUILayout.Width(155f));
         m_soundOverrideFilter = GUILayout.TextField(
             m_soundOverrideFilter,
             100,
@@ -2474,12 +2481,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         var sounds = m_audio.GetSoundOptions();
         var candidates = m_runtime.GetSoundOverrideCandidates()
-            .Where(candidate =>
-                string.IsNullOrWhiteSpace(m_soundOverrideFilter) ||
-                (candidate.Name + " " + candidate.Detail + " " +
-                 candidate.OverrideId).IndexOf(
-                    m_soundOverrideFilter,
-                    StringComparison.CurrentCultureIgnoreCase) >= 0)
+            .Where(MatchesSoundOverrideFilter)
             .ToArray();
 
         m_soundOverrideScroll = GUILayout.BeginScrollView(
@@ -2503,13 +2505,43 @@ public sealed class UnmaOverlayController : MonoBehaviour
             var autoAcknowledgeOnClear =
                 m_runtime.GetConfiguredAutoAcknowledgeOnClear(
                     candidate.OverrideId);
+            var isVanilla = string.Equals(
+                candidate.Source,
+                "vanilla",
+                StringComparison.Ordinal);
+            var vanillaEnabled = !isVanilla ||
+                                 m_runtime.GetVanillaNotificationEnabled(
+                                     candidate.OverrideId);
 
-            GUILayout.BeginHorizontal();
             GUILayout.Label(
                 candidate.Name + "\n" + candidate.Detail,
                 m_labelStyle,
-                GUILayout.Width(Mathf.Max(260f, m_windowRect.width - 555f)),
-                GUILayout.Height(46f));
+                GUILayout.MinHeight(42f));
+
+            if (isVanilla && GUILayout.Button(
+                    vanillaEnabled
+                        ? UnmaText.Get(
+                            "sounds.override.global_enabled",
+                            "GLOBAL AN · IN UNMA ANZEIGEN")
+                        : UnmaText.Get(
+                            "sounds.override.global_disabled",
+                            "GLOBAL AUS · AUSGEBLENDET"),
+                    vanillaEnabled
+                        ? m_primaryButtonStyle
+                        : m_dangerButtonStyle,
+                    GUILayout.Height(30f),
+                    GUILayout.ExpandWidth(true)))
+            {
+                SaveVanillaNotificationEnabled(
+                    candidate.OverrideId,
+                    !vanillaEnabled);
+            }
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                UnmaText.Get("sounds.override.sound_label", "Ton"),
+                m_smallLabelStyle,
+                GUILayout.Width(70f));
             if (GUILayout.Button("◀", m_buttonStyle, GUILayout.Width(34f)))
             {
                 SaveSoundOverride(
@@ -2519,7 +2551,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.Label(
                 sounds[soundIndex].Label,
                 m_smallLabelStyle,
-                GUILayout.Width(210f));
+                GUILayout.MinWidth(90f),
+                GUILayout.ExpandWidth(true));
             if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(34f)))
             {
                 SaveSoundOverride(
@@ -2528,23 +2561,93 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             GUILayout.EndHorizontal();
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(Mathf.Max(260f, m_windowRect.width - 555f));
             var updatedAutoAcknowledgeOnClear = GUILayout.Toggle(
                 autoAcknowledgeOnClear,
-                "BEIM GEHEN AUTOMATISCH QUITTIEREN",
-                GUILayout.Width(340f));
+                UnmaText.Get(
+                    "sounds.override.auto_acknowledge",
+                    "BEIM GEHEN AUTOMATISCH QUITTIEREN"));
             if (updatedAutoAcknowledgeOnClear != autoAcknowledgeOnClear)
             {
                 SaveAutoAcknowledgeOnClear(
                     candidate.OverrideId,
                     updatedAutoAcknowledgeOnClear);
             }
-            GUILayout.EndHorizontal();
-            GUILayout.Space(4f);
+            GUILayout.Space(8f);
         }
         GUILayout.EndScrollView();
         DrawStatusMessage();
+    }
+
+    private bool MatchesSoundOverrideFilter(AlarmView candidate)
+    {
+        if (candidate == null ||
+            string.IsNullOrWhiteSpace(m_soundOverrideFilter))
+        {
+            return candidate != null;
+        }
+
+        var isVanilla = string.Equals(
+            candidate.Source,
+            "vanilla",
+            StringComparison.Ordinal);
+        var enabled = !isVanilla ||
+                      m_runtime.GetVanillaNotificationEnabled(
+                          candidate.OverrideId);
+        var sourceTokens = isVanilla
+            ? UnmaText.Get(
+                "sounds.override.filter_tokens_vanilla",
+                "Vanilla")
+            : UnmaText.Get(
+                "sounds.override.filter_tokens_external",
+                "Fremdmod extern external");
+        var statusTokens = !isVanilla
+            ? ""
+            : enabled
+                ? UnmaText.Get(
+                    "sounds.override.filter_tokens_enabled",
+                    "aktiv an eingeschaltet enabled on")
+                : UnmaText.Get(
+                    "sounds.override.filter_tokens_disabled",
+                    "aus ausgeschaltet ausgeblendet disabled off hidden");
+        var haystack = string.Join(
+            " ",
+            candidate.Name,
+            candidate.Detail,
+            candidate.OverrideId,
+            sourceTokens,
+            statusTokens);
+        return m_soundOverrideFilter
+            .Split(
+                new[] { ' ', ',', ';' },
+                StringSplitOptions.RemoveEmptyEntries)
+            .All(token => haystack.IndexOf(
+                token,
+                StringComparison.CurrentCultureIgnoreCase) >= 0);
+    }
+
+    private void SaveVanillaNotificationEnabled(
+        string overrideId,
+        bool enabled)
+    {
+        if (m_runtime.SetVanillaNotificationEnabled(overrideId, enabled))
+        {
+            SetStatus(UnmaText.Format(
+                enabled
+                    ? "sounds.override.status_global_enabled"
+                    : "sounds.override.status_global_disabled",
+                enabled
+                    ? "Meldungstyp {0} global eingeschaltet."
+                    : "Meldungstyp {0} global ausgeschaltet.",
+                overrideId));
+        }
+        else
+        {
+            SetStatus(UnmaText.Format(
+                "sounds.override.status_global_error",
+                "Meldungstyp {0} konnte nicht geändert werden: {1}",
+                overrideId,
+                m_runtime.LastPersistenceError));
+        }
     }
 
     private void SaveSoundOverride(string alarmId, SoundOption sound)

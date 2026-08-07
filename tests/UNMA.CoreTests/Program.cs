@@ -21,6 +21,7 @@ internal static class Program
         TestBooleanLogic();
         TestAlarmLatch();
         TestSustainedVanillaAlarmPolicy();
+        TestVanillaNotificationSuppressionPolicy();
         TestAlarmHistoryState();
         TestSystemAlarmSelection();
         TestSystemMetricMath();
@@ -540,6 +541,90 @@ internal static class Program
             false);
         IsTrue(genuinelyReturned.IsNewOccurrence);
         IsFalse(genuinelyReturned.IsAcknowledged);
+    }
+
+    private static void TestVanillaNotificationSuppressionPolicy()
+    {
+        const string overrideId = "vanilla:NoRecipeSelected";
+        const string entitySlotId =
+            "vanilla:NoRecipeSelected:entity:17";
+        const string legacySlotId =
+            "vanilla:NoRecipeSelected:legacy:ABCDEF12";
+
+        IsTrue(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId(overrideId));
+        IsTrue(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId("  " + overrideId + "  "));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId(entitySlotId));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId(legacySlotId));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId("system:NoRecipeSelected"));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId("vanilla:"));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .IsVanillaOverrideId(null));
+
+        AreEqual(
+            overrideId,
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId(overrideId));
+        AreEqual(
+            overrideId,
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId(entitySlotId));
+        AreEqual(
+            overrideId,
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId(legacySlotId));
+        AreEqual(
+            overrideId,
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId("  " + entitySlotId + "  "));
+        AreEqual(
+            "",
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId(
+                    "external:NoRecipeSelected:entity:17"));
+        AreEqual(
+            "",
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId(
+                    "vanilla:NoRecipeSelected:entity:"));
+        AreEqual(
+            "",
+            VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId("vanilla::legacy:ABCDEF12"));
+
+        var disabled = new HashSet<string>(StringComparer.Ordinal)
+        {
+            overrideId,
+        };
+        IsTrue(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            new PanelSlotDefinition { AlarmId = overrideId },
+            disabled));
+        IsTrue(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            new PanelSlotDefinition { AlarmId = entitySlotId },
+            disabled));
+        IsTrue(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            new PanelSlotDefinition { AlarmId = legacySlotId },
+            disabled));
+        IsFalse(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            new PanelSlotDefinition
+            {
+                AlarmId = "vanilla:NoRecipe:entity:17",
+            },
+            disabled));
+        IsFalse(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            new PanelSlotDefinition { AlarmId = entitySlotId },
+            Array.Empty<string>()));
+        IsFalse(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            null,
+            disabled));
+        IsFalse(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+            new PanelSlotDefinition { AlarmId = entitySlotId },
+            null));
     }
 
     private static void TestSystemAlarmSelection()
@@ -1173,6 +1258,12 @@ internal static class Program
             SoundId = "siren",
             AutoAcknowledgeOnClear = true,
         });
+        configuration.SoundOverrides.Add(new AlarmSoundOverride
+        {
+            AlarmId = "vanilla:NoRecipeSelected",
+            SoundId = "none",
+            IsGloballyDisabled = true,
+        });
         var editedSystemAlarm = configuration.SystemAlarms
             .Find(alarm => alarm.Id == "system:health");
         editedSystemAlarm.AutoAcknowledgeOnClear = true;
@@ -1267,10 +1358,17 @@ internal static class Program
         AreEqual(
             "AirStorageT1",
             restored.Rules[0].Conditions[0].EntityPrototypeId);
-        AreEqual(1, restored.SoundOverrides.Count);
-        AreEqual("siren", restored.SoundOverrides[0].SoundId);
-        IsTrue(restored.SoundOverrides[0].AutoAcknowledgeOnClear);
-        AreEqual(10, restored.SchemaVersion);
+        AreEqual(2, restored.SoundOverrides.Count);
+        var restoredSystemOverride = restored.SoundOverrides.Find(item =>
+            item.AlarmId == "system:health");
+        var restoredVanillaOverride = restored.SoundOverrides.Find(item =>
+            item.AlarmId == "vanilla:NoRecipeSelected");
+        AreEqual("siren", restoredSystemOverride.SoundId);
+        IsTrue(restoredSystemOverride.AutoAcknowledgeOnClear);
+        IsFalse(restoredSystemOverride.IsGloballyDisabled);
+        AreEqual("none", restoredVanillaOverride.SoundId);
+        IsTrue(restoredVanillaOverride.IsGloballyDisabled);
+        AreEqual(11, restored.SchemaVersion);
         IsTrue(restored.Panels[0].IsDashboard);
         IsFalse(restored.Panels[1].IsDashboard);
         AreEqual(
@@ -1384,7 +1482,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(10, restored.SchemaVersion);
+        AreEqual(11, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -1411,7 +1509,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(10, oldConfiguration.SchemaVersion);
+        AreEqual(11, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
@@ -1501,7 +1599,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(10, schemaSeven.SchemaVersion);
+        AreEqual(11, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -1579,7 +1677,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(10, legacy.SchemaVersion);
+        AreEqual(11, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -1588,6 +1686,7 @@ internal static class Program
         AreEqual("", legacy.Rules[0].Conditions[0].ReferenceMetricLabel);
         IsFalse(legacy.Rules[0].AutoAcknowledgeOnClear);
         IsFalse(legacy.SoundOverrides[0].AutoAcknowledgeOnClear);
+        IsFalse(legacy.SoundOverrides[0].IsGloballyDisabled);
         IsTrue(legacy.SystemAlarms.TrueForAll(alarm =>
             !alarm.AutoAcknowledgeOnClear));
         AreEqual(0, legacy.AlarmMemories.Count);
@@ -1623,7 +1722,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(10, versionFive.SchemaVersion);
+        AreEqual(11, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -1700,7 +1799,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(10, schemaEight.SchemaVersion);
+        AreEqual(11, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

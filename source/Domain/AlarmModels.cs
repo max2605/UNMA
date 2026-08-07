@@ -133,6 +133,7 @@ public sealed class AlarmSoundOverride
     [DataMember(Order = 1)] public string AlarmId = "";
     [DataMember(Order = 2)] public string SoundId = "auto";
     [DataMember(Order = 3)] public bool AutoAcknowledgeOnClear;
+    [DataMember(Order = 4)] public bool IsGloballyDisabled;
 }
 
 [DataContract]
@@ -192,7 +193,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 10;
+    [DataMember(Order = 1)] public int SchemaVersion = 11;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -546,7 +547,7 @@ public sealed class UnmaConfiguration
             SeedPanelSlots(includeMemories: true);
         }
         SynchronizeRuleSlots();
-        SchemaVersion = Math.Max(SchemaVersion, 10);
+        SchemaVersion = Math.Max(SchemaVersion, 11);
     }
 
     private void MigrateSustainedVanillaAlarmMemories()

@@ -13,6 +13,11 @@ Zielversion: Captain of Industry **0.8.6c**.
 
 - Spiegelung aller aktiven Vanilla-Benachrichtigungen über den
   `INotificationsManager`.
+- Jeder bekannte Vanilla-Meldungstyp kann im **TÖNE**-Tab global für UNMA
+  ausgeschaltet werden. Die Einstellung gilt typweit für alle Gebäude und
+  Fahrzeuge, stoppt UNMA-Töne und blendet die zugehörigen festen Schlitze aus,
+  verändert aber nicht die Benachrichtigung des Spiels. Beim Wiedereinschalten
+  erscheinen gespeicherte Panelplätze und bereits anstehende Meldungen wieder.
 - Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
   `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
   vollständig ausgeblendet.

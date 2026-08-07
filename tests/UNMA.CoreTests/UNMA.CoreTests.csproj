@@ -16,6 +16,8 @@
              Link="Domain\CustomRuleLifecyclePolicy.cs" />
     <Compile Include="..\..\source\Domain\SustainedVanillaAlarmPolicy.cs"
              Link="Domain\SustainedVanillaAlarmPolicy.cs" />
+    <Compile Include="..\..\source\Domain\VanillaNotificationSuppressionPolicy.cs"
+             Link="Domain\VanillaNotificationSuppressionPolicy.cs" />
     <Compile Include="..\..\source\Audio\MechanicalSirenSynth.cs"
              Link="Audio\MechanicalSirenSynth.cs" />
     <Compile Include="..\..\source\Runtime\SystemMetricCatalog.cs"

@@ -68,6 +68,19 @@ public sealed class UnmaRuntime : IDisposable
         public long Sequence;
     }
 
+    private sealed class RemovedAlarmState
+    {
+        public string Key;
+        public AlarmState State;
+    }
+
+    private sealed class ClosedHistoryState
+    {
+        public AlarmHistoryDefinition History;
+        public bool WasGone;
+        public bool WasAcknowledged;
+    }
+
     private sealed class ExternalEntityEvaluation
     {
         public bool IsActive;
@@ -115,6 +128,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_inspectionGate = new();
     private readonly object m_systemMetricsGate = new();
     private readonly object m_persistenceGate = new();
+    private readonly object m_alarmPersistenceBatchGate = new();
     private readonly object m_externalDefinitionsGate = new();
     private readonly object m_removedEntitiesGate = new();
     private readonly INotificationsManager m_notificationsManager;
@@ -134,6 +148,8 @@ public sealed class UnmaRuntime : IDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool>
         m_externalAutoAcknowledgeByKey = new(StringComparer.Ordinal);
+    private volatile HashSet<string> m_disabledVanillaOverrideIds =
+        new(StringComparer.Ordinal);
     private readonly Dictionary<int, IEntity> m_removedEntityCandidates = new();
     private readonly Dictionary<int, int>
         m_missingStaticEntityObservations = new();
@@ -156,7 +172,7 @@ public sealed class UnmaRuntime : IDisposable
     private Dictionary<string, double> m_lastSystemMetrics =
         new(StringComparer.Ordinal);
     private bool m_simListenerAdded;
-    private bool m_suppressAlarmPersistence;
+    private int m_alarmPersistenceSuppressionDepth;
     private bool m_alarmPersistencePending;
     private bool m_disposed;
     private ExternalDefinitionLoadResult m_externalDefinitions;
@@ -192,6 +208,7 @@ public sealed class UnmaRuntime : IDisposable
             .ToArray();
         m_settings = settings ?? new UnmaSettings();
         Configuration = store.Load();
+        RefreshDisabledVanillaOverrideIds();
         RestoreAlarmHistory();
         RestoreAlarmMemories();
         foreach (var key in m_alarms
@@ -227,7 +244,7 @@ public sealed class UnmaRuntime : IDisposable
         m_notificationsManager.NotificationSuppressChanged +=
             OnNotificationSuppressChanged;
 
-        m_suppressAlarmPersistence = true;
+        BeginAlarmPersistenceBatch();
         try
         {
             var currentNotifications = m_notificationsManager
@@ -243,7 +260,7 @@ public sealed class UnmaRuntime : IDisposable
         }
         finally
         {
-            m_suppressAlarmPersistence = false;
+            EndAlarmPersistenceBatch();
         }
         PersistAlarmState();
 
@@ -255,8 +272,28 @@ public sealed class UnmaRuntime : IDisposable
 
     private void RestoreAlarmMemories()
     {
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
+        var closedSuppressedHistory = false;
         foreach (var memory in Configuration.AlarmMemories)
         {
+            if (IsSuppressedVanillaAlarm(
+                    memory.Source,
+                    memory.OverrideId,
+                    disabledVanillaOverrideIds,
+                    memory.SlotId))
+            {
+                m_sequence = Math.Max(m_sequence, memory.Sequence);
+                var history = FindHistoryLocked(memory.Sequence);
+                if (history != null)
+                {
+                    closedSuppressedHistory |= history.SetState(
+                        isGone: true,
+                        isAcknowledged: true);
+                }
+                continue;
+            }
+
             var state = new AlarmState
             {
                 Sequence = memory.Sequence,
@@ -295,6 +332,10 @@ public sealed class UnmaRuntime : IDisposable
                 m_alarmHistory.Add(CreateHistoryFromState(state));
                 m_alarmHistoryRevision++;
             }
+        }
+        if (closedSuppressedHistory)
+        {
+            m_alarmHistoryRevision++;
         }
     }
 
@@ -577,13 +618,19 @@ public sealed class UnmaRuntime : IDisposable
             return Array.Empty<AlarmView>();
         }
 
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
         if (panel.IsDashboard)
         {
             AlarmView[] activeCandidates;
             lock (m_gate)
             {
                 activeCandidates = m_alarms.Values
-                    .Where(state => state.View.IsActive)
+                    .Where(state =>
+                        state.View.IsActive &&
+                        !IsSuppressedVanillaAlarm(
+                            state.View,
+                            disabledVanillaOverrideIds))
                     .Select(state => Clone(state.View, state.Sequence))
                     .ToArray();
             }
@@ -595,7 +642,12 @@ public sealed class UnmaRuntime : IDisposable
         {
             slots = (panel.Slots ?? new List<PanelSlotDefinition>())
                 .Select(PanelSlotProjection.CloneSlot)
-                .Where(slot => slot != null)
+                .Where(slot =>
+                    slot != null &&
+                    !VanillaNotificationSuppressionPolicy
+                        .IsSlotSuppressed(
+                            slot,
+                            disabledVanillaOverrideIds))
                 .ToArray();
         }
         AlarmView[] candidates;
@@ -620,12 +672,17 @@ public sealed class UnmaRuntime : IDisposable
             return null;
         }
 
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
         lock (m_gate)
         {
             AlarmState best = null;
             foreach (var candidate in m_alarms.Values)
             {
                 if (!candidate.View.RequiresAcknowledgement ||
+                    IsSuppressedVanillaAlarm(
+                        candidate.View,
+                        disabledVanillaOverrideIds) ||
                     string.Equals(
                         candidate.View.SoundId,
                         "none",
@@ -649,10 +706,16 @@ public sealed class UnmaRuntime : IDisposable
     {
         get
         {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
             lock (m_gate)
             {
                 return m_alarms.Values.Count(
-                    state => state.View.IsActive);
+                    state =>
+                        state.View.IsActive &&
+                        !IsSuppressedVanillaAlarm(
+                            state.View,
+                            disabledVanillaOverrideIds));
             }
         }
     }
@@ -661,10 +724,16 @@ public sealed class UnmaRuntime : IDisposable
     {
         get
         {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
             lock (m_gate)
             {
                 return m_alarms.Values.Count(
-                    state => state.View.RequiresAcknowledgement);
+                    state =>
+                        state.View.RequiresAcknowledgement &&
+                        !IsSuppressedVanillaAlarm(
+                            state.View,
+                            disabledVanillaOverrideIds));
             }
         }
     }
@@ -891,13 +960,38 @@ public sealed class UnmaRuntime : IDisposable
 
     private void PersistAlarmState()
     {
-        if (m_suppressAlarmPersistence)
+        lock (m_alarmPersistenceBatchGate)
         {
-            m_alarmPersistencePending = true;
-            return;
+            if (m_alarmPersistenceSuppressionDepth > 0)
+            {
+                m_alarmPersistencePending = true;
+                return;
+            }
+            m_alarmPersistencePending = false;
         }
-        m_alarmPersistencePending = false;
         SaveConfiguration();
+    }
+
+    private void BeginAlarmPersistenceBatch()
+    {
+        lock (m_alarmPersistenceBatchGate)
+        {
+            m_alarmPersistenceSuppressionDepth++;
+        }
+    }
+
+    private bool EndAlarmPersistenceBatch()
+    {
+        lock (m_alarmPersistenceBatchGate)
+        {
+            if (m_alarmPersistenceSuppressionDepth <= 0)
+            {
+                return false;
+            }
+            m_alarmPersistenceSuppressionDepth--;
+            return m_alarmPersistenceSuppressionDepth == 0 &&
+                   m_alarmPersistencePending;
+        }
     }
 
     public bool AddRule(
@@ -1441,24 +1535,119 @@ public sealed class UnmaRuntime : IDisposable
 
     public IReadOnlyList<AlarmView> GetSoundOverrideCandidates()
     {
+        AlarmView[] runtimeCandidates;
         lock (m_gate)
         {
-            return m_alarms.Values
+            runtimeCandidates = m_alarms.Values
                 .Where(state =>
                     (state.View.Source == "vanilla" ||
                      state.View.Source == "external") &&
                     !string.IsNullOrWhiteSpace(state.View.OverrideId))
-                .GroupBy(
-                    state => state.View.OverrideId,
-                    StringComparer.Ordinal)
-                .Select(group => group
-                    .OrderByDescending(state => state.Sequence)
-                    .First())
-                .OrderBy(state => state.View.Source)
-                .ThenBy(state => state.View.Name)
-                .Select(state => Clone(state.View))
+                .Select(state => Clone(state.View, state.Sequence))
                 .ToArray();
         }
+
+        PanelSlotDefinition[] fixedVanillaSlots;
+        string[] persistedVanillaOverrideIds;
+        lock (m_configurationGate)
+        {
+            fixedVanillaSlots = Configuration.Panels
+                .Where(panel => !panel.IsDashboard)
+                .SelectMany(panel =>
+                    panel.Slots ?? new List<PanelSlotDefinition>())
+                .Where(slot =>
+                    slot != null &&
+                    (string.Equals(
+                         slot.Source,
+                         "vanilla",
+                         StringComparison.Ordinal) ||
+                     VanillaNotificationSuppressionPolicy
+                         .IsVanillaOverrideId(
+                             VanillaNotificationSuppressionPolicy
+                                 .GetOverrideIdForSlotId(slot.AlarmId))))
+                .Select(PanelSlotProjection.CloneSlot)
+                .ToArray();
+            persistedVanillaOverrideIds = Configuration.SoundOverrides
+                .Where(soundOverride =>
+                    soundOverride != null &&
+                    VanillaNotificationSuppressionPolicy
+                        .IsVanillaOverrideId(soundOverride.AlarmId))
+                .Select(soundOverride => soundOverride.AlarmId.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        var candidates = runtimeCandidates
+            .GroupBy(
+                candidate => candidate.OverrideId,
+                StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => Clone(group
+                    .OrderByDescending(candidate => candidate.Sequence)
+                    .First()),
+                StringComparer.Ordinal);
+
+        foreach (var slot in fixedVanillaSlots)
+        {
+            var overrideId = VanillaNotificationSuppressionPolicy
+                .GetOverrideIdForSlotId(slot.AlarmId);
+            if (!VanillaNotificationSuppressionPolicy
+                    .IsVanillaOverrideId(overrideId) ||
+                candidates.ContainsKey(overrideId))
+            {
+                continue;
+            }
+            candidates.Add(
+                overrideId,
+                CreateVanillaOverrideCandidate(overrideId, slot));
+        }
+
+        foreach (var overrideId in persistedVanillaOverrideIds)
+        {
+            if (!candidates.ContainsKey(overrideId))
+            {
+                candidates.Add(
+                    overrideId,
+                    CreateVanillaOverrideCandidate(overrideId));
+            }
+        }
+
+        return candidates.Values
+            .OrderBy(candidate => candidate.Source)
+            .ThenBy(candidate => candidate.Name)
+            .ThenBy(candidate => candidate.OverrideId)
+            .Select(candidate => Clone(candidate))
+            .ToArray();
+    }
+
+    private static AlarmView CreateVanillaOverrideCandidate(
+        string overrideId,
+        PanelSlotDefinition slot = null)
+    {
+        const string vanillaPrefix = "vanilla:";
+        var prototypeId = overrideId.StartsWith(
+                vanillaPrefix,
+                StringComparison.Ordinal)
+            ? overrideId.Substring(vanillaPrefix.Length)
+            : overrideId;
+        return new AlarmView
+        {
+            Key = overrideId,
+            OverrideId = overrideId,
+            SlotId = overrideId,
+            Name = string.IsNullOrWhiteSpace(slot?.DisplayName)
+                ? prototypeId
+                : slot.DisplayName,
+            Detail = string.IsNullOrWhiteSpace(slot?.Detail)
+                ? overrideId
+                : slot.Detail,
+            Source = "vanilla",
+            Severity = slot?.Severity ?? AlarmSeverity.Warning,
+            ActiveColor = string.IsNullOrWhiteSpace(slot?.ActiveColor)
+                ? "#F0C541"
+                : slot.ActiveColor,
+        };
     }
 
     public string GetConfiguredSound(string alarmId)
@@ -1476,6 +1665,150 @@ public sealed class UnmaRuntime : IDisposable
                 .FirstOrDefault();
         }
         return ResolveConfiguredSound(alarmId, fallback);
+    }
+
+    public bool GetVanillaNotificationEnabled(string overrideId)
+    {
+        overrideId = overrideId?.Trim() ?? "";
+        if (!VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                overrideId))
+        {
+            return false;
+        }
+
+        return !GetDisabledVanillaOverrideIds().Contains(overrideId);
+    }
+
+    public bool SetVanillaNotificationEnabled(
+        string overrideId,
+        bool enabled)
+    {
+        overrideId = overrideId?.Trim() ?? "";
+        if (!VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                overrideId))
+        {
+            return false;
+        }
+
+        AlarmSoundOverride soundOverride;
+        var createdOverride = false;
+        var wasDisabled = false;
+        lock (m_configurationGate)
+        {
+            soundOverride = Configuration.SoundOverrides.FirstOrDefault(
+                candidate =>
+                    candidate != null &&
+                    string.Equals(
+                        candidate.AlarmId,
+                        overrideId,
+                        StringComparison.Ordinal));
+            wasDisabled = soundOverride?.IsGloballyDisabled == true;
+            if (enabled && !wasDisabled)
+            {
+                return true;
+            }
+
+            if (soundOverride == null)
+            {
+                soundOverride = new AlarmSoundOverride
+                {
+                    AlarmId = overrideId,
+                    SoundId = "auto",
+                    IsGloballyDisabled = !enabled,
+                };
+                Configuration.SoundOverrides.Add(soundOverride);
+                createdOverride = true;
+            }
+            else
+            {
+                soundOverride.IsGloballyDisabled = !enabled;
+            }
+        }
+        RefreshDisabledVanillaOverrideIds();
+
+        if (enabled)
+        {
+            if (!SaveConfiguration())
+            {
+                RollBackVanillaNotificationOverride(
+                    soundOverride,
+                    createdOverride,
+                    wasDisabled);
+                return false;
+            }
+
+            ReplayCurrentVanillaNotifications(overrideId);
+            return true;
+        }
+
+        var disabledOverrideIds = new[] { overrideId };
+        var removedStates = new List<RemovedAlarmState>();
+        var closedHistoryStates = new List<ClosedHistoryState>();
+        long previousHistoryRevision;
+        lock (m_gate)
+        {
+            previousHistoryRevision = m_alarmHistoryRevision;
+            foreach (var pair in m_alarms
+                         .Where(pair => IsSuppressedVanillaAlarm(
+                             pair.Value.View.Source,
+                             pair.Value.View.OverrideId,
+                             disabledOverrideIds,
+                             pair.Value.View.SlotId))
+                         .ToArray())
+            {
+                removedStates.Add(new RemovedAlarmState
+                {
+                    Key = pair.Key,
+                    State = pair.Value,
+                });
+                var history = FindHistoryLocked(pair.Value.Sequence);
+                if (history != null &&
+                    (!history.IsGone || !history.IsAcknowledged))
+                {
+                    closedHistoryStates.Add(new ClosedHistoryState
+                    {
+                        History = history,
+                        WasGone = history.IsGone,
+                        WasAcknowledged = history.IsAcknowledged,
+                    });
+                    history.SetState(
+                        isGone: true,
+                        isAcknowledged: true);
+                }
+                m_alarms.Remove(pair.Key);
+            }
+            if (closedHistoryStates.Count > 0)
+            {
+                m_alarmHistoryRevision++;
+            }
+        }
+
+        if (SaveConfiguration())
+        {
+            return true;
+        }
+
+        RollBackVanillaNotificationOverride(
+            soundOverride,
+            createdOverride,
+            wasDisabled);
+        lock (m_gate)
+        {
+            foreach (var removedState in removedStates)
+            {
+                m_alarms[removedState.Key] = removedState.State;
+            }
+            foreach (var closedHistoryState in closedHistoryStates)
+            {
+                closedHistoryState.History.IsGone =
+                    closedHistoryState.WasGone;
+                closedHistoryState.History.IsAcknowledged =
+                    closedHistoryState.WasAcknowledged;
+            }
+            m_alarmHistoryRevision = previousHistoryRevision;
+        }
+        RestoreConfigurationAlarmSnapshots();
+        return false;
     }
 
     public bool SetConfiguredSound(string alarmId, string soundId)
@@ -2568,16 +2901,14 @@ public sealed class UnmaRuntime : IDisposable
 
     private void EvaluateExternalAlarms()
     {
-        var wasSuppressed = m_suppressAlarmPersistence;
-        m_suppressAlarmPersistence = true;
+        BeginAlarmPersistenceBatch();
         try
         {
             EvaluateExternalAlarmsCore();
         }
         finally
         {
-            m_suppressAlarmPersistence = wasSuppressed;
-            if (!wasSuppressed && m_alarmPersistencePending)
+            if (EndAlarmPersistenceBatch())
             {
                 PersistAlarmState();
             }
@@ -3199,6 +3530,11 @@ public sealed class UnmaRuntime : IDisposable
     private void OnNotificationAdded(INotification notification)
     {
         var id = notification.Proto.Id.Value;
+        var overrideId = "vanilla:" + id;
+        if (!GetVanillaNotificationEnabled(overrideId))
+        {
+            return;
+        }
         if (!SustainedVanillaAlarmPolicy.ShouldProcessNotification(
                 id,
                 m_settlementsManager.LastPopulationDiff))
@@ -3208,7 +3544,6 @@ public sealed class UnmaRuntime : IDisposable
         var reconciledLegacyHistory =
             SustainedVanillaAlarmPolicy.IsSustainedPrototype(id) &&
             RestoreSustainedVanillaAlarmFromHistory(id);
-        var overrideId = "vanilla:" + id;
         var slotId = overrideId;
         var message = notification.Message.Value;
         var severity = ClassifyNotification(notification);
@@ -3253,12 +3588,16 @@ public sealed class UnmaRuntime : IDisposable
     private void OnNotificationRemoved(INotification notification)
     {
         var prototypeId = notification.Proto.Id.Value;
+        var overrideId = "vanilla:" + prototypeId;
+        if (!GetVanillaNotificationEnabled(overrideId))
+        {
+            return;
+        }
         if (SustainedVanillaAlarmPolicy.IgnoresNotificationRemoval(
                 prototypeId))
         {
             return;
         }
-        var overrideId = "vanilla:" + prototypeId;
         ClearAlarm(
             AlarmKeyForNotification(notification),
             ResolveAutoAcknowledgeOnClear(overrideId));
@@ -3285,6 +3624,11 @@ public sealed class UnmaRuntime : IDisposable
 
     private void OnNotificationSuppressChanged(INotification notification)
     {
+        if (!GetVanillaNotificationEnabled(
+                "vanilla:" + notification.Proto.Id.Value))
+        {
+            return;
+        }
         if (!notification.IsSuppressed)
         {
             return;
@@ -3349,6 +3693,15 @@ public sealed class UnmaRuntime : IDisposable
         AlarmView slotCandidate;
         lock (m_gate)
         {
+            if (IsSuppressedVanillaAlarm(
+                    source,
+                    overrideId,
+                    GetDisabledVanillaOverrideIds(),
+                    slotId))
+            {
+                return;
+            }
+
             var historyChanged = false;
             var created = false;
             if (!m_alarms.TryGetValue(key, out var state))
@@ -3761,6 +4114,135 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    private HashSet<string> GetDisabledVanillaOverrideIds()
+    {
+        return m_disabledVanillaOverrideIds;
+    }
+
+    private void RefreshDisabledVanillaOverrideIds()
+    {
+        HashSet<string> disabledOverrideIds;
+        lock (m_configurationGate)
+        {
+            disabledOverrideIds = new HashSet<string>(
+                Configuration.SoundOverrides
+                    .Where(soundOverride =>
+                        soundOverride != null &&
+                        soundOverride.IsGloballyDisabled &&
+                        VanillaNotificationSuppressionPolicy
+                            .IsVanillaOverrideId(
+                                soundOverride.AlarmId))
+                    .Select(soundOverride =>
+                        soundOverride.AlarmId.Trim()),
+                StringComparer.Ordinal);
+        }
+        m_disabledVanillaOverrideIds = disabledOverrideIds;
+    }
+
+    private static bool IsSuppressedVanillaAlarm(
+        AlarmView view,
+        IEnumerable<string> disabledOverrideIds)
+    {
+        return view != null && IsSuppressedVanillaAlarm(
+            view.Source,
+            view.OverrideId,
+            disabledOverrideIds,
+            view.SlotId);
+    }
+
+    private static bool IsSuppressedVanillaAlarm(
+        string source,
+        string overrideId,
+        IEnumerable<string> disabledOverrideIds,
+        string slotId = "")
+    {
+        if (!string.Equals(source, "vanilla", StringComparison.Ordinal) ||
+            disabledOverrideIds == null)
+        {
+            return false;
+        }
+
+        var canonicalOverrideId =
+            VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                overrideId)
+                ? overrideId.Trim()
+                : VanillaNotificationSuppressionPolicy
+                    .GetOverrideIdForSlotId(slotId);
+        return canonicalOverrideId.Length > 0 &&
+               disabledOverrideIds.Contains(
+                   canonicalOverrideId,
+                   StringComparer.Ordinal);
+    }
+
+    private void RollBackVanillaNotificationOverride(
+        AlarmSoundOverride soundOverride,
+        bool createdOverride,
+        bool wasDisabled)
+    {
+        lock (m_configurationGate)
+        {
+            if (createdOverride)
+            {
+                Configuration.SoundOverrides.Remove(soundOverride);
+            }
+            else
+            {
+                soundOverride.IsGloballyDisabled = wasDisabled;
+            }
+        }
+        RefreshDisabledVanillaOverrideIds();
+    }
+
+    private void RestoreConfigurationAlarmSnapshots()
+    {
+        CapturePersistentAlarmState(
+            out var alarmMemories,
+            out var alarmHistory);
+        lock (m_configurationGate)
+        {
+            Configuration.AlarmMemories = alarmMemories;
+            Configuration.AlarmHistory = alarmHistory;
+        }
+    }
+
+    private void ReplayCurrentVanillaNotifications(string overrideId)
+    {
+        INotification[] currentNotifications;
+        try
+        {
+            currentNotifications = m_notificationsManager
+                .FetchAllNotifications()
+                .Where(notification => string.Equals(
+                    "vanilla:" + notification.Proto.Id.Value,
+                    overrideId,
+                    StringComparison.Ordinal))
+                .ToArray();
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                "UNMA: Vanilla-Meldungsart konnte nicht sofort " +
+                "neu eingelesen werden: " + exception.Message);
+            return;
+        }
+
+        BeginAlarmPersistenceBatch();
+        try
+        {
+            foreach (var notification in currentNotifications)
+            {
+                OnNotificationAdded(notification);
+            }
+        }
+        finally
+        {
+            if (EndAlarmPersistenceBatch())
+            {
+                PersistAlarmState();
+            }
+        }
+    }
+
     private bool ResolveAutoAcknowledgeOnClear(
         string alarmId,
         bool fallback = false)
@@ -3858,6 +4340,17 @@ public sealed class UnmaRuntime : IDisposable
 
     private bool EnsurePanelSlotsForAlarm(AlarmView view)
     {
+        if (string.Equals(
+                view?.Source,
+                "vanilla",
+                StringComparison.Ordinal) &&
+            IsSuppressedVanillaAlarm(
+                view,
+                GetDisabledVanillaOverrideIds()))
+        {
+            return false;
+        }
+
         var slot = PanelSlotProjection.CreateSlot(view);
         if (slot == null)
         {

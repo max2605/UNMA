@@ -2,6 +2,15 @@
 
 ## 0.8.0 – 2026-08-07
 
+- Bekannte Vanilla-Meldungstypen lassen sich im TÖNE-Tab global für UNMA
+  ein- und ausblenden. Ein Schalter für `NoRecipeSelected` gilt damit sofort
+  für alle Gebäudeinstanzen, beendet offene UNMA-Ereignisse sauber als KGQ
+  und unterdrückt neue Schlitze sowie Alarmtöne, ohne die Spielmeldung selbst
+  zu verändern.
+- Globale Abschaltungen bleiben über Neustarts erhalten. Feste Panelplätze
+  werden dabei nur ausgeblendet und kehren beim Wiedereinschalten in ihrer
+  bisherigen Reihenfolge zurück; bereits anstehende Spielmeldungen werden
+  gesammelt neu eingelesen.
 - Wird eine überwachte Entity tatsächlich zerstört oder ein Gebäude
   abgerissen, entfernt UNMA automatisch alle davon abhängigen eigenen Regeln,
   festen Meldeschlitze und aktiven Zustände. Sammelmeldungen werden dabei als
