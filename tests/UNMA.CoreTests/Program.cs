@@ -19,6 +19,7 @@ internal static class Program
         TestAlarmHistoryState();
         TestSystemAlarmSelection();
         TestSystemMetricMath();
+        TestPanelSlotProjection();
         TestConfigurationRoundTrip();
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
@@ -447,9 +448,232 @@ internal static class Program
                 -0.1d));
     }
 
+    private static void TestPanelSlotProjection()
+    {
+        var slots = new List<PanelSlotDefinition>
+        {
+            new()
+            {
+                AlarmId = "system:food",
+                DisplayName = "NAHRUNGSVERSORGUNG",
+                Source = "system",
+                Severity = AlarmSeverity.Warning,
+            },
+            new()
+            {
+                AlarmId = "system:workers",
+                DisplayName = "ARBEITERRESERVE",
+                Source = "system",
+                Severity = AlarmSeverity.Warning,
+            },
+            new()
+            {
+                AlarmId = "vanilla:NotEnoughWorkers:entity:17",
+                DisplayName = "NICHT GENUG ARBEITER",
+                Source = "vanilla",
+                Severity = AlarmSeverity.Critical,
+            },
+        };
+        var candidates = new List<AlarmView>
+        {
+            new()
+            {
+                Key = "vanilla:41",
+                SlotId = "vanilla:NotEnoughWorkers:entity:17",
+                OverrideId = "vanilla:NotEnoughWorkers",
+                Name = "Nicht genug Arbeiter",
+                Source = "vanilla",
+                Severity = AlarmSeverity.Critical,
+                Sequence = 41,
+            },
+            new()
+            {
+                Key = "system:workers",
+                SlotId = "system:workers",
+                Name = "ARBEITER FEHLEN",
+                Source = "system",
+                Severity = AlarmSeverity.Critical,
+                IsActive = true,
+                IsAcknowledged = true,
+                Sequence = 50,
+            },
+            new()
+            {
+                Key = "vanilla:42",
+                SlotId = "vanilla:NotEnoughWorkers:entity:17",
+                OverrideId = "vanilla:NotEnoughWorkers",
+                Name = "Nicht genug Arbeiter",
+                Detail = "NotEnoughWorkers · Kapitänsbüro II",
+                Source = "vanilla",
+                Severity = AlarmSeverity.Critical,
+                IsActive = true,
+                Sequence = 42,
+            },
+        };
+
+        var projected = PanelSlotProjection.Project(slots, candidates);
+        AreEqual(3, projected.Count);
+        AreEqual("system:food", projected[0].SlotId);
+        AreEqual("system:food", projected[0].Key);
+        AreEqual("NAHRUNGSVERSORGUNG", projected[0].Name);
+        AreEqual("system", projected[0].Source);
+        AreEqual(AlarmSeverity.Warning, projected[0].Severity);
+        IsFalse(projected[0].IsActive);
+        IsFalse(projected[0].IsMissingSource);
+        AreEqual("system:workers", projected[1].SlotId);
+        IsTrue(projected[1].IsActive);
+        IsTrue(projected[1].IsAcknowledged);
+        AreEqual(
+            "vanilla:NotEnoughWorkers:entity:17",
+            projected[2].SlotId);
+        AreEqual("vanilla:42", projected[2].Key);
+        IsTrue(projected[2].RequiresAcknowledgement);
+
+        candidates[2].IsActive = false;
+        candidates[2].IsGoneUnacknowledged = true;
+        var gone = PanelSlotProjection.Project(slots, candidates);
+        AreEqual("vanilla:42", gone[2].Key);
+        IsTrue(gone[2].IsGoneUnacknowledged);
+
+        candidates[2].IsGoneUnacknowledged = false;
+        var normal = PanelSlotProjection.Project(slots, candidates);
+        AreEqual(
+            "vanilla:NotEnoughWorkers:entity:17",
+            normal[2].Key);
+        AreEqual("NICHT GENUG ARBEITER", normal[2].Name);
+        IsFalse(normal[2].IsLatched);
+
+        var legacy = new AlarmView
+        {
+            Key = "vanilla:99",
+            OverrideId = "vanilla:NotEnoughWorkers",
+            OccurrenceId = "legacy-occurrence",
+            Source = "vanilla",
+        };
+        AreEqual(
+            "vanilla:NotEnoughWorkers",
+            PanelSlotProjection.StableAlarmId(legacy));
+        legacy.OverrideId = "";
+        AreEqual(
+            "legacy-occurrence",
+            PanelSlotProjection.StableAlarmId(legacy));
+        legacy.OccurrenceId = "";
+        AreEqual("vanilla:99", PanelSlotProjection.StableAlarmId(legacy));
+
+        var entity18 = PanelSlotProjection.CreateSlot(new AlarmView
+        {
+            Key = "vanilla:43",
+            SlotId = "vanilla:NotEnoughWorkers:entity:18",
+            OverrideId = "vanilla:NotEnoughWorkers",
+            Name = "Nicht genug Arbeiter",
+            Source = "vanilla",
+        });
+        AreEqual(
+            "vanilla:NotEnoughWorkers:entity:18",
+            entity18.AlarmId);
+        IsFalse(string.Equals(
+            entity18.AlarmId,
+            slots[2].AlarmId,
+            StringComparison.Ordinal));
+
+        var sameNameDifferentId = PanelSlotProjection.Project(
+            new[]
+            {
+                new PanelSlotDefinition
+                {
+                    AlarmId = "custom:a",
+                    DisplayName = "GLEICHER TEXT",
+                },
+                new PanelSlotDefinition
+                {
+                    AlarmId = "custom:b",
+                    DisplayName = "GLEICHER TEXT",
+                },
+            },
+            Array.Empty<AlarmView>());
+        AreEqual(2, sameNameDifferentId.Count);
+        AreEqual("custom:a", sameNameDifferentId[0].SlotId);
+        AreEqual("custom:b", sameNameDifferentId[1].SlotId);
+
+        var mixedSlot = new[]
+        {
+            new PanelSlotDefinition
+            {
+                AlarmId = "vanilla:mixed:entity:1",
+                DisplayName = "GEMISCHTER ZUSTAND",
+            },
+        };
+        var mixedCandidates = new[]
+        {
+            new AlarmView
+            {
+                Key = "vanilla:old-gone",
+                SlotId = "vanilla:mixed:entity:1",
+                Name = "ALTES KG",
+                IsGoneUnacknowledged = true,
+                Sequence = 100,
+            },
+            new AlarmView
+            {
+                Key = "vanilla:standing-ack",
+                SlotId = "vanilla:mixed:entity:1",
+                Name = "AKTUELL STEHEND",
+                IsActive = true,
+                IsAcknowledged = true,
+                Sequence = 101,
+            },
+        };
+        var mixed = PanelSlotProjection.Project(
+            mixedSlot,
+            mixedCandidates)[0];
+        IsTrue(mixed.IsActive);
+        IsFalse(mixed.IsGoneUnacknowledged);
+        IsFalse(mixed.IsAcknowledged);
+        AreEqual("AKTUELL STEHEND", mixed.Name);
+
+        mixedCandidates[0].IsGoneUnacknowledged = false;
+        mixed = PanelSlotProjection.Project(mixedSlot, mixedCandidates)[0];
+        IsTrue(mixed.IsActive);
+        IsTrue(mixed.IsAcknowledged);
+
+        mixedCandidates[0].IsActive = true;
+        mixedCandidates[0].Sequence = 102;
+        mixedCandidates[0].Name = "NEUESTES KOMMT";
+        mixed = PanelSlotProjection.Project(mixedSlot, mixedCandidates)[0];
+        IsTrue(mixed.IsActive);
+        IsFalse(mixed.IsAcknowledged);
+        AreEqual("NEUESTES KOMMT", mixed.Name);
+
+        var legacyOne = PanelSlotProjection.LegacyVanillaSlotId(
+            "vanilla:NotEnoughWorkers",
+            "NotEnoughWorkers · Büro II");
+        var legacyTwo = PanelSlotProjection.LegacyVanillaSlotId(
+            "vanilla:NotEnoughWorkers",
+            "NotEnoughWorkers · Büro III");
+        AreEqual(
+            legacyOne,
+            PanelSlotProjection.LegacyVanillaSlotId(
+                "vanilla:NotEnoughWorkers",
+                "NotEnoughWorkers · Büro II"));
+        IsFalse(string.Equals(legacyOne, legacyTwo, StringComparison.Ordinal));
+        IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
+            legacyOne,
+            "vanilla:NotEnoughWorkers"));
+    }
+
     private static void TestConfigurationRoundTrip()
     {
         var configuration = UnmaConfiguration.CreateDefault();
+        configuration.Panels[0].Slots.Add(new PanelSlotDefinition
+        {
+            AlarmId = "vanilla:LowFoodSupply",
+            DisplayName = "GERINGE LEBENSMITTELVERSORGUNG",
+            Detail = "LowFoodSupply",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Warning,
+            ActiveColor = "#ABCDEF",
+        });
+        configuration.Panels[0].ExcludedAlarmIds.Add("vanilla:Hidden");
         configuration.SoundOverrides.Add(new AlarmSoundOverride
         {
             AlarmId = "system:health",
@@ -510,6 +734,7 @@ internal static class Program
             SoundId = "horn",
             OverrideId = "vanilla:test",
             OccurrenceId = "vanilla:test",
+            SlotId = "vanilla:test:entity:17",
             OccurrencePriority = 210,
             Severity = AlarmSeverity.Critical,
             IsGoneUnacknowledged = true,
@@ -535,7 +760,7 @@ internal static class Program
         AreEqual(1, restored.SoundOverrides.Count);
         AreEqual("siren", restored.SoundOverrides[0].SoundId);
         IsTrue(restored.SoundOverrides[0].AutoAcknowledgeOnClear);
-        AreEqual(7, restored.SchemaVersion);
+        AreEqual(8, restored.SchemaVersion);
         AreEqual(
             ConditionValueMode.PercentOfReference,
             restored.Rules[0].Conditions[1].ValueMode);
@@ -568,6 +793,20 @@ internal static class Program
         AreEqual("vanilla:test", restoredMemory.OccurrenceId);
         AreEqual(210, restoredMemory.OccurrencePriority);
         AreEqual(73L, restoredMemory.Sequence);
+        AreEqual("vanilla:test:entity:17", restoredMemory.SlotId);
+        AreEqual(5, restored.Panels[0].Slots.Count);
+        AreEqual("system:health", restored.Panels[0].Slots[0].AlarmId);
+        AreEqual("system:food", restored.Panels[0].Slots[1].AlarmId);
+        AreEqual("system:workers", restored.Panels[0].Slots[2].AlarmId);
+        AreEqual(
+            "vanilla:LowFoodSupply",
+            restored.Panels[0].Slots[3].AlarmId);
+        AreEqual(
+            "rule:" + restored.Rules[0].Id,
+            restored.Panels[0].Slots[4].AlarmId);
+        AreEqual(
+            "vanilla:Hidden",
+            restored.Panels[0].ExcludedAlarmIds[0]);
     }
 
     private static void TestAlarmHistoryState()
@@ -624,7 +863,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(7, restored.SchemaVersion);
+        AreEqual(8, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -651,7 +890,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(7, oldConfiguration.SchemaVersion);
+        AreEqual(8, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
@@ -665,6 +904,113 @@ internal static class Program
         oldConfiguration.Normalize();
         AreEqual(7d, warning.Conditions[0].Threshold);
         IsTrue(health.Stages.Exists(stage => stage.Id == "critical"));
+
+        var schemaSeven = UnmaConfiguration.CreateDefault();
+        schemaSeven.SchemaVersion = 7;
+        foreach (var panel in schemaSeven.Panels)
+        {
+            panel.Slots.Clear();
+        }
+        schemaSeven.Rules.Add(new AlarmRuleDefinition
+        {
+            Id = "fixed-rule",
+            PanelId = "main",
+            Name = "FESTE EIGENE MELDUNG",
+        });
+        schemaSeven.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "vanilla:77",
+            OverrideId = "vanilla:NotEnoughWorkers",
+            Name = "NICHT GENUG ARBEITER",
+            Detail = "NotEnoughWorkers · Kapitänsbüro II",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Critical,
+            IsGoneUnacknowledged = true,
+            Sequence = 77,
+        });
+        schemaSeven.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "vanilla:78",
+            OverrideId = "vanilla:NotEnoughWorkers",
+            Name = "NICHT GENUG ARBEITER",
+            Detail = "NotEnoughWorkers · Kapitänsbüro III",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Critical,
+            IsGoneUnacknowledged = true,
+            Sequence = 78,
+        });
+        schemaSeven.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            Sequence = 79,
+            AlarmKey = "vanilla:79",
+            Message = "NICHT GENUG ARBEITER",
+            Detail = "NotEnoughWorkers · Kapitänsbüro IV",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Critical,
+            IsGone = true,
+            IsAcknowledged = true,
+        });
+        schemaSeven.Normalize();
+        AreEqual(8, schemaSeven.SchemaVersion);
+        AreEqual(7, schemaSeven.Panels[0].Slots.Count);
+        AreEqual("system:health", schemaSeven.Panels[0].Slots[0].AlarmId);
+        AreEqual("system:food", schemaSeven.Panels[0].Slots[1].AlarmId);
+        AreEqual("system:workers", schemaSeven.Panels[0].Slots[2].AlarmId);
+        AreEqual("rule:fixed-rule", schemaSeven.Panels[0].Slots[3].AlarmId);
+        IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
+            schemaSeven.Panels[0].Slots[4].AlarmId,
+            "vanilla:NotEnoughWorkers"));
+        IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
+            schemaSeven.Panels[0].Slots[5].AlarmId,
+            "vanilla:NotEnoughWorkers"));
+        IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
+            schemaSeven.Panels[0].Slots[6].AlarmId,
+            "vanilla:NotEnoughWorkers"));
+        IsFalse(string.Equals(
+            schemaSeven.AlarmMemories[0].SlotId,
+            schemaSeven.AlarmMemories[1].SlotId,
+            StringComparison.Ordinal));
+        schemaSeven.Panels[0].Slots.Add(new PanelSlotDefinition
+        {
+            AlarmId = "system:food",
+            DisplayName = "DUPLIKAT",
+        });
+        schemaSeven.Normalize();
+        AreEqual(7, schemaSeven.Panels[0].Slots.Count);
+        AreEqual("system:food", schemaSeven.Panels[0].Slots[1].AlarmId);
+        var fixedLastSlot = schemaSeven.Panels[0].Slots[6];
+        schemaSeven.Panels[0].Slots.RemoveAt(6);
+        schemaSeven.Panels[0].Slots.Insert(0, fixedLastSlot);
+        schemaSeven.Normalize();
+        AreEqual(fixedLastSlot.AlarmId, schemaSeven.Panels[0].Slots[0].AlarmId);
+        schemaSeven.Panels[0].ExcludedAlarmIds.Add("system:health");
+        schemaSeven.Panels[0].Slots.RemoveAll(slot =>
+            slot.AlarmId == "system:health");
+        schemaSeven.Normalize();
+        IsFalse(schemaSeven.Panels[0].Slots.Exists(slot =>
+            slot.AlarmId == "system:health"));
+        schemaSeven.Panels[0].ExcludedAlarmIds.Clear();
+        schemaSeven.Normalize();
+        AreEqual(
+            "system:health",
+            schemaSeven.Panels[0].Slots[^1].AlarmId);
+        var movingRule = schemaSeven.Rules.Find(rule =>
+            rule.Id == "fixed-rule");
+        movingRule.PanelId = "supply";
+        movingRule.Name = "VERSCHOBENE EIGENE MELDUNG";
+        movingRule.Conditions.Add(new ConditionDefinition());
+        schemaSeven.Normalize();
+        IsFalse(schemaSeven.Panels[0].Slots.Exists(slot =>
+            slot.AlarmId == "rule:fixed-rule"));
+        var movedSlot = schemaSeven.Panels[1].Slots.Find(slot =>
+            slot.AlarmId == "rule:fixed-rule");
+        IsTrue(movedSlot != null);
+        AreEqual("VERSCHOBENE EIGENE MELDUNG", movedSlot.DisplayName);
+        AreEqual("1 Bedingung(en)", movedSlot.Detail);
+        schemaSeven.Rules.Remove(movingRule);
+        schemaSeven.Normalize();
+        IsFalse(schemaSeven.Panels[1].Slots.Exists(slot =>
+            slot.AlarmId == "rule:fixed-rule"));
 
         var legacyJson =
             "{\"SchemaVersion\":4," +
@@ -680,7 +1026,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(7, legacy.SchemaVersion);
+        AreEqual(8, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -692,6 +1038,10 @@ internal static class Program
         IsTrue(legacy.SystemAlarms.TrueForAll(alarm =>
             !alarm.AutoAcknowledgeOnClear));
         AreEqual(0, legacy.AlarmMemories.Count);
+        IsTrue(legacy.Panels[0].Slots != null);
+        IsTrue(legacy.Panels[0].ExcludedAlarmIds != null);
+        AreEqual(1, legacy.Panels[0].Slots.Count);
+        AreEqual("rule:legacy", legacy.Panels[0].Slots[0].AlarmId);
 
         var versionFive = UnmaConfiguration.CreateDefault();
         versionFive.SchemaVersion = 5;
@@ -720,7 +1070,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(7, versionFive.SchemaVersion);
+        AreEqual(8, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",

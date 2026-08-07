@@ -70,6 +70,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_referenceMetricPickerScroll;
     private Vector2 m_soundOverrideScroll;
     private Vector2 m_systemAlarmScroll;
+    private IReadOnlyList<PanelSlotDefinition> m_panelSlotCandidates =
+        Array.Empty<PanelSlotDefinition>();
+    private float m_nextPanelSlotCandidateRefresh;
     private bool m_isOpen;
     private bool m_entityAlarmWindowOpen;
     private bool m_openEntityAlarmAfterInspection;
@@ -115,6 +118,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_editingRuleId = "";
     private string m_draftTargetPanelId = "";
     private string m_newPanelName = "NEUES PANEL";
+    private string m_panelSlotFilter = "";
     private string m_soundOverrideFilter = "";
     private SystemAlarmDefinition m_systemAlarmDraft;
     private readonly Dictionary<string, string> m_systemThresholdTexts =
@@ -475,7 +479,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(6f);
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "AKTIV " + m_runtime.ActiveCount +
+            "AKTIVE EREIGNISSE " + m_runtime.ActiveCount +
             "   ·   UNQUITTIERT " + m_runtime.UnacknowledgedCount,
             m_sectionStyle,
             GUILayout.Height(34f));
@@ -830,11 +834,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             panel.IncludeVanilla = GUILayout.Toggle(
                 panel.IncludeVanilla,
-                " Vanilla",
+                " Vanilla auto",
                 GUILayout.Width(100f));
             panel.IncludeSystem = GUILayout.Toggle(
                 panel.IncludeSystem,
-                " System",
+                " System auto",
                 GUILayout.Width(100f));
             if (GUILayout.Button(
                     "ÄNDERUNGEN SPEICHERN",
@@ -846,7 +850,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Filter", m_labelStyle, GUILayout.Width(90f));
+            GUILayout.Label("Auto-Filter", m_labelStyle, GUILayout.Width(90f));
             panel.NotificationFilter = GUILayout.TextField(
                 panel.NotificationFilter ?? "",
                 240,
@@ -872,6 +876,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             GUI.enabled = true;
             GUILayout.EndHorizontal();
+
+            DrawPanelSlots(panel);
         }
 
         GUILayout.Space(6f);
@@ -894,6 +900,193 @@ public sealed class UnmaOverlayController : MonoBehaviour
             AddPanel();
         }
         GUILayout.EndHorizontal();
+    }
+
+    private void DrawPanelSlots(PanelDefinition panel)
+    {
+        panel.Slots ??= new List<PanelSlotDefinition>();
+        GUILayout.Space(10f);
+        GUILayout.Label(
+            "FESTE MELDESCHLITZE   " + panel.Slots.Count,
+            m_sectionStyle);
+        GUILayout.Label(
+            "Jede Alarm-ID belegt genau einen dauerhaften Platz. Zustand und Schwere verschieben keinen Schlitz. 'Vanilla auto' und 'System auto' hängen passende Arten einmalig hinten an. ENTFERNEN sperrt den Auto-Schlitz dauerhaft; + SCHLITZ gibt ihn wieder frei.",
+            m_smallLabelStyle);
+
+        for (var index = 0; index < panel.Slots.Count; index++)
+        {
+            var slot = panel.Slots[index];
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                (index + 1).ToString("00", CultureInfo.InvariantCulture),
+                m_smallLabelStyle,
+                GUILayout.Width(28f));
+            GUILayout.Label(
+                (slot.DisplayName ?? "MELDUNG") + "   ·   " +
+                SlotSourceLabel(slot.Source),
+                m_labelStyle);
+            GUI.enabled = index > 0;
+            if (GUILayout.Button("↑", m_buttonStyle, GUILayout.Width(34f)))
+            {
+                panel.Slots.RemoveAt(index);
+                panel.Slots.Insert(index - 1, slot);
+                SaveConfiguration("Schlitz nach oben verschoben.");
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+                return;
+            }
+            GUI.enabled = index < panel.Slots.Count - 1;
+            if (GUILayout.Button("↓", m_buttonStyle, GUILayout.Width(34f)))
+            {
+                panel.Slots.RemoveAt(index);
+                panel.Slots.Insert(index + 1, slot);
+                SaveConfiguration("Schlitz nach unten verschoben.");
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+                return;
+            }
+            var isCustom = string.Equals(
+                slot.Source,
+                "custom",
+                StringComparison.Ordinal);
+            GUI.enabled = !isCustom;
+            if (GUILayout.Button(
+                    isCustom ? "ÜBER REGEL" : "ENTFERNEN",
+                    m_buttonStyle,
+                    GUILayout.Width(105f)))
+            {
+                panel.ExcludedAlarmIds ??= new List<string>();
+                if (!panel.ExcludedAlarmIds.Contains(
+                        slot.AlarmId,
+                        StringComparer.Ordinal))
+                {
+                    panel.ExcludedAlarmIds.Add(slot.AlarmId);
+                }
+                panel.Slots.RemoveAt(index);
+                SaveConfiguration("Fester Meldeschlitz entfernt.");
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+                return;
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+        }
+
+        GUILayout.Space(6f);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            "Bekannte Meldung hinzufügen",
+            m_labelStyle,
+            GUILayout.Width(205f));
+        m_panelSlotFilter = GUILayout.TextField(
+            m_panelSlotFilter,
+            80,
+            m_textFieldStyle);
+        GUILayout.EndHorizontal();
+
+        var installed = new HashSet<string>(
+            panel.Slots.Select(slot => slot.AlarmId),
+            StringComparer.Ordinal);
+        if (Time.realtimeSinceStartup >= m_nextPanelSlotCandidateRefresh)
+        {
+            m_panelSlotCandidates = m_runtime.GetPanelSlotCandidates();
+            m_nextPanelSlotCandidateRefresh =
+                Time.realtimeSinceStartup + 1f;
+        }
+        var available = m_panelSlotCandidates
+            .Where(slot =>
+                !installed.Contains(slot.AlarmId) &&
+                !string.Equals(
+                    slot.Source,
+                    "custom",
+                    StringComparison.Ordinal) &&
+                (string.IsNullOrWhiteSpace(m_panelSlotFilter) ||
+                 ((slot.DisplayName ?? "") + " " +
+                  (slot.Detail ?? "") + " " + slot.AlarmId)
+                 .IndexOf(
+                     m_panelSlotFilter,
+                     StringComparison.OrdinalIgnoreCase) >= 0))
+            .Take(40)
+            .ToArray();
+        foreach (var slot in available)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                (slot.DisplayName ?? "MELDUNG") + "   ·   " +
+                SlotSourceLabel(slot.Source),
+                m_smallLabelStyle);
+            if (GUILayout.Button(
+                    "+ SCHLITZ",
+                    m_primaryButtonStyle,
+                    GUILayout.Width(105f)))
+            {
+                panel.ExcludedAlarmIds ??= new List<string>();
+                var exclusionIds = new HashSet<string>(
+                    StringComparer.Ordinal)
+                {
+                    slot.AlarmId,
+                };
+                var vanillaOverrideId = VanillaOverrideIdForSlot(slot);
+                if (!string.IsNullOrWhiteSpace(vanillaOverrideId))
+                {
+                    exclusionIds.Add(vanillaOverrideId);
+                    exclusionIds.Add(
+                        PanelSlotProjection.LegacyVanillaSlotId(
+                            vanillaOverrideId,
+                            slot.Detail));
+                }
+                panel.ExcludedAlarmIds.RemoveAll(
+                    exclusionIds.Contains);
+                panel.Slots.Add(PanelSlotProjection.CloneSlot(slot));
+                SaveConfiguration("Fester Meldeschlitz angehängt.");
+                GUILayout.EndHorizontal();
+                return;
+            }
+            GUILayout.EndHorizontal();
+        }
+        if (available.Length == 0)
+        {
+            GUILayout.Label(
+                "Keine weitere bekannte Vanilla- oder Systemmeldung passend zur Suche.",
+                m_smallLabelStyle);
+        }
+    }
+
+    private static string SlotSourceLabel(string source)
+    {
+        return source switch
+        {
+            "vanilla" => "VANILLA",
+            "system" => "SYSTEM",
+            "custom" => "EIGENE REGEL",
+            _ => "MELDUNG",
+        };
+    }
+
+    private static string VanillaOverrideIdForSlot(
+        PanelSlotDefinition slot)
+    {
+        if (!string.Equals(
+                slot.Source,
+                "vanilla",
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(slot.AlarmId))
+        {
+            return "";
+        }
+        var entityMarker = slot.AlarmId.IndexOf(
+            ":entity:",
+            StringComparison.Ordinal);
+        if (entityMarker > 0)
+        {
+            return slot.AlarmId.Substring(0, entityMarker);
+        }
+        var legacyMarker = slot.AlarmId.IndexOf(
+            ":legacy:",
+            StringComparison.Ordinal);
+        return legacyMarker > 0
+            ? slot.AlarmId.Substring(0, legacyMarker)
+            : slot.AlarmId;
     }
 
     private void DrawDefinedRules()
@@ -2353,7 +2546,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             detached.Rect.height - 50f));
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "AKTIV " + m_runtime.ActiveCount +
+            "AKTIVE EREIGNISSE " + m_runtime.ActiveCount +
             " · UNQUITTIERT " + m_runtime.UnacknowledgedCount,
             m_smallLabelStyle);
         if (GUILayout.Button(

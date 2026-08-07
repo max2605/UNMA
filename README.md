@@ -13,6 +13,10 @@ Zielversion: Captain of Industry **0.8.6c**.
 
 - Spiegelung aller aktiven Vanilla-Benachrichtigungen über den
   `INotificationsManager`.
+- Dauerhaft feste Meldeschlitze je Panel: Eine stabile Alarm-ID behält ihren
+  Platz auch zwischen `NORMAL`, `KOMMT`, `STEHT` und `GEGANGEN`. Wiederholte
+  Vanilla-Ereignisse derselben Meldungsart und Entität erscheinen genau einmal;
+  einzelne K/G/Q-Ereignisse bleiben im Verlauf vollständig erhalten.
 - Drei automatische Kernüberwachungen:
   - Gesundheit: `10` ist neutral; Krankheit und Pollution/Müll werden getrennt
     ausgewertet und mit der prozentualen Arbeitsreserve verknüpft;
@@ -51,7 +55,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   und vollständig ändern.
 - Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
 - Beliebig viele Panels mit klar getrennter Auswahl, Bearbeitung und Neuanlage,
-  Spaltenzahl, Vanilla-/Systemfilter und kommagetrennten Suchfiltern.
+  Spaltenzahl, festen hoch/runter sortierbaren Schlitzen, gezieltem Hinzufügen
+  bekannter Meldungen sowie Vanilla-/System-Automatik und kommagetrennten
+  Suchfiltern. Neu entdeckte passende Meldungsarten werden einmalig hinten
+  angehängt und verschieben vorhandene Plätze nicht.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`

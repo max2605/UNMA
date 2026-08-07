@@ -186,7 +186,9 @@ public sealed class UnmaRuntime : IDisposable
             state.View.SoundId = memory.SoundId;
             state.View.OverrideId = memory.OverrideId;
             state.View.OccurrenceId = memory.OccurrenceId;
+            state.View.SlotId = memory.SlotId;
             state.View.OccurrencePriority = memory.OccurrencePriority;
+            state.View.Sequence = memory.Sequence;
             state.View.Severity = memory.Severity;
             state.View.IsActive = memory.IsActive;
             state.View.IsAcknowledged = memory.IsAcknowledged;
@@ -301,23 +303,27 @@ public sealed class UnmaRuntime : IDisposable
             return Array.Empty<AlarmView>();
         }
 
-        var filters = SplitFilter(panel.NotificationFilter);
-        lock (m_gate)
+        PanelSlotDefinition[] slots;
+        lock (m_configurationGate)
         {
-            return m_alarms.Values
-                .Where(state => IsVisibleOnPanel(
-                    state.View,
-                    panel,
-                    filters))
-                .OrderByDescending(state => state.View.IsLatched)
-                .ThenByDescending(state =>
-                    state.View.RequiresAcknowledgement)
-                .ThenByDescending(state => state.View.IsActive)
-                .ThenByDescending(state => state.View.Severity)
-                .ThenByDescending(state => state.Sequence)
-                .Select(state => Clone(state.View))
+            slots = (panel.Slots ?? new List<PanelSlotDefinition>())
+                .Select(PanelSlotProjection.CloneSlot)
+                .Where(slot => slot != null)
                 .ToArray();
         }
+        AlarmView[] candidates;
+        var slotIds = new HashSet<string>(
+            slots.Select(slot => slot.AlarmId),
+            StringComparer.Ordinal);
+        lock (m_gate)
+        {
+            candidates = m_alarms.Values
+                .Where(state => slotIds.Contains(
+                    PanelSlotProjection.StableAlarmId(state.View)))
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+        return PanelSlotProjection.Project(slots, candidates);
     }
 
     public AlarmView GetAudibleAlarm()
@@ -409,6 +415,18 @@ public sealed class UnmaRuntime : IDisposable
 
     public bool SaveConfiguration()
     {
+        AlarmView[] knownAlarms;
+        lock (m_gate)
+        {
+            knownAlarms = m_alarms.Values
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+        foreach (var alarm in knownAlarms)
+        {
+            EnsurePanelSlotsForAlarm(alarm);
+        }
+
         lock (m_persistenceGate)
         {
             CapturePersistentAlarmState(
@@ -454,6 +472,7 @@ public sealed class UnmaRuntime : IDisposable
                     SoundId = state.View.SoundId,
                     OverrideId = state.View.OverrideId,
                     OccurrenceId = state.View.OccurrenceId,
+                    SlotId = state.View.SlotId,
                     OccurrencePriority =
                         state.View.OccurrencePriority,
                     Severity = state.View.Severity,
@@ -933,6 +952,80 @@ public sealed class UnmaRuntime : IDisposable
         return false;
     }
 
+    public IReadOnlyList<PanelSlotDefinition> GetPanelSlotCandidates()
+    {
+        var candidates = new Dictionary<string, PanelSlotDefinition>(
+            StringComparer.Ordinal);
+        lock (m_configurationGate)
+        {
+            foreach (var alarm in Configuration.SystemAlarms)
+            {
+                var stage = alarm.Stages
+                    .Where(item => item.Enabled)
+                    .OrderBy(item => item.Priority)
+                    .FirstOrDefault();
+                candidates[alarm.Id] = new PanelSlotDefinition
+                {
+                    AlarmId = alarm.Id,
+                    DisplayName = alarm.DisplayName,
+                    Detail = "Systemmeldung",
+                    Source = "system",
+                    Severity = stage?.Severity ?? AlarmSeverity.Warning,
+                    ActiveColor = stage?.ActiveColor ?? "auto",
+                };
+            }
+            foreach (var rule in Configuration.Rules)
+            {
+                var alarmId = "rule:" + rule.Id;
+                candidates[alarmId] = new PanelSlotDefinition
+                {
+                    AlarmId = alarmId,
+                    DisplayName = rule.Name,
+                    Detail = rule.Conditions.Count + " Bedingung(en)",
+                    Source = "custom",
+                    Severity = rule.Severity,
+                    ActiveColor = rule.ActiveColor,
+                };
+            }
+        }
+
+        AlarmView[] runtimeViews;
+        lock (m_gate)
+        {
+            runtimeViews = m_alarms.Values
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+        foreach (var group in runtimeViews.GroupBy(
+                     PanelSlotProjection.StableAlarmId,
+                     StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(group.Key))
+            {
+                continue;
+            }
+            var representative =
+                PanelSlotProjection.SelectRepresentative(group);
+            var slot = PanelSlotProjection.CreateSlot(representative);
+            if (slot != null &&
+                (!candidates.ContainsKey(group.Key) ||
+                 string.Equals(
+                     slot.Source,
+                     "vanilla",
+                     StringComparison.Ordinal)))
+            {
+                candidates[group.Key] = slot;
+            }
+        }
+
+        return candidates.Values
+            .OrderBy(slot => slot.Source)
+            .ThenBy(slot => slot.DisplayName)
+            .ThenBy(slot => slot.AlarmId)
+            .Select(PanelSlotProjection.CloneSlot)
+            .ToArray();
+    }
+
     public IReadOnlyList<AlarmView> GetSoundOverrideCandidates()
     {
         lock (m_gate)
@@ -1311,7 +1404,8 @@ public sealed class UnmaRuntime : IDisposable
                 autoAcknowledgeOnClear:
                     alarm.AutoAcknowledgeOnClear,
                 occurrenceId: stage.Id,
-                occurrencePriority: stage.Priority);
+                occurrencePriority: stage.Priority,
+                slotId: alarm.Id);
         }
     }
 
@@ -1702,22 +1796,29 @@ public sealed class UnmaRuntime : IDisposable
             lastValue,
             autoAcknowledgeOnClear:
                 rule.AutoAcknowledgeOnClear,
-            occurrenceId: rule.Id);
+            occurrenceId: rule.Id,
+            slotId: "rule:" + rule.Id);
     }
 
     private void OnNotificationAdded(INotification notification)
     {
         var id = notification.Proto.Id.Value;
         var overrideId = "vanilla:" + id;
+        var slotId = overrideId;
         var message = notification.Message.Value;
         var severity = ClassifyNotification(notification);
         var detail = id;
         if (notification.Object.HasValue)
         {
-            var objectTitle = notification.Object.Value.DefaultTitle.Value;
+            var notificationObject = notification.Object.Value;
+            var objectTitle = notificationObject.DefaultTitle.Value;
             if (!string.IsNullOrWhiteSpace(objectTitle))
             {
                 detail += " · " + objectTitle;
+            }
+            if (notificationObject is IEntity entity)
+            {
+                slotId += ":entity:" + entity.Id.Value;
             }
         }
 
@@ -1736,7 +1837,8 @@ public sealed class UnmaRuntime : IDisposable
             notification.IsSuppressed,
             overrideId,
             ResolveAutoAcknowledgeOnClear(overrideId),
-            overrideId);
+            overrideId,
+            slotId: slotId);
     }
 
     private void OnNotificationRemoved(INotification notification)
@@ -1817,9 +1919,11 @@ public sealed class UnmaRuntime : IDisposable
         string overrideId = "",
         bool autoAcknowledgeOnClear = false,
         string occurrenceId = "",
-        int occurrencePriority = 0)
+        int occurrencePriority = 0,
+        string slotId = "")
     {
         var shouldPersist = false;
+        AlarmView slotCandidate;
         lock (m_gate)
         {
             var historyChanged = false;
@@ -1844,6 +1948,7 @@ public sealed class UnmaRuntime : IDisposable
             var previousSoundId = state.View.SoundId;
             var previousOverrideId = state.View.OverrideId;
             var previousOccurrenceId = state.View.OccurrenceId;
+            var previousSlotId = state.View.SlotId;
             var previousOccurrencePriority =
                 state.View.OccurrencePriority;
             state.View.Name = name ?? "MELDUNG";
@@ -1881,6 +1986,12 @@ public sealed class UnmaRuntime : IDisposable
                 : soundId;
             state.View.OverrideId = overrideId ?? "";
             state.View.OccurrenceId = occurrenceId;
+            slotId = string.IsNullOrWhiteSpace(slotId)
+                ? !string.IsNullOrWhiteSpace(state.View.OverrideId)
+                    ? state.View.OverrideId
+                    : key
+                : slotId;
+            state.View.SlotId = slotId;
             state.View.OccurrencePriority = occurrencePriority;
             state.View.ActiveColor = string.IsNullOrWhiteSpace(activeColor)
                 ? ColorFor(severity)
@@ -1896,6 +2007,7 @@ public sealed class UnmaRuntime : IDisposable
                         wasAcknowledged);
                 }
                 state.Sequence = ++m_sequence;
+                state.View.Sequence = state.Sequence;
                 m_alarmHistory.Add(CreateHistoryFromState(state));
                 historyChanged = true;
             }
@@ -1910,6 +2022,40 @@ public sealed class UnmaRuntime : IDisposable
                     state,
                     !state.View.IsActive,
                     occurrenceAcknowledged);
+            }
+            state.View.Sequence = state.Sequence;
+
+            var migratedLegacySlots = false;
+            if (string.Equals(source, "vanilla", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(state.View.OverrideId) &&
+                !string.Equals(
+                    state.View.SlotId,
+                    state.View.OverrideId,
+                    StringComparison.Ordinal))
+            {
+                foreach (var other in m_alarms.Values.Where(other =>
+                             !ReferenceEquals(other, state) &&
+                             string.Equals(
+                                 other.View.OverrideId,
+                                 state.View.OverrideId,
+                                 StringComparison.Ordinal) &&
+                             string.Equals(
+                                 other.View.Detail,
+                                 state.View.Detail,
+                                 StringComparison.Ordinal) &&
+                             (string.IsNullOrWhiteSpace(other.View.SlotId) ||
+                              string.Equals(
+                                  other.View.SlotId,
+                                  state.View.OverrideId,
+                                  StringComparison.Ordinal) ||
+                              PanelSlotProjection.IsLegacyVanillaSlotId(
+                                  other.View.SlotId,
+                                  state.View.OverrideId))))
+                {
+                    other.View.SlotId = state.View.SlotId;
+                    other.View.Sequence = other.Sequence;
+                    migratedLegacySlots = true;
+                }
             }
 
             if (historyChanged)
@@ -1950,11 +2096,18 @@ public sealed class UnmaRuntime : IDisposable
                      previousOccurrenceId,
                      state.View.OccurrenceId,
                      StringComparison.Ordinal) ||
+                 !string.Equals(
+                     previousSlotId,
+                     state.View.SlotId,
+                     StringComparison.Ordinal) ||
                  previousOccurrencePriority !=
                  state.View.OccurrencePriority ||
+                 migratedLegacySlots ||
                  historyChanged);
+            slotCandidate = Clone(state.View, state.Sequence);
         }
-        if (shouldPersist)
+        var panelSlotsChanged = EnsurePanelSlotsForAlarm(slotCandidate);
+        if (shouldPersist || panelSlotsChanged)
         {
             PersistAlarmState();
         }
@@ -2219,6 +2372,173 @@ public sealed class UnmaRuntime : IDisposable
             .ToArray();
     }
 
+    private bool EnsurePanelSlotsForAlarm(AlarmView view)
+    {
+        var slot = PanelSlotProjection.CreateSlot(view);
+        if (slot == null)
+        {
+            return false;
+        }
+
+        var changed = false;
+        lock (m_configurationGate)
+        {
+            foreach (var panel in Configuration.Panels)
+            {
+                if (!IsVisibleOnPanel(
+                        view,
+                        panel,
+                        SplitFilter(panel.NotificationFilter)))
+                {
+                    continue;
+                }
+                panel.Slots ??= new List<PanelSlotDefinition>();
+                panel.ExcludedAlarmIds ??= new List<string>();
+                var legacyAlarmId = string.Equals(
+                        view.Source,
+                        "vanilla",
+                        StringComparison.Ordinal)
+                    ? PanelSlotProjection.LegacyVanillaSlotId(
+                        view.OverrideId,
+                        view.Detail)
+                    : "";
+                if (panel.ExcludedAlarmIds.Contains(
+                        slot.AlarmId,
+                        StringComparer.Ordinal) ||
+                    !string.IsNullOrWhiteSpace(view.OverrideId) &&
+                    panel.ExcludedAlarmIds.Contains(
+                        view.OverrideId,
+                        StringComparer.Ordinal) ||
+                    !string.IsNullOrWhiteSpace(legacyAlarmId) &&
+                    panel.ExcludedAlarmIds.Contains(
+                        legacyAlarmId,
+                        StringComparer.Ordinal))
+                {
+                    continue;
+                }
+                var existing = panel.Slots.Find(candidate => string.Equals(
+                    candidate.AlarmId,
+                    slot.AlarmId,
+                    StringComparison.Ordinal));
+
+                if (existing == null &&
+                    string.Equals(
+                        view.Source,
+                        "vanilla",
+                        StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(view.OverrideId) &&
+                    !string.Equals(
+                        slot.AlarmId,
+                        view.OverrideId,
+                        StringComparison.Ordinal))
+                {
+                    existing = panel.Slots.Find(candidate =>
+                        string.Equals(
+                            candidate.AlarmId,
+                            legacyAlarmId,
+                            StringComparison.Ordinal) ||
+                        string.Equals(
+                            candidate.AlarmId,
+                            view.OverrideId,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            candidate.Detail,
+                            view.Detail,
+                            StringComparison.Ordinal));
+                    if (existing != null)
+                    {
+                        existing.AlarmId = slot.AlarmId;
+                        changed = true;
+                    }
+                }
+
+                if (existing != null &&
+                    string.Equals(
+                        view.Source,
+                        "vanilla",
+                        StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(view.OverrideId))
+                {
+                    changed |= panel.Slots.RemoveAll(candidate =>
+                        !ReferenceEquals(candidate, existing) &&
+                        (string.Equals(
+                             candidate.AlarmId,
+                             legacyAlarmId,
+                             StringComparison.Ordinal) ||
+                         string.Equals(
+                             candidate.AlarmId,
+                             view.OverrideId,
+                             StringComparison.Ordinal) &&
+                         string.Equals(
+                             candidate.Detail,
+                             view.Detail,
+                             StringComparison.Ordinal))) > 0;
+                }
+
+                if (existing == null)
+                {
+                    panel.Slots.Add(PanelSlotProjection.CloneSlot(slot));
+                    changed = true;
+                    continue;
+                }
+
+                if (string.Equals(
+                        view.Source,
+                        "vanilla",
+                        StringComparison.Ordinal))
+                {
+                    changed |= UpdatePanelSlotMetadata(existing, slot);
+                }
+            }
+        }
+        return changed;
+    }
+
+    private static bool UpdatePanelSlotMetadata(
+        PanelSlotDefinition target,
+        PanelSlotDefinition source)
+    {
+        var changed = false;
+        if (!string.Equals(
+                target.DisplayName,
+                source.DisplayName,
+                StringComparison.Ordinal))
+        {
+            target.DisplayName = source.DisplayName;
+            changed = true;
+        }
+        if (!string.Equals(
+                target.Detail,
+                source.Detail,
+                StringComparison.Ordinal))
+        {
+            target.Detail = source.Detail;
+            changed = true;
+        }
+        if (!string.Equals(
+                target.Source,
+                source.Source,
+                StringComparison.Ordinal))
+        {
+            target.Source = source.Source;
+            changed = true;
+        }
+        if (target.Severity != source.Severity)
+        {
+            target.Severity = source.Severity;
+            changed = true;
+        }
+        if (!string.Equals(
+                target.ActiveColor,
+                source.ActiveColor,
+                StringComparison.Ordinal))
+        {
+            target.ActiveColor = source.ActiveColor;
+            changed = true;
+        }
+        return changed;
+    }
+
     private static bool IsVisibleOnPanel(
         AlarmView view,
         PanelDefinition panel,
@@ -2250,7 +2570,7 @@ public sealed class UnmaRuntime : IDisposable
             StringComparison.OrdinalIgnoreCase) >= 0);
     }
 
-    private static AlarmView Clone(AlarmView source)
+    private static AlarmView Clone(AlarmView source, long sequence = 0)
     {
         return new AlarmView
         {
@@ -2263,7 +2583,9 @@ public sealed class UnmaRuntime : IDisposable
             SoundId = source.SoundId,
             OverrideId = source.OverrideId,
             OccurrenceId = source.OccurrenceId,
+            SlotId = source.SlotId,
             OccurrencePriority = source.OccurrencePriority,
+            Sequence = sequence > 0 ? sequence : source.Sequence,
             Severity = source.Severity,
             IsActive = source.IsActive,
             IsAcknowledged = source.IsAcknowledged,

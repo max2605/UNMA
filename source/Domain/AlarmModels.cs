@@ -102,6 +102,18 @@ public sealed class AlarmRuleDefinition
 }
 
 [DataContract]
+public sealed class PanelSlotDefinition
+{
+    [DataMember(Order = 1)] public string AlarmId = "";
+    [DataMember(Order = 2)] public string DisplayName = "MELDUNG";
+    [DataMember(Order = 3)] public string Detail = "";
+    [DataMember(Order = 4)] public string Source = "";
+    [DataMember(Order = 5)] public AlarmSeverity Severity =
+        AlarmSeverity.Warning;
+    [DataMember(Order = 6)] public string ActiveColor = "#F0C541";
+}
+
+[DataContract]
 public sealed class PanelDefinition
 {
     [DataMember(Order = 1)] public string Id = Guid.NewGuid().ToString("N");
@@ -110,6 +122,8 @@ public sealed class PanelDefinition
     [DataMember(Order = 4)] public bool IncludeVanilla = true;
     [DataMember(Order = 5)] public bool IncludeSystem = true;
     [DataMember(Order = 6)] public string NotificationFilter = "";
+    [DataMember(Order = 7)] public List<PanelSlotDefinition> Slots = new();
+    [DataMember(Order = 8)] public List<string> ExcludedAlarmIds = new();
 }
 
 [DataContract]
@@ -140,6 +154,7 @@ public sealed class AlarmMemoryDefinition
     [DataMember(Order = 15)] public long Sequence;
     [DataMember(Order = 16)] public string OccurrenceId = "";
     [DataMember(Order = 17)] public int OccurrencePriority;
+    [DataMember(Order = 18)] public string SlotId = "";
 }
 
 [DataContract]
@@ -175,7 +190,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 7;
+    [DataMember(Order = 1)] public int SchemaVersion = 8;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -217,6 +232,7 @@ public sealed class UnmaConfiguration
             NotificationFilter = "food,nahrung,worker,arbeiter,health,gesund,maintenance,wartung,power,strom",
         });
         config.SystemAlarms.AddRange(CreateDefaultSystemAlarms());
+        config.SeedPanelSlots(includeMemories: false);
         return config;
     }
 
@@ -381,6 +397,14 @@ public sealed class UnmaConfiguration
                 : panel.Name.Trim();
             panel.Columns = Math.Max(1, Math.Min(8, panel.Columns));
             panel.NotificationFilter ??= "";
+            panel.Slots ??= new List<PanelSlotDefinition>();
+            panel.ExcludedAlarmIds ??= new List<string>();
+            panel.ExcludedAlarmIds = panel.ExcludedAlarmIds
+                .Where(alarmId => !string.IsNullOrWhiteSpace(alarmId))
+                .Select(alarmId => alarmId.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            NormalizePanelSlots(panel.Slots);
         }
 
         foreach (var rule in Rules)
@@ -443,6 +467,7 @@ public sealed class UnmaConfiguration
                 : memory.SoundId;
             memory.OverrideId ??= "";
             memory.OccurrenceId ??= "";
+            memory.SlotId ??= "";
             if (memory.IsActive)
             {
                 memory.IsGoneUnacknowledged = false;
@@ -474,11 +499,344 @@ public sealed class UnmaConfiguration
         }
 
         MergeDefaultSystemAlarms();
+        SynchronizeAutomaticSystemSlots();
         if (loadedSchemaVersion < 4)
         {
             MigrateSystemSoundOverrides();
         }
-        SchemaVersion = Math.Max(SchemaVersion, 7);
+        if (loadedSchemaVersion < 8)
+        {
+            SeedPanelSlots(includeMemories: true);
+        }
+        SynchronizeRuleSlots();
+        SchemaVersion = Math.Max(SchemaVersion, 8);
+    }
+
+    private static void NormalizePanelSlots(
+        List<PanelSlotDefinition> slots)
+    {
+        slots.RemoveAll(slot =>
+            slot == null || string.IsNullOrWhiteSpace(slot.AlarmId));
+        var alarmIds = new HashSet<string>(StringComparer.Ordinal);
+        slots.RemoveAll(slot => !alarmIds.Add(slot.AlarmId.Trim()));
+        foreach (var slot in slots)
+        {
+            slot.AlarmId = slot.AlarmId.Trim();
+            slot.DisplayName = string.IsNullOrWhiteSpace(slot.DisplayName)
+                ? "MELDUNG"
+                : slot.DisplayName.Trim();
+            slot.Detail ??= "";
+            slot.Source ??= "";
+            slot.ActiveColor ??= "#F0C541";
+        }
+    }
+
+    private void SeedPanelSlots(bool includeMemories)
+    {
+        foreach (var panel in Panels)
+        {
+            panel.Slots ??= new List<PanelSlotDefinition>();
+            if (panel.IncludeSystem)
+            {
+                foreach (var alarm in SystemAlarms.Where(alarm =>
+                             MatchesPanelFilter(
+                                 panel,
+                                 alarm.DisplayName,
+                                 alarm.Id)))
+                {
+                    AddPanelSlotIfMissing(
+                        panel,
+                        CreateSystemPanelSlot(alarm));
+                }
+            }
+
+            foreach (var rule in Rules.Where(rule => string.Equals(
+                         rule.PanelId,
+                         panel.Id,
+                         StringComparison.Ordinal)))
+            {
+                AddPanelSlotIfMissing(panel, CreateRulePanelSlot(rule));
+            }
+
+            if (!includeMemories)
+            {
+                continue;
+            }
+            foreach (var memory in AlarmMemories.Where(memory =>
+                         IsMemoryEligibleForPanel(memory, panel)))
+            {
+                if (string.Equals(
+                        memory.Source,
+                        "vanilla",
+                        StringComparison.Ordinal) &&
+                    string.IsNullOrWhiteSpace(memory.SlotId) &&
+                    !string.IsNullOrWhiteSpace(memory.OverrideId))
+                {
+                    memory.SlotId = PanelSlotProjection.LegacyVanillaSlotId(
+                        memory.OverrideId,
+                        memory.Detail);
+                }
+                var view = new AlarmView
+                {
+                    Key = memory.Key,
+                    Name = memory.Name,
+                    Detail = memory.Detail,
+                    Source = memory.Source,
+                    PanelId = memory.PanelId,
+                    ActiveColor = memory.ActiveColor,
+                    OverrideId = memory.OverrideId,
+                    OccurrenceId = memory.OccurrenceId,
+                    SlotId = memory.SlotId,
+                    Severity = memory.Severity,
+                };
+                var slot = PanelSlotProjection.CreateSlot(view);
+                if (slot != null)
+                {
+                    AddPanelSlotIfMissing(panel, slot);
+                }
+            }
+            foreach (var history in AlarmHistory.Where(history =>
+                         IsHistoryEligibleForPanel(history, panel)))
+            {
+                var prototypeId = ExtractVanillaPrototypeId(history.Detail);
+                if (string.IsNullOrWhiteSpace(prototypeId))
+                {
+                    continue;
+                }
+                var overrideId = "vanilla:" + prototypeId;
+                var view = new AlarmView
+                {
+                    Key = history.AlarmKey,
+                    Name = history.Message,
+                    Detail = history.Detail,
+                    Source = history.Source,
+                    PanelId = history.PanelId,
+                    ActiveColor = ColorForSeverity(history.Severity),
+                    OverrideId = overrideId,
+                    SlotId = PanelSlotProjection.LegacyVanillaSlotId(
+                        overrideId,
+                        history.Detail),
+                    Severity = history.Severity,
+                };
+                AddPanelSlotIfMissing(
+                    panel,
+                    PanelSlotProjection.CreateSlot(view));
+            }
+            NormalizePanelSlots(panel.Slots);
+        }
+    }
+
+    private void SynchronizeAutomaticSystemSlots()
+    {
+        foreach (var panel in Panels.Where(panel => panel.IncludeSystem))
+        {
+            foreach (var alarm in SystemAlarms.Where(alarm =>
+                         MatchesPanelFilter(
+                             panel,
+                             alarm.DisplayName,
+                             alarm.Id)))
+            {
+                AddPanelSlotIfMissing(
+                    panel,
+                    CreateSystemPanelSlot(alarm));
+            }
+        }
+    }
+
+    private void SynchronizeRuleSlots()
+    {
+        var rulesById = new Dictionary<string, AlarmRuleDefinition>(
+            StringComparer.Ordinal);
+        foreach (var rule in Rules)
+        {
+            rulesById["rule:" + rule.Id] = rule;
+        }
+        foreach (var panel in Panels)
+        {
+            panel.Slots.RemoveAll(slot =>
+                string.Equals(
+                    slot.Source,
+                    "custom",
+                    StringComparison.Ordinal) &&
+                (!rulesById.TryGetValue(slot.AlarmId, out var rule) ||
+                 !string.Equals(
+                     rule.PanelId,
+                     panel.Id,
+                     StringComparison.Ordinal)));
+        }
+        foreach (var rule in Rules)
+        {
+            var panel = Panels.Find(candidate => string.Equals(
+                candidate.Id,
+                rule.PanelId,
+                StringComparison.Ordinal));
+            if (panel == null)
+            {
+                continue;
+            }
+            var alarmId = "rule:" + rule.Id;
+            var existing = panel.Slots.Find(slot => string.Equals(
+                slot.AlarmId,
+                alarmId,
+                StringComparison.Ordinal));
+            if (existing == null)
+            {
+                panel.Slots.Add(CreateRulePanelSlot(rule));
+            }
+            else
+            {
+                existing.DisplayName = rule.Name;
+                existing.Detail = rule.Conditions.Count + " Bedingung(en)";
+                existing.Source = "custom";
+                existing.Severity = rule.Severity;
+                existing.ActiveColor = rule.ActiveColor;
+            }
+        }
+    }
+
+    private static bool IsMemoryEligibleForPanel(
+        AlarmMemoryDefinition memory,
+        PanelDefinition panel)
+    {
+        if (string.Equals(memory.Source, "custom", StringComparison.Ordinal))
+        {
+            return string.Equals(
+                memory.PanelId,
+                panel.Id,
+                StringComparison.Ordinal);
+        }
+        if (string.Equals(memory.Source, "vanilla", StringComparison.Ordinal) &&
+            !panel.IncludeVanilla)
+        {
+            return false;
+        }
+        if (string.Equals(memory.Source, "system", StringComparison.Ordinal) &&
+            !panel.IncludeSystem)
+        {
+            return false;
+        }
+        return MatchesPanelFilter(
+            panel,
+            memory.Name,
+            memory.Detail + " " + memory.Key);
+    }
+
+    private static bool IsHistoryEligibleForPanel(
+        AlarmHistoryDefinition history,
+        PanelDefinition panel)
+    {
+        return string.Equals(
+                   history.Source,
+                   "vanilla",
+                   StringComparison.Ordinal) &&
+               panel.IncludeVanilla &&
+               MatchesPanelFilter(
+                   panel,
+                   history.Message,
+                   history.Detail + " " + history.AlarmKey);
+    }
+
+    private static string ExtractVanillaPrototypeId(string detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return "";
+        }
+        var separator = detail.IndexOf('·');
+        return (separator < 0 ? detail : detail.Substring(0, separator)).Trim();
+    }
+
+    private static bool MatchesPanelFilter(
+        PanelDefinition panel,
+        string name,
+        string detail)
+    {
+        if (string.IsNullOrWhiteSpace(panel.NotificationFilter))
+        {
+            return true;
+        }
+        var filters = panel.NotificationFilter
+            .Split(new[] { ',', ';' },
+                StringSplitOptions.RemoveEmptyEntries)
+            .Select(value => value.Trim())
+            .Where(value => value.Length > 0)
+            .ToArray();
+        if (filters.Length == 0)
+        {
+            return true;
+        }
+        var haystack = (name ?? "") + " " + (detail ?? "");
+        return filters.Any(filter => haystack.IndexOf(
+                filter,
+                StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
+    private static void AddPanelSlotIfMissing(
+        PanelDefinition panel,
+        PanelSlotDefinition slot)
+    {
+        if (slot != null &&
+            !IsPanelSlotExcluded(panel, slot.AlarmId) &&
+            !panel.Slots.Exists(candidate => string.Equals(
+                candidate.AlarmId,
+                slot.AlarmId,
+                StringComparison.Ordinal)))
+        {
+            panel.Slots.Add(slot);
+        }
+    }
+
+    private static bool IsPanelSlotExcluded(
+        PanelDefinition panel,
+        string alarmId)
+    {
+        return panel.ExcludedAlarmIds != null &&
+               panel.ExcludedAlarmIds.Contains(
+                   alarmId,
+                   StringComparer.Ordinal);
+    }
+
+    private static string ColorForSeverity(AlarmSeverity severity)
+    {
+        return severity switch
+        {
+            AlarmSeverity.Emergency => "#E51B23",
+            AlarmSeverity.Critical => "#F05A32",
+            AlarmSeverity.Warning => "#F0C541",
+            _ => "#83C5BE",
+        };
+    }
+
+    private static PanelSlotDefinition CreateSystemPanelSlot(
+        SystemAlarmDefinition alarm)
+    {
+        var stage = alarm.Stages
+            .Where(candidate => candidate.Enabled)
+            .OrderBy(candidate => candidate.Priority)
+            .FirstOrDefault();
+        return new PanelSlotDefinition
+        {
+            AlarmId = alarm.Id,
+            DisplayName = alarm.DisplayName,
+            Detail = "Systemmeldung",
+            Source = "system",
+            Severity = stage?.Severity ?? AlarmSeverity.Warning,
+            ActiveColor = stage?.ActiveColor ?? "auto",
+        };
+    }
+
+    private static PanelSlotDefinition CreateRulePanelSlot(
+        AlarmRuleDefinition rule)
+    {
+        return new PanelSlotDefinition
+        {
+            AlarmId = "rule:" + rule.Id,
+            DisplayName = rule.Name,
+            Detail = rule.Conditions.Count + " Bedingung(en)",
+            Source = "custom",
+            Severity = rule.Severity,
+            ActiveColor = rule.ActiveColor,
+        };
     }
 
     private void MigrateAlarmHistory()
@@ -693,7 +1051,9 @@ public sealed class AlarmView
     public string SoundId = "auto";
     public string OverrideId = "";
     public string OccurrenceId = "";
+    public string SlotId = "";
     public int OccurrencePriority;
+    public long Sequence;
     public AlarmSeverity Severity;
     public bool IsActive;
     public bool IsAcknowledged;

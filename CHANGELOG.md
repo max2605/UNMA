@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0 – 2026-08-07
+
+- Panelplätze sind jetzt echte persistente Meldeschlitze mit dauerhaft fester
+  Reihenfolge. Normal-, Kommend-, Stehend- und Gegangen-Zustände sortieren die
+  Tafel nicht mehr um.
+- Wiederholte Vanilla-Ereignisse derselben Meldungsart und Entität werden über
+  eine stabile Schlitz-ID zusammengeführt. Dadurch erzeugt beispielsweise ein
+  erneut kommendes `NotEnoughWorkers` keinen zweiten alten NORMAL-Schlitz.
+- Ereignisschlüssel, manuelle Quittierung, Audioauswahl und der vollständige
+  K/G/Q-Verlauf bleiben bewusst getrennt erhalten.
+- Der Panel-Editor kann feste Schlitze hoch/runter verschieben, entfernen und
+  aus bekannten Vanilla- und Systemmeldungen ergänzen. Automatisch entdeckte,
+  zum Filter passende Arten werden genau einmal am Ende angefügt.
+- System- und eigene Regeln erhalten schon im Normalzustand beschriftete,
+  hellgraue Plätze. Eigene Regeln nehmen ihren festen Schlitz beim Wechsel der
+  Zieltafel mit und entfernen ihn beim Löschen der Regel.
+- Konfigurationsschema 8 migriert bestehende Panels, Regeln und gespeicherte
+  Alarmzustände ohne Verlust ihrer Quittier- oder Verlaufshistorie.
+
 ## 0.5.0 – 2026-08-07
 
 - Goldene UNMA-Alarmglocke direkt in den Inspectoren von Gebäuden, Lagern,
