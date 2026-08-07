@@ -134,9 +134,39 @@ public sealed class AlarmMemoryDefinition
 }
 
 [DataContract]
+public sealed class AlarmHistoryDefinition
+{
+    [DataMember(Order = 1)] public long Sequence;
+    [DataMember(Order = 2)] public string AlarmKey = "";
+    [DataMember(Order = 3)] public string Message = "";
+    [DataMember(Order = 4)] public string Detail = "";
+    [DataMember(Order = 5)] public string Source = "";
+    [DataMember(Order = 6)] public string PanelId = "";
+    [DataMember(Order = 7)] public AlarmSeverity Severity;
+    [DataMember(Order = 8)] public bool IsGone;
+    [DataMember(Order = 9)] public bool IsAcknowledged;
+
+    public string StateCode => IsGone
+        ? IsAcknowledged ? "KGQ" : "KG"
+        : IsAcknowledged ? "KQ" : "K";
+
+    public bool CanDelete => IsGone && IsAcknowledged;
+
+    public bool SetState(bool isGone, bool isAcknowledged)
+    {
+        var nextAcknowledged = IsAcknowledged || isAcknowledged;
+        var changed = IsGone != isGone ||
+                      IsAcknowledged != nextAcknowledged;
+        IsGone = isGone;
+        IsAcknowledged = nextAcknowledged;
+        return changed;
+    }
+}
+
+[DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 5;
+    [DataMember(Order = 1)] public int SchemaVersion = 6;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -153,6 +183,8 @@ public sealed class UnmaConfiguration
     [DataMember(Order = 14)] public List<SystemAlarmDefinition> SystemAlarms =
         new();
     [DataMember(Order = 15)] public List<AlarmMemoryDefinition> AlarmMemories =
+        new();
+    [DataMember(Order = 16)] public List<AlarmHistoryDefinition> AlarmHistory =
         new();
 
     public static UnmaConfiguration CreateDefault()
@@ -324,6 +356,7 @@ public sealed class UnmaConfiguration
         SoundOverrides ??= new List<AlarmSoundOverride>();
         SystemAlarms ??= new List<SystemAlarmDefinition>();
         AlarmMemories ??= new List<AlarmMemoryDefinition>();
+        AlarmHistory ??= new List<AlarmHistoryDefinition>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -392,12 +425,67 @@ public sealed class UnmaConfiguration
             }
         }
 
+        AlarmHistory.RemoveAll(item =>
+            item == null ||
+            item.Sequence <= 0 ||
+            string.IsNullOrWhiteSpace(item.AlarmKey));
+        var historySequences = new HashSet<long>();
+        AlarmHistory.RemoveAll(item => !historySequences.Add(item.Sequence));
+        foreach (var item in AlarmHistory)
+        {
+            item.AlarmKey = item.AlarmKey.Trim();
+            item.Message ??= "";
+            item.Detail ??= "";
+            item.Source ??= "";
+            item.PanelId ??= "";
+        }
+
+        if (loadedSchemaVersion < 6)
+        {
+            MigrateAlarmHistory();
+        }
+
         MergeDefaultSystemAlarms();
         if (loadedSchemaVersion < 4)
         {
             MigrateSystemSoundOverrides();
         }
-        SchemaVersion = Math.Max(SchemaVersion, 5);
+        SchemaVersion = Math.Max(SchemaVersion, 6);
+    }
+
+    private void MigrateAlarmHistory()
+    {
+        var nextSequence = Math.Max(
+            AlarmMemories.Count == 0
+                ? 0
+                : AlarmMemories.Max(item => item.Sequence),
+            AlarmHistory.Count == 0
+                ? 0
+                : AlarmHistory.Max(item => item.Sequence));
+        var usedSequences = new HashSet<long>(
+            AlarmHistory.Select(item => item.Sequence));
+
+        foreach (var memory in AlarmMemories.OrderBy(item => item.Sequence))
+        {
+            if (memory.Sequence <= 0 ||
+                usedSequences.Contains(memory.Sequence))
+            {
+                memory.Sequence = ++nextSequence;
+            }
+            usedSequences.Add(memory.Sequence);
+            AlarmHistory.Add(new AlarmHistoryDefinition
+            {
+                Sequence = memory.Sequence,
+                AlarmKey = memory.Key,
+                Message = memory.Name,
+                Detail = memory.Detail,
+                Source = memory.Source,
+                PanelId = memory.PanelId,
+                Severity = memory.Severity,
+                IsGone = memory.IsGoneUnacknowledged,
+                IsAcknowledged = memory.IsAcknowledged,
+            });
+        }
     }
 
     private void MigrateSystemSoundOverrides()

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 – 2026-08-07
+
+- Neuer persistenter **VERLAUF** mit einer eigenen Zeile pro Alarmereignis und
+  den Zuständen `K` (gekommen), `KQ` (gekommen und quittiert), `KG` (gekommen
+  und gegangen) sowie `KGQ` (gekommen, gegangen und quittiert).
+- Unquittierte `K`-Einträge blinken rot; `KG` blinkt mit schwarzer Schrift auf
+  weißem Hintergrund. Quittierte `KQ`- und `KGQ`-Einträge stehen mit schwarzer
+  Schrift auf weißem Hintergrund.
+- Nur vollständig abgeschlossene `KGQ`-Einträge können ausdrücklich gelöscht
+  werden; bis dahin bleiben sie auch nach Speichern und Neuladen erhalten.
+
 ## 0.3.0 – 2026-08-07
 
 - Kraftwerksnahe Meldungsfolge ergänzt: Eine ungequittierte Meldung bleibt auch

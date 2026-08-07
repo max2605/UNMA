@@ -15,9 +15,11 @@ internal static class Program
         TestComparisons();
         TestBooleanLogic();
         TestAlarmLatch();
+        TestAlarmHistoryState();
         TestSystemAlarmSelection();
         TestSystemMetricMath();
         TestConfigurationRoundTrip();
+        TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
         TestMechanicalSiren();
         Console.WriteLine(
@@ -445,7 +447,7 @@ internal static class Program
         AreEqual(1, restored.SoundOverrides.Count);
         AreEqual("siren", restored.SoundOverrides[0].SoundId);
         IsTrue(restored.SoundOverrides[0].AutoAcknowledgeOnClear);
-        AreEqual(5, restored.SchemaVersion);
+        AreEqual(6, restored.SchemaVersion);
         AreEqual(3, restored.SystemAlarms.Count);
         IsTrue(restored.Rules[0].AutoAcknowledgeOnClear);
         var restoredSystemAlarm = restored.SystemAlarms
@@ -471,6 +473,74 @@ internal static class Program
         AreEqual(73L, restoredMemory.Sequence);
     }
 
+    private static void TestAlarmHistoryState()
+    {
+        var incomingAcknowledged = new AlarmHistoryDefinition();
+        AreEqual("K", incomingAcknowledged.StateCode);
+        IsFalse(incomingAcknowledged.CanDelete);
+        IsTrue(incomingAcknowledged.SetState(false, true));
+        AreEqual("KQ", incomingAcknowledged.StateCode);
+        IsFalse(incomingAcknowledged.CanDelete);
+        IsFalse(incomingAcknowledged.SetState(false, false));
+        AreEqual("KQ", incomingAcknowledged.StateCode);
+
+        var goneAcknowledged = new AlarmHistoryDefinition();
+        AreEqual("K", goneAcknowledged.StateCode);
+        IsTrue(goneAcknowledged.SetState(true, false));
+        AreEqual("KG", goneAcknowledged.StateCode);
+        IsFalse(goneAcknowledged.CanDelete);
+        IsTrue(goneAcknowledged.SetState(true, true));
+        AreEqual("KGQ", goneAcknowledged.StateCode);
+        IsTrue(goneAcknowledged.CanDelete);
+        IsFalse(goneAcknowledged.SetState(true, false));
+        AreEqual("KGQ", goneAcknowledged.StateCode);
+
+        var acknowledgedThenGone = new AlarmHistoryDefinition();
+        IsTrue(acknowledgedThenGone.SetState(false, true));
+        AreEqual("KQ", acknowledgedThenGone.StateCode);
+        IsTrue(acknowledgedThenGone.SetState(true, false));
+        AreEqual("KGQ", acknowledgedThenGone.StateCode);
+        IsTrue(acknowledgedThenGone.CanDelete);
+    }
+
+    private static void TestAlarmHistoryRoundTrip()
+    {
+        var configuration = UnmaConfiguration.CreateDefault();
+        configuration.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            Sequence = 91,
+            AlarmKey = "system:food",
+            Message = "NAHRUNGSVORRAT KRITISCH",
+            Detail = "Nahrung 0 Monate",
+            Source = "system",
+            PanelId = "supply",
+            Severity = AlarmSeverity.Emergency,
+            IsGone = true,
+            IsAcknowledged = true,
+        });
+
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        using var stream = new MemoryStream();
+        serializer.WriteObject(stream, configuration);
+        stream.Position = 0;
+        var restored = (UnmaConfiguration)serializer.ReadObject(stream);
+        restored.Normalize();
+
+        AreEqual(6, restored.SchemaVersion);
+        AreEqual(1, restored.AlarmHistory.Count);
+        var history = restored.AlarmHistory[0];
+        AreEqual(91L, history.Sequence);
+        AreEqual("system:food", history.AlarmKey);
+        AreEqual("NAHRUNGSVORRAT KRITISCH", history.Message);
+        AreEqual("Nahrung 0 Monate", history.Detail);
+        AreEqual("system", history.Source);
+        AreEqual("supply", history.PanelId);
+        AreEqual(AlarmSeverity.Emergency, history.Severity);
+        AreEqual("KGQ", history.StateCode);
+        IsTrue(history.CanDelete);
+    }
+
     private static void TestConfigurationMigration()
     {
         var oldConfiguration = UnmaConfiguration.CreateDefault();
@@ -484,7 +554,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(5, oldConfiguration.SchemaVersion);
+        AreEqual(6, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
@@ -512,12 +582,63 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(5, legacy.SchemaVersion);
+        AreEqual(6, legacy.SchemaVersion);
         IsFalse(legacy.Rules[0].AutoAcknowledgeOnClear);
         IsFalse(legacy.SoundOverrides[0].AutoAcknowledgeOnClear);
         IsTrue(legacy.SystemAlarms.TrueForAll(alarm =>
             !alarm.AutoAcknowledgeOnClear));
         AreEqual(0, legacy.AlarmMemories.Count);
+
+        var versionFive = UnmaConfiguration.CreateDefault();
+        versionFive.SchemaVersion = 5;
+        versionFive.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "migration:k",
+            Name = "KOMMEN",
+            IsActive = true,
+            Sequence = 101,
+        });
+        versionFive.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "migration:kq",
+            Name = "KOMMEN QUITTIERT",
+            IsActive = true,
+            IsAcknowledged = true,
+            Sequence = 102,
+        });
+        versionFive.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "migration:kg",
+            Name = "KOMMEN GEGANGEN",
+            IsGoneUnacknowledged = true,
+            Sequence = 103,
+        });
+
+        versionFive.Normalize();
+
+        AreEqual(6, versionFive.SchemaVersion);
+        AreEqual(3, versionFive.AlarmHistory.Count);
+        AreEqual(
+            "K",
+            versionFive.AlarmHistory.Find(item =>
+                item.AlarmKey == "migration:k").StateCode);
+        AreEqual(
+            "KQ",
+            versionFive.AlarmHistory.Find(item =>
+                item.AlarmKey == "migration:kq").StateCode);
+        AreEqual(
+            "KG",
+            versionFive.AlarmHistory.Find(item =>
+                item.AlarmKey == "migration:kg").StateCode);
+
+        versionFive.Normalize();
+        AreEqual(3, versionFive.AlarmHistory.Count);
+        AreEqual(1, versionFive.AlarmHistory.FindAll(item =>
+            item.AlarmKey == "migration:k").Count);
+        AreEqual(1, versionFive.AlarmHistory.FindAll(item =>
+            item.AlarmKey == "migration:kq").Count);
+        AreEqual(1, versionFive.AlarmHistory.FindAll(item =>
+            item.AlarmKey == "migration:kg").Count);
     }
 
     private static void TestMechanicalSiren()

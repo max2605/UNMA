@@ -80,8 +80,10 @@ public sealed class UnmaRuntime : IDisposable
     private readonly UnmaStateStore m_store;
     private readonly Dictionary<string, AlarmState> m_alarms =
         new(StringComparer.Ordinal);
+    private readonly List<AlarmHistoryDefinition> m_alarmHistory = new();
 
     private long m_sequence;
+    private long m_alarmHistoryRevision;
     private long m_nextEvaluationTimestamp;
     private long m_nextEvaluationErrorLogTimestamp;
     private volatile bool m_gameplayActive;
@@ -118,7 +120,21 @@ public sealed class UnmaRuntime : IDisposable
         m_store = store;
         m_settings = settings ?? new UnmaSettings();
         Configuration = store.Load();
+        RestoreAlarmHistory();
         RestoreAlarmMemories();
+    }
+
+    private void RestoreAlarmHistory()
+    {
+        foreach (var item in Configuration.AlarmHistory)
+        {
+            m_alarmHistory.Add(CloneHistory(item));
+            m_sequence = Math.Max(m_sequence, item.Sequence);
+        }
+        if (m_alarmHistory.Count > 0)
+        {
+            m_alarmHistoryRevision = 1;
+        }
     }
 
     public void Initialize()
@@ -180,6 +196,11 @@ public sealed class UnmaRuntime : IDisposable
             state.View.LastValue = memory.LastValue;
             m_alarms[memory.Key] = state;
             m_sequence = Math.Max(m_sequence, memory.Sequence);
+            if (FindHistoryLocked(memory.Sequence) == null)
+            {
+                m_alarmHistory.Add(CreateHistoryFromState(state));
+                m_alarmHistoryRevision++;
+            }
         }
     }
 
@@ -351,6 +372,14 @@ public sealed class UnmaRuntime : IDisposable
         var changed = false;
         lock (m_gate)
         {
+            foreach (var item in m_alarmHistory)
+            {
+                if (!item.IsAcknowledged)
+                {
+                    item.IsAcknowledged = true;
+                    changed = true;
+                }
+            }
             foreach (var alarm in m_alarms.Values)
             {
                 if (alarm.View.IsGoneUnacknowledged)
@@ -366,6 +395,10 @@ public sealed class UnmaRuntime : IDisposable
                     changed = true;
                 }
             }
+            if (changed)
+            {
+                m_alarmHistoryRevision++;
+            }
         }
         if (changed)
         {
@@ -378,12 +411,15 @@ public sealed class UnmaRuntime : IDisposable
     {
         lock (m_persistenceGate)
         {
-            var alarmMemories = CaptureAlarmMemories();
+            CapturePersistentAlarmState(
+                out var alarmMemories,
+                out var alarmHistory);
             bool saved;
             string error;
             lock (m_configurationGate)
             {
                 Configuration.AlarmMemories = alarmMemories;
+                Configuration.AlarmHistory = alarmHistory;
                 saved = m_store.Save(Configuration, out error);
             }
 
@@ -398,11 +434,13 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
-    private List<AlarmMemoryDefinition> CaptureAlarmMemories()
+    private void CapturePersistentAlarmState(
+        out List<AlarmMemoryDefinition> alarmMemories,
+        out List<AlarmHistoryDefinition> alarmHistory)
     {
         lock (m_gate)
         {
-            return m_alarms.Values
+            alarmMemories = m_alarms.Values
                 .Where(state => state.View.IsLatched)
                 .OrderBy(state => state.Sequence)
                 .Select(state => new AlarmMemoryDefinition
@@ -428,6 +466,102 @@ public sealed class UnmaRuntime : IDisposable
                     Sequence = state.Sequence,
                 })
                 .ToList();
+            alarmHistory = m_alarmHistory
+                .OrderBy(item => item.Sequence)
+                .Select(CloneHistory)
+                .ToList();
+        }
+    }
+
+    public long AlarmHistoryRevision
+    {
+        get
+        {
+            lock (m_gate)
+            {
+                return m_alarmHistoryRevision;
+            }
+        }
+    }
+
+    public IReadOnlyList<AlarmHistoryDefinition> GetAlarmHistory()
+    {
+        lock (m_gate)
+        {
+            return m_alarmHistory
+                .OrderByDescending(item => item.Sequence)
+                .Select(CloneHistory)
+                .ToArray();
+        }
+    }
+
+    public bool DeleteAlarmHistoryEntry(long sequence)
+    {
+        lock (m_persistenceGate)
+        {
+            AlarmHistoryDefinition removed;
+            var removedIndex = -1;
+            lock (m_gate)
+            {
+                removedIndex = m_alarmHistory.FindIndex(item =>
+                    item.Sequence == sequence && item.CanDelete);
+                if (removedIndex < 0)
+                {
+                    return false;
+                }
+                removed = m_alarmHistory[removedIndex];
+                m_alarmHistory.RemoveAt(removedIndex);
+                m_alarmHistoryRevision++;
+            }
+
+            if (SaveConfiguration())
+            {
+                return true;
+            }
+
+            lock (m_gate)
+            {
+                m_alarmHistory.Insert(removedIndex, removed);
+                m_alarmHistoryRevision++;
+            }
+            return false;
+        }
+    }
+
+    public bool DeleteCompletedAlarmHistory(out int deletedCount)
+    {
+        deletedCount = 0;
+        lock (m_persistenceGate)
+        {
+            List<AlarmHistoryDefinition> removed;
+            lock (m_gate)
+            {
+                removed = m_alarmHistory
+                    .Where(item => item.CanDelete)
+                    .Select(CloneHistory)
+                    .ToList();
+                if (removed.Count == 0)
+                {
+                    return true;
+                }
+                m_alarmHistory.RemoveAll(item => item.CanDelete);
+                m_alarmHistoryRevision++;
+            }
+
+            if (SaveConfiguration())
+            {
+                deletedCount = removed.Count;
+                return true;
+            }
+
+            lock (m_gate)
+            {
+                m_alarmHistory.AddRange(removed);
+                m_alarmHistory.Sort((left, right) =>
+                    left.Sequence.CompareTo(right.Sequence));
+                m_alarmHistoryRevision++;
+            }
+            return false;
         }
     }
 
@@ -533,10 +667,21 @@ public sealed class UnmaRuntime : IDisposable
         }
 
         AlarmState removedAlarmState = null;
+        List<AlarmHistoryDefinition> previousHistory;
         lock (m_gate)
         {
+            previousHistory = m_alarmHistory
+                .Select(CloneHistory)
+                .ToList();
             var alarmKey = "rule:" + ruleId;
             m_alarms.TryGetValue(alarmKey, out removedAlarmState);
+            if (removedAlarmState != null &&
+                CloseHistoryLocked(
+                    removedAlarmState.Sequence,
+                    removedAlarmState.View.IsAcknowledged))
+            {
+                m_alarmHistoryRevision++;
+            }
             m_alarms.Remove(alarmKey);
         }
 
@@ -552,6 +697,12 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     m_alarms["rule:" + ruleId] = removedAlarmState;
                 }
+            }
+            lock (m_gate)
+            {
+                m_alarmHistory.Clear();
+                m_alarmHistory.AddRange(previousHistory);
+                m_alarmHistoryRevision++;
             }
             return false;
         }
@@ -712,16 +863,28 @@ public sealed class UnmaRuntime : IDisposable
 
         var removedAlarmStates = new Dictionary<string, AlarmState>(
             StringComparer.Ordinal);
+        List<AlarmHistoryDefinition> previousHistory;
         lock (m_gate)
         {
+            previousHistory = m_alarmHistory
+                .Select(CloneHistory)
+                .ToList();
+            var historyChanged = false;
             foreach (var rule in removedRules)
             {
                 var alarmKey = "rule:" + rule.Id;
                 if (m_alarms.TryGetValue(alarmKey, out var state))
                 {
                     removedAlarmStates[alarmKey] = state;
+                    historyChanged |= CloseHistoryLocked(
+                        state.Sequence,
+                        state.View.IsAcknowledged);
                 }
                 m_alarms.Remove(alarmKey);
+            }
+            if (historyChanged)
+            {
+                m_alarmHistoryRevision++;
             }
         }
 
@@ -738,6 +901,9 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     m_alarms[pair.Key] = pair.Value;
                 }
+                m_alarmHistory.Clear();
+                m_alarmHistory.AddRange(previousHistory);
+                m_alarmHistoryRevision++;
             }
             return false;
         }
@@ -934,9 +1100,19 @@ public sealed class UnmaRuntime : IDisposable
                                  StringComparison.Ordinal) &&
                              state.View.IsGoneUnacknowledged))
                 {
+                    var history = FindHistoryLocked(state.Sequence);
+                    if (history != null)
+                    {
+                        history.IsGone = true;
+                        history.IsAcknowledged = true;
+                    }
                     state.View.IsGoneUnacknowledged = false;
                     state.View.IsAcknowledged = false;
                     clearedGoneAlarm = true;
+                }
+                if (clearedGoneAlarm)
+                {
+                    m_alarmHistoryRevision++;
                 }
             }
         }
@@ -1522,16 +1698,31 @@ public sealed class UnmaRuntime : IDisposable
 
     private void OnNotificationSuppressChanged(INotification notification)
     {
+        if (!notification.IsSuppressed)
+        {
+            return;
+        }
+
         var changed = false;
         lock (m_gate)
         {
             if (m_alarms.TryGetValue(
                     NotificationKey(notification),
-                    out var alarm))
+                    out var alarm) &&
+                alarm.View.IsActive &&
+                !alarm.View.IsAcknowledged)
             {
-                changed = alarm.View.IsAcknowledged !=
-                          notification.IsSuppressed;
-                alarm.View.IsAcknowledged = notification.IsSuppressed;
+                changed = true;
+                alarm.View.IsAcknowledged = true;
+                var history = FindHistoryLocked(alarm.Sequence);
+                if (history != null && !history.IsGone)
+                {
+                    history.IsAcknowledged = true;
+                }
+                if (changed)
+                {
+                    m_alarmHistoryRevision++;
+                }
             }
         }
         if (changed)
@@ -1561,6 +1752,7 @@ public sealed class UnmaRuntime : IDisposable
         var shouldPersist = false;
         lock (m_gate)
         {
+            var historyChanged = false;
             var created = false;
             if (!m_alarms.TryGetValue(key, out var state))
             {
@@ -1627,7 +1819,32 @@ public sealed class UnmaRuntime : IDisposable
 
             if (transition.IsNewOccurrence)
             {
+                if (wasActive)
+                {
+                    historyChanged |= CloseHistoryLocked(
+                        state.Sequence,
+                        wasAcknowledged);
+                }
                 state.Sequence = ++m_sequence;
+                m_alarmHistory.Add(CreateHistoryFromState(state));
+                historyChanged = true;
+            }
+            else if (state.Sequence > 0 &&
+                     (wasActive || wasGoneUnacknowledged ||
+                      state.View.IsLatched))
+            {
+                var occurrenceAcknowledged = state.View.IsActive
+                    ? state.View.IsAcknowledged
+                    : wasAcknowledged || autoAcknowledgeOnClear;
+                historyChanged |= UpdateHistoryFromStateLocked(
+                    state,
+                    !state.View.IsActive,
+                    occurrenceAcknowledged);
+            }
+
+            if (historyChanged)
+            {
+                m_alarmHistoryRevision++;
             }
 
             shouldPersist =
@@ -1664,7 +1881,8 @@ public sealed class UnmaRuntime : IDisposable
                      state.View.OccurrenceId,
                      StringComparison.Ordinal) ||
                  previousOccurrencePriority !=
-                 state.View.OccurrencePriority);
+                 state.View.OccurrencePriority ||
+                 historyChanged);
         }
         if (shouldPersist)
         {
@@ -1698,11 +1916,26 @@ public sealed class UnmaRuntime : IDisposable
                 state.View.IsAcknowledged = transition.IsAcknowledged;
                 state.View.IsGoneUnacknowledged =
                     transition.IsGoneUnacknowledged;
+                var occurrenceAcknowledged = wasAcknowledged ||
+                                             autoAcknowledgeOnClear;
+                var historyChanged = false;
+                if (wasActive || wasGoneUnacknowledged)
+                {
+                    historyChanged = UpdateHistoryFromStateLocked(
+                        state,
+                        true,
+                        occurrenceAcknowledged);
+                }
                 changed =
                     wasActive != state.View.IsActive ||
                     wasAcknowledged != state.View.IsAcknowledged ||
                     wasGoneUnacknowledged !=
-                    state.View.IsGoneUnacknowledged;
+                    state.View.IsGoneUnacknowledged ||
+                    historyChanged;
+                if (historyChanged)
+                {
+                    m_alarmHistoryRevision++;
+                }
             }
         }
         if (changed && persist)
@@ -1720,15 +1953,118 @@ public sealed class UnmaRuntime : IDisposable
             {
                 changed = state.View.IsLatched ||
                           state.View.IsAcknowledged;
+                var historyChanged = CloseHistoryLocked(
+                    state.Sequence,
+                    state.View.IsAcknowledged);
                 state.View.IsActive = false;
                 state.View.IsAcknowledged = false;
                 state.View.IsGoneUnacknowledged = false;
+                changed |= historyChanged;
+                if (historyChanged)
+                {
+                    m_alarmHistoryRevision++;
+                }
             }
         }
         if (changed && persist)
         {
             PersistAlarmState();
         }
+    }
+
+    private AlarmHistoryDefinition FindHistoryLocked(long sequence)
+    {
+        return sequence <= 0
+            ? null
+            : m_alarmHistory.Find(item => item.Sequence == sequence);
+    }
+
+    private bool CloseHistoryLocked(long sequence, bool acknowledged)
+    {
+        var history = FindHistoryLocked(sequence);
+        if (history == null)
+        {
+            return false;
+        }
+        return history.SetState(true, acknowledged);
+    }
+
+    private bool UpdateHistoryFromStateLocked(
+        AlarmState state,
+        bool isGone,
+        bool isAcknowledged)
+    {
+        var history = FindHistoryLocked(state.Sequence);
+        if (history == null)
+        {
+            if (state.Sequence <= 0)
+            {
+                return false;
+            }
+            history = CreateHistoryFromState(state);
+            m_alarmHistory.Add(history);
+        }
+
+        var changed =
+            !string.Equals(
+                history.AlarmKey,
+                state.View.Key,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                history.Message,
+                state.View.Name,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                history.Source,
+                state.View.Source,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                history.PanelId,
+                state.View.PanelId,
+                StringComparison.Ordinal) ||
+            history.Severity != state.View.Severity;
+
+        history.AlarmKey = state.View.Key;
+        history.Message = state.View.Name;
+        history.Source = state.View.Source;
+        history.PanelId = state.View.PanelId;
+        history.Severity = state.View.Severity;
+        return history.SetState(isGone, isAcknowledged) || changed;
+    }
+
+    private static AlarmHistoryDefinition CreateHistoryFromState(
+        AlarmState state)
+    {
+        return new AlarmHistoryDefinition
+        {
+            Sequence = state.Sequence,
+            AlarmKey = state.View.Key,
+            Message = state.View.Name,
+            Detail = state.View.Detail,
+            Source = state.View.Source,
+            PanelId = state.View.PanelId,
+            Severity = state.View.Severity,
+            IsGone = !state.View.IsActive,
+            IsAcknowledged = state.View.IsActive &&
+                             state.View.IsAcknowledged,
+        };
+    }
+
+    private static AlarmHistoryDefinition CloneHistory(
+        AlarmHistoryDefinition source)
+    {
+        return new AlarmHistoryDefinition
+        {
+            Sequence = source.Sequence,
+            AlarmKey = source.AlarmKey,
+            Message = source.Message,
+            Detail = source.Detail,
+            Source = source.Source,
+            PanelId = source.PanelId,
+            Severity = source.Severity,
+            IsGone = source.IsGone,
+            IsAcknowledged = source.IsAcknowledged,
+        };
     }
 
     private AlarmSeverity ClassifyNotification(INotification notification)

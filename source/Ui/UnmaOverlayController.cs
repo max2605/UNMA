@@ -34,6 +34,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private const int MainWindowId = 0x554E4D41;
     private const float TileHeight = 112f;
+    private const float HistoryRowHeight = 40f;
 
     private static readonly FieldInfo s_menuDepthField =
         typeof(GlobalGfxSettings).GetField(
@@ -59,6 +60,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Rect m_windowRect;
     private Rect m_launcherRect;
     private Vector2 m_boardScroll;
+    private Vector2 m_historyScroll;
     private Vector2 m_editorScroll;
     private Vector2 m_soundOverrideScroll;
     private Vector2 m_systemAlarmScroll;
@@ -99,10 +101,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         new(StringComparer.Ordinal);
     private string m_pendingSystemResetId = "";
     private float m_pendingSystemResetUntil;
+    private float m_pendingHistoryDeleteUntil;
     private string m_statusMessage = "";
     private float m_statusMessageUntil;
     private AlarmView m_testAlarm;
     private float m_testAlarmUntil;
+    private long m_historyCacheRevision = -1;
+    private IReadOnlyList<AlarmHistoryDefinition> m_historyCache =
+        Array.Empty<AlarmHistoryDefinition>();
 
     private GUIStyle m_windowStyle;
     private GUIStyle m_headerStyle;
@@ -115,6 +121,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private GUIStyle m_primaryButtonStyle;
     private GUIStyle m_dangerButtonStyle;
     private GUIStyle m_textFieldStyle;
+    private GUIStyle m_historyHeaderStyle;
+    private GUIStyle m_historyTextStyle;
+    private GUIStyle m_historyStateStyle;
+    private GUIStyle m_historyAlertTextStyle;
+    private GUIStyle m_historyAlertStateStyle;
 
     public static UnmaOverlayController Create(
         UnmaRuntime runtime,
@@ -337,10 +348,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         GUILayout.BeginHorizontal();
         DrawTabButton(0, "MELDETAFEL");
-        DrawTabButton(1, "EDITOR");
-        DrawTabButton(2, "SYSTEM");
-        DrawTabButton(3, "MELDUNGSTÖNE");
-        DrawTabButton(4, "OPTIONEN / INFO");
+        DrawTabButton(1, "VERLAUF");
+        DrawTabButton(2, "EDITOR");
+        DrawTabButton(3, "SYSTEM");
+        DrawTabButton(4, "TÖNE");
+        DrawTabButton(5, "OPTIONEN");
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
         {
@@ -352,15 +364,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
         switch (m_tab)
         {
             case 1:
-                DrawEditor();
+                DrawHistory();
                 break;
             case 2:
-                DrawSystemAlarms();
+                DrawEditor();
                 break;
             case 3:
-                DrawSoundOverrides();
+                DrawSystemAlarms();
                 break;
             case 4:
+                DrawSoundOverrides();
+                break;
+            case 5:
                 DrawOptions();
                 break;
             default:
@@ -440,6 +455,242 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_boardScroll.y,
             Math.Max(220f, m_windowRect.height - 190f));
         GUILayout.EndScrollView();
+    }
+
+    private void DrawHistory()
+    {
+        var entries = GetHistoryEntries();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            "VERLAUF   " + entries.Count + " EINTRÄGE",
+            m_sectionStyle,
+            GUILayout.Height(34f));
+        var confirmingDelete =
+            Time.realtimeSinceStartup < m_pendingHistoryDeleteUntil;
+        if (GUILayout.Button(
+                confirmingDelete
+                    ? "NOCHMAL: ALLE KGQ LÖSCHEN"
+                    : "ALLE KGQ LÖSCHEN",
+                confirmingDelete
+                    ? m_dangerButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(230f),
+                GUILayout.Height(34f)))
+        {
+            if (!confirmingDelete)
+            {
+                m_pendingHistoryDeleteUntil =
+                    Time.realtimeSinceStartup + 5f;
+                SetStatus(
+                    "Zum Löschen aller KGQ-Einträge erneut drücken.");
+            }
+            else if (m_runtime.DeleteCompletedAlarmHistory(
+                         out var deletedCount))
+            {
+                m_pendingHistoryDeleteUntil = 0f;
+                m_historyScroll = Vector2.zero;
+                SetStatus(
+                    deletedCount + " KGQ-Einträge gelöscht.");
+            }
+            else
+            {
+                SetStatus(
+                    "Löschen fehlgeschlagen: " +
+                    m_runtime.LastPersistenceError);
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.Label(
+            "K = KOMMEN   |   G = GEGANGEN   |   Q = QUITTIERT",
+            m_smallLabelStyle);
+        DrawStatusMessage();
+        DrawHistoryHeader();
+
+        var historyViewportHeight =
+            Math.Max(180f, m_windowRect.height - 210f);
+        m_historyScroll.y = Mathf.Min(
+            m_historyScroll.y,
+            Math.Max(
+                0f,
+                entries.Count * (HistoryRowHeight + 4f) -
+                historyViewportHeight));
+        m_historyScroll = GUILayout.BeginScrollView(
+            m_historyScroll,
+            GUILayout.ExpandHeight(true));
+        if (entries.Count == 0)
+        {
+            GUILayout.Space(16f);
+            GUILayout.Label(
+                "Noch keine Meldungen im Verlauf.",
+                m_labelStyle);
+        }
+        else
+        {
+            DrawHistoryRows(
+                entries,
+                m_historyScroll.y,
+                historyViewportHeight);
+        }
+        GUILayout.EndScrollView();
+    }
+
+    private IReadOnlyList<AlarmHistoryDefinition> GetHistoryEntries()
+    {
+        var revision = m_runtime.AlarmHistoryRevision;
+        if (m_historyCacheRevision != revision)
+        {
+            m_historyCacheRevision = revision;
+            m_historyCache = m_runtime.GetAlarmHistory();
+        }
+        return m_historyCache;
+    }
+
+    private void DrawHistoryHeader()
+    {
+        var rect = GUILayoutUtility.GetRect(
+            0f,
+            30f,
+            GUILayout.ExpandWidth(true),
+            GUILayout.Height(30f));
+        DrawPanelRect(rect, new Color(0.16f, 0.18f, 0.18f, 1f));
+        var actionWidth = 98f;
+        var stateWidth = 92f;
+        GUI.Label(
+            new Rect(
+                rect.x + 10f,
+                rect.y,
+                rect.width - actionWidth - stateWidth - 20f,
+                rect.height),
+            "MELDETEXT",
+            m_historyHeaderStyle);
+        GUI.Label(
+            new Rect(
+                rect.xMax - actionWidth - stateWidth,
+                rect.y,
+                stateWidth,
+                rect.height),
+            "ZUSTAND",
+            m_historyHeaderStyle);
+        GUI.Label(
+            new Rect(
+                rect.xMax - actionWidth,
+                rect.y,
+                actionWidth,
+                rect.height),
+            "AKTION",
+            m_historyHeaderStyle);
+    }
+
+    private void DrawHistoryRows(
+        IReadOnlyList<AlarmHistoryDefinition> entries,
+        float scrollY,
+        float viewportHeight)
+    {
+        var rowStep = HistoryRowHeight + 4f;
+        var firstVisible = Math.Max(
+            0,
+            Mathf.FloorToInt(scrollY / rowStep) - 2);
+        var lastVisible = Math.Min(
+            entries.Count,
+            Mathf.CeilToInt((scrollY + viewportHeight) / rowStep) + 2);
+        if (firstVisible > 0)
+        {
+            GUILayout.Space(firstVisible * rowStep);
+        }
+
+        var blinkOn =
+            Mathf.FloorToInt(Time.realtimeSinceStartup * 2.2f) % 2 == 0;
+        for (var index = firstVisible; index < lastVisible; index++)
+        {
+            var rect = GUILayoutUtility.GetRect(
+                0f,
+                HistoryRowHeight,
+                GUILayout.ExpandWidth(true),
+                GUILayout.Height(HistoryRowHeight));
+            DrawHistoryRow(rect, entries[index], blinkOn);
+            GUILayout.Space(4f);
+        }
+
+        if (lastVisible < entries.Count)
+        {
+            GUILayout.Space((entries.Count - lastVisible) * rowStep);
+        }
+    }
+
+    private void DrawHistoryRow(
+        Rect rect,
+        AlarmHistoryDefinition entry,
+        bool blinkOn)
+    {
+        var background = Color.white;
+        var textStyle = m_historyTextStyle;
+        if (!entry.IsGone && !entry.IsAcknowledged)
+        {
+            background = blinkOn
+                ? new Color(0.82f, 0.04f, 0.04f, 1f)
+                : new Color(0.18f, 0.03f, 0.03f, 1f);
+            textStyle = m_historyAlertTextStyle;
+        }
+        else if (entry.IsGone && !entry.IsAcknowledged)
+        {
+            background = blinkOn
+                ? Color.white
+                : new Color(0.66f, 0.67f, 0.64f, 1f);
+        }
+
+        DrawPanelRect(rect, Color.black);
+        var inner = new Rect(
+            rect.x + 2f,
+            rect.y + 2f,
+            rect.width - 4f,
+            rect.height - 4f);
+        DrawPanelRect(inner, background);
+
+        var actionWidth = 96f;
+        var stateWidth = 90f;
+        GUI.Label(
+            new Rect(
+                inner.x + 9f,
+                inner.y,
+                inner.width - actionWidth - stateWidth - 14f,
+                inner.height),
+            string.IsNullOrWhiteSpace(entry.Message)
+                ? entry.AlarmKey
+                : entry.Message,
+            textStyle);
+        GUI.Label(
+            new Rect(
+                inner.xMax - actionWidth - stateWidth,
+                inner.y,
+                stateWidth,
+                inner.height),
+            entry.StateCode,
+            entry.StateCode == "K"
+                ? m_historyAlertStateStyle
+                : m_historyStateStyle);
+
+        if (entry.CanDelete && GUI.Button(
+                new Rect(
+                    inner.xMax - actionWidth + 4f,
+                    inner.y + 4f,
+                    actionWidth - 8f,
+                    inner.height - 8f),
+                "LÖSCHEN",
+                m_buttonStyle))
+        {
+            if (m_runtime.DeleteAlarmHistoryEntry(entry.Sequence))
+            {
+                SetStatus("KGQ-Eintrag gelöscht.");
+            }
+            else
+            {
+                SetStatus(
+                    "Löschen fehlgeschlagen: " +
+                    m_runtime.LastPersistenceError);
+            }
+        }
     }
 
     private void DrawEditor()
@@ -1959,9 +2210,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawTabButton(int tab, string label)
     {
         var width = Mathf.Clamp(
-            (m_windowRect.width - 105f) / 5f,
-            108f,
-            165f);
+            (m_windowRect.width - 105f) / 6f,
+            88f,
+            150f);
         if (GUILayout.Button(
                 label,
                 m_tab == tab ? m_primaryButtonStyle : m_buttonStyle,
@@ -2152,6 +2403,34 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     "field-focus",
                     new Color(0.96f, 0.88f, 0.55f)),
             },
+        };
+        m_historyHeaderStyle = new GUIStyle(m_labelStyle)
+        {
+            fontSize = 12,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter,
+            normal = { textColor = Color.white },
+        };
+        m_historyTextStyle = new GUIStyle(m_labelStyle)
+        {
+            fontSize = 13,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleLeft,
+            clipping = TextClipping.Clip,
+            normal = { textColor = Color.black },
+        };
+        m_historyStateStyle = new GUIStyle(m_historyTextStyle)
+        {
+            fontSize = 14,
+            alignment = TextAnchor.MiddleCenter,
+        };
+        m_historyAlertTextStyle = new GUIStyle(m_historyTextStyle)
+        {
+            normal = { textColor = Color.white },
+        };
+        m_historyAlertStateStyle = new GUIStyle(m_historyStateStyle)
+        {
+            normal = { textColor = Color.white },
         };
     }
 

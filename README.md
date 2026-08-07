@@ -48,6 +48,11 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Beliebig viele Panels, Spaltenzahl, Vanilla-/Systemfilter und
   kommagetrennte Suchfilter.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
+- Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
+  `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
+  (gekommen, gegangen und quittiert). `K` blinkt rot, `KG` blinkt mit
+  schwarzer Schrift auf weißem Hintergrund; `KQ` und `KGQ` stehen schwarz auf
+  weiß. Nur abgeschlossene `KGQ`-Einträge lassen sich ausdrücklich löschen.
 - Spielstandsbezogene Persistenz in `unma-world-<GameId>.json`; Entity-Regeln
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
   Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern
@@ -66,15 +71,18 @@ Zielversion: Captain of Industry **0.8.6c**.
 4. `MASTER QUIT · QUITTIEREN` quittiert alle kommenden und bereits gegangenen
    Meldungen und stoppt deren Ton. Bei einer weiterhin anstehenden Meldung
    bleibt die Aktivfarbe sichtbar, bis die Ursache verschwindet.
-5. Für eine eigene Meldung zuerst eine Entität im Spiel anklicken und deren
+5. In **VERLAUF** zeigt eine eigene Zeile je Alarmereignis den Zustand `K`,
+   `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
+   gespeichert, bis sie dort ausdrücklich gelöscht werden.
+6. Für eine eigene Meldung zuerst eine Entität im Spiel anklicken und deren
    Inspector offen lassen.
-6. In **EDITOR** die aktuelle Spiel-Auswahl übernehmen, Messwert, Operator und
+7. In **EDITOR** die aktuelle Spiel-Auswahl übernehmen, Messwert, Operator und
    Schwelle wählen und die Bedingung hinzufügen.
-7. Für eine Sammelmeldung weitere Entitäten nacheinander auswählen und
+8. Für eine Sammelmeldung weitere Entitäten nacheinander auswählen und
    Bedingungen ergänzen. Danach UND/ODER, Stufe, Farbe und Ton festlegen.
-8. Unter **MELDUNGSTÖNE** können Ton und Verhalten beim Gehen für jede bereits
+9. Unter **MELDUNGSTÖNE** können Ton und Verhalten beim Gehen für jede bereits
    bekannte Vanilla-Meldung separat festgelegt werden.
-9. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
+10. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
    ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
    oder auf die Werkvorgabe zurückgesetzt werden.
 
