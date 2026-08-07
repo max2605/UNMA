@@ -761,6 +761,145 @@ internal static class Program
         IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
             legacyOne,
             "vanilla:NotEnoughWorkers"));
+
+        var placementPanel = new PanelDefinition
+        {
+            Id = "placement",
+            Slots = new List<PanelSlotDefinition>
+            {
+                new()
+                {
+                    AlarmId = "system:food",
+                    DisplayName = "NAHRUNG",
+                },
+                new()
+                {
+                    AlarmId = "system:workers",
+                    DisplayName = "ARBEITER",
+                },
+            },
+        };
+        var linkedRule = new AlarmRuleDefinition
+        {
+            Id = " linked-rule ",
+            PanelId = "placement",
+            Name = "LAGER UND BAND",
+            Severity = AlarmSeverity.Critical,
+            ActiveColor = "#123456",
+            Conditions = new List<ConditionDefinition>
+            {
+                new(),
+                new(),
+            },
+        };
+        IsTrue(PanelSlotProjection.InsertRuleSlot(
+            placementPanel,
+            linkedRule,
+            1));
+        AreEqual(3, placementPanel.Slots.Count);
+        AreEqual("system:food", placementPanel.Slots[0].AlarmId);
+        AreEqual("rule:linked-rule", placementPanel.Slots[1].AlarmId);
+        AreEqual("system:workers", placementPanel.Slots[2].AlarmId);
+        AreEqual("LAGER UND BAND", placementPanel.Slots[1].DisplayName);
+        AreEqual("2 Bedingung(en)", placementPanel.Slots[1].Detail);
+        AreEqual("custom", placementPanel.Slots[1].Source);
+        AreEqual(AlarmSeverity.Critical, placementPanel.Slots[1].Severity);
+        AreEqual("#123456", placementPanel.Slots[1].ActiveColor);
+        IsFalse(PanelSlotProjection.InsertRuleSlot(
+            placementPanel,
+            linkedRule,
+            0));
+        AreEqual(3, placementPanel.Slots.Count);
+
+        IsTrue(PanelSlotProjection.TryGetCustomRuleId(
+            new AlarmView
+            {
+                Key = "custom-occurrence:entity:77",
+                SlotId = "rule:linked-rule",
+                Source = "custom",
+            },
+            out var linkedRuleId));
+        AreEqual("linked-rule", linkedRuleId);
+        IsFalse(PanelSlotProjection.TryGetCustomRuleId(
+            new AlarmView
+            {
+                Key = "system:food",
+                SlotId = "system:food",
+                Source = "system",
+            },
+            out _));
+
+        IsFalse(PanelSlotProjection.TryGetCustomRuleId(
+            new AlarmView
+            {
+                Key = "rule:",
+                Source = "custom",
+            },
+            out _));
+        IsFalse(PanelSlotProjection.TryGetCustomRuleId(
+            new AlarmView
+            {
+                SlotId = "rule:   ",
+                Source = "custom",
+            },
+            out _));
+        IsFalse(PanelSlotProjection.TryGetCustomRuleId(
+            new AlarmView
+            {
+                SlotId = "rule:linked-rule",
+                Source = "system",
+            },
+            out _));
+
+        var boundaryPanel = new PanelDefinition
+        {
+            Id = "boundaries",
+            Slots = new List<PanelSlotDefinition>
+            {
+                new()
+                {
+                    AlarmId = "system:health",
+                    DisplayName = "GESUNDHEIT",
+                },
+            },
+        };
+        IsTrue(PanelSlotProjection.InsertRuleSlot(
+            boundaryPanel,
+            new AlarmRuleDefinition
+            {
+                Id = "at-start",
+                Name = "ANFANG",
+            },
+            -100));
+        IsTrue(PanelSlotProjection.InsertRuleSlot(
+            boundaryPanel,
+            new AlarmRuleDefinition
+            {
+                Id = "at-end",
+                Name = "ENDE",
+            },
+            int.MaxValue));
+        AreEqual("rule:at-start", boundaryPanel.Slots[0].AlarmId);
+        AreEqual("system:health", boundaryPanel.Slots[1].AlarmId);
+        AreEqual("rule:at-end", boundaryPanel.Slots[2].AlarmId);
+
+        var positionedConfiguration = UnmaConfiguration.CreateDefault();
+        positionedConfiguration.Panels.Clear();
+        positionedConfiguration.Panels.Add(placementPanel);
+        positionedConfiguration.Rules.Clear();
+        positionedConfiguration.Rules.Add(linkedRule);
+        positionedConfiguration.Normalize();
+        AreEqual("linked-rule", positionedConfiguration.Rules[0].Id);
+        AreEqual("rule:linked-rule", placementPanel.Slots[1].AlarmId);
+
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        using var stream = new MemoryStream();
+        serializer.WriteObject(stream, positionedConfiguration);
+        stream.Position = 0;
+        var restored = (UnmaConfiguration)serializer.ReadObject(stream);
+        restored.Normalize();
+        AreEqual("rule:linked-rule", restored.Panels[0].Slots[1].AlarmId);
     }
 
     private static void TestConfigurationRoundTrip()

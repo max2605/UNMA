@@ -77,7 +77,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_entityAlarmWindowOpen;
     private bool m_openEntityAlarmAfterInspection;
     private int m_pendingInspectionEntityId = -1;
-    private int m_pendingInspectorAlarmEntityId = -1;
+    private bool m_entityAssignmentPending;
+    private int m_assignmentEntityId = -1;
+    private EntityInspectionSnapshot m_assignmentEntity;
+    private int m_draftPreferredSlotIndex = -1;
     private bool m_isAutomaticInspectionRefresh;
     private float m_nextEntityInspectionRefresh;
     private bool m_stylesReady;
@@ -143,6 +146,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private GUIStyle m_smallLabelStyle;
     private GUIStyle m_tileTitleStyle;
     private GUIStyle m_tileDetailStyle;
+    private GUIStyle m_assignmentActionStyle;
     private GUIStyle m_buttonStyle;
     private GUIStyle m_primaryButtonStyle;
     private GUIStyle m_dangerButtonStyle;
@@ -234,6 +238,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var alarmEditorVisible = m_entityAlarmWindowOpen ||
                                  m_isOpen && m_tab == 2;
         if (alarmEditorVisible &&
+            !m_entityAssignmentPending &&
             m_selectedEntity != null &&
             m_pendingInspectionEntityId < 0 &&
             Time.realtimeSinceStartup >= m_nextEntityInspectionRefresh)
@@ -476,6 +481,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         GUILayout.EndHorizontal();
 
+        DrawEntityAssignmentBanner(panel);
         GUILayout.Space(6f);
         GUILayout.BeginHorizontal();
         GUILayout.Label(
@@ -512,8 +518,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
             panel.Columns,
             m_windowRect.width - 54f,
             m_boardScroll.y,
-            Math.Max(220f, m_windowRect.height - 190f));
+            Math.Max(220f, m_windowRect.height - 190f),
+            panel,
+            m_entityAssignmentPending);
         GUILayout.EndScrollView();
+    }
+
+    private void DrawEntityAssignmentBanner(PanelDefinition panel)
+    {
+        if (!m_entityAssignmentPending)
+        {
+            return;
+        }
+
+        GUILayout.Space(6f);
+        GUILayout.BeginHorizontal();
+        var entityText = m_assignmentEntity == null
+            ? "OBJEKT #" + m_assignmentEntityId + " WIRD GELADEN"
+            : "OBJEKT HINZUGEFÜGT: " +
+              m_assignmentEntity.Title.ToUpperInvariant() +
+              " · ID " + m_assignmentEntity.EntityId;
+        GUILayout.Label(
+            entityText,
+            m_sectionStyle,
+            GUILayout.Height(34f));
+        if (GUILayout.Button(
+                "ZUWEISUNG ABBRECHEN",
+                m_buttonStyle,
+                GUILayout.Width(190f),
+                GUILayout.Height(34f)))
+        {
+            CancelEntityAssignment();
+            SetStatus("Objektzuweisung abgebrochen.");
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Label(
+            m_assignmentEntity == null
+                ? "Nach dem Laden kann ein Ziel gewählt werden."
+                : "Auf " + panel.Name +
+                  ": eigene Meldung anklicken = verknüpfen; " +
+                  "+ NEUE MELDUNG anklicken = neuer fester Schlitz.",
+            m_smallLabelStyle);
     }
 
     private void DrawHistory()
@@ -765,7 +810,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 : "MELDUNG NACHTRÄGLICH BEARBEITEN",
             m_sectionStyle);
         GUILayout.Label(
-            "Am einfachsten: Glocke im Fenster eines Gebäudes, Fahrzeugs oder Transports drücken. Hier kann weiterhin die aktuelle Spielauswahl übernommen werden.",
+            "Am einfachsten: UNMA-Glocke im Inspector drücken, dann auf " +
+            "der Meldetafel eine eigene Meldung zum Verknüpfen oder das " +
+            "freie + Karree wählen. Hier kann weiterhin die aktuelle " +
+            "Spielauswahl übernommen werden.",
             m_smallLabelStyle);
         DrawAlarmRuleEditor(false);
 
@@ -1183,7 +1231,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_entityAlarmWindowOpen = false;
             m_openEntityAlarmAfterInspection = false;
-            m_pendingInspectorAlarmEntityId = -1;
         }
 
         GUILayout.BeginArea(new Rect(
@@ -1193,14 +1240,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_entityAlarmWindowRect.height - 56f));
         DrawStatusMessage();
         m_entityAlarmScroll = GUILayout.BeginScrollView(m_entityAlarmScroll);
-        if (m_pendingInspectorAlarmEntityId >= 0)
-        {
-            DrawInspectorEditingDecision();
-        }
-        else
-        {
-            DrawAlarmRuleEditor(true);
-        }
+        DrawAlarmRuleEditor(true);
         GUILayout.EndScrollView();
         GUILayout.EndArea();
 
@@ -1209,55 +1249,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
             0f,
             m_entityAlarmWindowRect.width - 58f,
             38f));
-    }
-
-    private void DrawInspectorEditingDecision()
-    {
-        var editedRule = m_runtime.Configuration.Rules.FirstOrDefault(rule =>
-            string.Equals(
-                rule.Id,
-                m_editingRuleId,
-                StringComparison.Ordinal));
-        GUILayout.Label("BESTEHENDE MELDUNG WIRD BEARBEITET", m_sectionStyle);
-        GUILayout.Label(
-            "Aktuell ist \"" + (editedRule?.Name ?? "MELDUNG") +
-            "\" im Änderungsmodus. Soll Objekt #" +
-            m_pendingInspectorAlarmEntityId +
-            " zu dieser Meldung gehören oder soll ein neuer Entwurf beginnen?",
-            m_labelStyle);
-        GUILayout.Label(
-            "Eine neue Meldung verwirft nur ungespeicherte Editoränderungen; die bereits gespeicherte Meldung bleibt unverändert.",
-            m_smallLabelStyle);
-        GUILayout.Space(10f);
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button(
-                "ZUR BESTEHENDEN MELDUNG HINZUFÜGEN",
-                m_primaryButtonStyle,
-                GUILayout.Height(38f)))
-        {
-            var entityId = m_pendingInspectorAlarmEntityId;
-            m_pendingInspectorAlarmEntityId = -1;
-            RequestEntityInspection(entityId, true);
-        }
-        if (GUILayout.Button(
-                "NEUE MELDUNG BEGINNEN",
-                m_dangerButtonStyle,
-                GUILayout.Height(38f)))
-        {
-            var entityId = m_pendingInspectorAlarmEntityId;
-            m_pendingInspectorAlarmEntityId = -1;
-            ResetDraftRule();
-            RequestEntityInspection(entityId, true);
-        }
-        if (GUILayout.Button(
-                "ABBRECHEN",
-                m_buttonStyle,
-                GUILayout.Width(130f),
-                GUILayout.Height(38f)))
-        {
-            m_pendingInspectorAlarmEntityId = -1;
-        }
-        GUILayout.EndHorizontal();
     }
 
     private void DrawAlarmRuleEditor(bool inEntityWindow)
@@ -1297,13 +1288,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 0,
                 Math.Min(m_currentPanelIndex, panels.Count - 1));
             m_draftTargetPanelId = panels[targetIndex].Id;
+            m_draftPreferredSlotIndex = -1;
         }
 
+        var slotPositionLocked = m_draftPreferredSlotIndex >= 0;
         GUILayout.BeginHorizontal();
         GUILayout.Label(
             "Hier erscheint die Meldung:",
             m_labelStyle,
             GUILayout.Width(205f));
+        var guiWasEnabled = GUI.enabled;
+        GUI.enabled = guiWasEnabled && !slotPositionLocked;
         if (GUILayout.Button("<", m_buttonStyle, GUILayout.Width(38f)))
         {
             targetIndex = Wrap(targetIndex - 1, panels.Count);
@@ -1319,7 +1314,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             targetIndex = Wrap(targetIndex + 1, panels.Count);
             m_draftTargetPanelId = panels[targetIndex].Id;
         }
-        GUILayout.Label("Ziel mit < / > wechseln.", m_smallLabelStyle);
+        GUI.enabled = guiWasEnabled;
+        GUILayout.Label(
+            slotPositionLocked
+                ? "Fester Schlitz auf dieser Tafel gewählt."
+                : "Ziel mit < / > wechseln.",
+            m_smallLabelStyle);
         GUILayout.EndHorizontal();
 
         if (allowCreate)
@@ -1329,6 +1329,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "Neue Meldetafel",
                 m_labelStyle,
                 GUILayout.Width(205f));
+            GUI.enabled = guiWasEnabled && !slotPositionLocked;
             m_newPanelName = GUILayout.TextField(
                 m_newPanelName,
                 40,
@@ -1341,8 +1342,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 AddPanel();
             }
+            GUI.enabled = guiWasEnabled;
             GUILayout.Label(
-                "Das neue Panel wird sofort als Ziel gewählt.",
+                slotPositionLocked
+                    ? "Für ein anderes Ziel zuerst ENTWURF LEEREN."
+                    : "Das neue Panel wird sofort als Ziel gewählt.",
                 m_smallLabelStyle);
             GUILayout.EndHorizontal();
         }
@@ -1362,7 +1366,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         GUILayout.Label(
             m_selectedEntity == null
-                ? "Noch kein Objekt geladen. Inspector öffnen und die UNMA-Glocke drücken."
+                ? "Noch kein Objekt geladen. Im Inspector die " +
+                  "UNMA-Glocke drücken oder die aktuelle Spielauswahl " +
+                  "übernehmen."
                 : m_selectedEntity.Title + " · " +
                   ShortTypeName(m_selectedEntity.EntityType) +
                   " · ID " + m_selectedEntity.EntityId +
@@ -2585,7 +2591,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Math.Max(1, Math.Min(panel.Columns, 5)),
             detached.Rect.width - 38f,
             detached.Scroll.y,
-            Math.Max(180f, detached.Rect.height - 100f));
+            Math.Max(180f, detached.Rect.height - 100f),
+            null,
+            false);
         GUILayout.EndScrollView();
         GUILayout.EndArea();
         GUI.DragWindow(new Rect(0f, 0f, detached.Rect.width - 38f, 36f));
@@ -2596,10 +2604,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
         int columns,
         float availableWidth,
         float scrollY,
-        float viewportHeight)
+        float viewportHeight,
+        PanelDefinition interactionPanel,
+        bool assignmentPending)
     {
         columns = Math.Max(1, Math.Min(8, columns));
-        if (alarms.Count == 0)
+        var showCreationTarget = assignmentPending &&
+                                 interactionPanel != null;
+        var itemCount = alarms.Count + (showCreationTarget ? 1 : 0);
+        if (itemCount == 0)
         {
             GUILayout.Space(20f);
             GUILayout.Label(
@@ -2610,8 +2623,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         var tileWidth = Math.Max(140f, (availableWidth -
             (columns - 1) * 6f) / columns);
-        var rowHeight = TileHeight + 12f;
-        var rowCount = (alarms.Count + columns - 1) / columns;
+        var rowHeight = TileHeight + 6f;
+        var rowCount = (itemCount + columns - 1) / columns;
         var firstVisibleRow = Math.Max(
             0,
             Mathf.FloorToInt(scrollY / rowHeight) - 2);
@@ -2638,6 +2651,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 if (index < alarms.Count)
                 {
                     DrawAlarmTile(rect, alarms[index]);
+                    if (assignmentPending && interactionPanel != null)
+                    {
+                        DrawExistingAssignmentTarget(
+                            rect,
+                            interactionPanel,
+                            alarms[index]);
+                    }
+                }
+                else if (showCreationTarget && index == alarms.Count)
+                {
+                    DrawNewAssignmentTarget(
+                        rect,
+                        interactionPanel,
+                        index);
                 }
                 else
                 {
@@ -2734,6 +2761,222 @@ public sealed class UnmaOverlayController : MonoBehaviour
             new Color(0.83f, 0.84f, 0.82f, 1f));
     }
 
+    private void DrawExistingAssignmentTarget(
+        Rect rect,
+        PanelDefinition panel,
+        AlarmView alarm)
+    {
+        var canLink = PanelSlotProjection.TryGetCustomRuleId(
+            alarm,
+            out _);
+        var actionRect = new Rect(
+            rect.x + 4f,
+            rect.y + rect.height - 28f,
+            rect.width - 8f,
+            24f);
+        DrawPanelRect(
+            actionRect,
+            canLink
+                ? new Color(0.08f, 0.39f, 0.41f, 1f)
+                : new Color(0.28f, 0.29f, 0.28f, 1f));
+        GUI.Label(
+            actionRect,
+            canLink
+                ? "OBJEKT VERKNÜPFEN"
+                : "NUR ANZEIGE · NICHT VERKNÜPFBAR",
+            m_assignmentActionStyle);
+        if (GUI.Button(rect, GUIContent.none, GUIStyle.none))
+        {
+            HandleExistingAssignmentTarget(panel, alarm);
+        }
+    }
+
+    private void DrawNewAssignmentTarget(
+        Rect rect,
+        PanelDefinition panel,
+        int slotIndex)
+    {
+        DrawEmptyTile(rect);
+        var inner = new Rect(
+            rect.x + 4f,
+            rect.y + 4f,
+            rect.width - 8f,
+            rect.height - 8f);
+        DrawPanelRect(inner, new Color(0.78f, 0.86f, 0.84f, 1f));
+        GUI.Label(
+            new Rect(inner.x + 7f, inner.y + 17f, inner.width - 14f, 52f),
+            "+ NEUE MELDUNG",
+            m_tileTitleStyle);
+        GUI.Label(
+            new Rect(inner.x + 7f, inner.y + 73f, inner.width - 14f, 25f),
+            m_assignmentEntity == null
+                ? "Objekt wird geladen"
+                : "FESTER SCHLITZ FÜR " +
+                  m_assignmentEntity.Title.ToUpperInvariant(),
+            m_tileDetailStyle);
+        if (GUI.Button(rect, GUIContent.none, GUIStyle.none))
+        {
+            HandleNewAssignmentTarget(panel, slotIndex);
+        }
+    }
+
+    private void HandleExistingAssignmentTarget(
+        PanelDefinition panel,
+        AlarmView alarm)
+    {
+        if (!IsEntityAssignmentReady())
+        {
+            SetStatus("Das hinzugefügte Objekt wird noch geladen.");
+            return;
+        }
+        if (!PanelSlotProjection.TryGetCustomRuleId(
+                alarm,
+                out var ruleId))
+        {
+            SetStatus(
+                "Vanilla- und Systemmeldungen sind feste Anzeigen. " +
+                "Für eine Objektbedingung eine eigene Meldung oder " +
+                "das freie + Karree wählen.");
+            return;
+        }
+
+        var rule = m_runtime.Configuration.Rules.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, ruleId, StringComparison.Ordinal));
+        if (rule == null)
+        {
+            SetStatus(
+                "Die Meldung in diesem Schlitz existiert nicht mehr. " +
+                "Bitte das freie + Karree verwenden.");
+            return;
+        }
+        if (!string.Equals(
+                m_editingRuleId,
+                rule.Id,
+                StringComparison.Ordinal))
+        {
+            if (HasDraftRuleWork())
+            {
+                SetStatus(
+                    "Im Editor ist bereits eine Meldung oder ein " +
+                    "ungespeicherter Entwurf geöffnet. Erst speichern " +
+                    "oder ENTWURF LEEREN; danach den " +
+                    "Meldeschlitz erneut anklicken.");
+                return;
+            }
+            BeginEditingRule(rule, m_audio.GetSoundOptions());
+        }
+
+        m_draftPreferredSlotIndex = -1;
+        OpenAssignmentEntityEditor(
+            m_assignmentEntity.Title + " kann jetzt mit »" +
+            rule.Name + "« verknüpft werden. Messwert auswählen und " +
+            "Bedingung hinzufügen.");
+    }
+
+    private void HandleNewAssignmentTarget(
+        PanelDefinition panel,
+        int slotIndex)
+    {
+        if (!IsEntityAssignmentReady())
+        {
+            SetStatus("Das hinzugefügte Objekt wird noch geladen.");
+            return;
+        }
+        if (HasDraftRuleWork())
+        {
+            SetStatus(
+                "Im Editor ist bereits eine Meldung oder ein " +
+                "ungespeicherter Entwurf geöffnet. Erst speichern oder " +
+                "ENTWURF LEEREN; danach das freie " +
+                "+ Karree erneut anklicken.");
+            return;
+        }
+
+        ResetDraftRule();
+        m_draftTargetPanelId = panel.Id;
+        m_draftPreferredSlotIndex = Math.Max(
+            0,
+            Math.Min(slotIndex, panel.Slots?.Count ?? 0));
+        OpenAssignmentEntityEditor(
+            "Neue Meldung für " + m_assignmentEntity.Title +
+            " im gewählten Meldeschlitz vorbereiten.");
+    }
+
+    private bool IsEntityAssignmentReady()
+    {
+        return m_entityAssignmentPending &&
+               m_assignmentEntity != null &&
+               m_assignmentEntity.Metrics != null &&
+               m_assignmentEntity.Metrics.Count > 0;
+    }
+
+    private void OpenAssignmentEntityEditor(string status)
+    {
+        var entity = m_assignmentEntity;
+        if (entity == null)
+        {
+            SetStatus("Das hinzugefügte Objekt ist nicht mehr verfügbar.");
+            return;
+        }
+
+        m_entityAssignmentPending = false;
+        m_assignmentEntityId = -1;
+        m_assignmentEntity = null;
+        m_selectedEntity = entity;
+        m_selectedMetrics = entity.Metrics ??
+                            Array.Empty<MetricDescriptor>();
+        m_selectedMetricIndex = 0;
+        m_selectedReferenceMetricIndex = 0;
+        m_metricPickerOpen = false;
+        m_referenceMetricPickerOpen = false;
+        m_entityAlarmWindowOpen = true;
+        m_openEntityAlarmAfterInspection = false;
+        m_entityAlarmScroll = Vector2.zero;
+        m_nextEntityInspectionRefresh =
+            Time.realtimeSinceStartup + 1f;
+        SetStatus(status);
+    }
+
+    private void CancelEntityAssignment()
+    {
+        if (m_pendingInspectionEntityId == m_assignmentEntityId)
+        {
+            m_runtime.CancelEntityInspectionRequest();
+            m_pendingInspectionEntityId = -1;
+            m_isAutomaticInspectionRefresh = false;
+            m_openEntityAlarmAfterInspection = false;
+        }
+        m_entityAssignmentPending = false;
+        m_assignmentEntityId = -1;
+        m_assignmentEntity = null;
+    }
+
+    private bool HasDraftRuleWork()
+    {
+        return !string.IsNullOrWhiteSpace(m_editingRuleId) ||
+               m_draftPreferredSlotIndex >= 0 ||
+               m_draftConditions.Count > 0 ||
+               !string.Equals(
+                   m_draftRuleName?.Trim(),
+                   "NEUE MELDUNG",
+                   StringComparison.Ordinal) ||
+               m_draftSeverity != AlarmSeverity.Warning ||
+               m_draftLogic != AlarmLogic.All ||
+               !string.Equals(
+                   m_draftColor?.Trim(),
+                   "#F0C541",
+                   StringComparison.OrdinalIgnoreCase) ||
+               m_draftSoundIndex != 0 ||
+               m_draftSoundChanged ||
+               m_draftAutoAcknowledgeOnClear ||
+               m_draftValueMode != ConditionValueMode.Absolute ||
+               m_draftComparison != ComparisonOperator.Less ||
+               !string.Equals(
+                   m_draftThreshold?.Trim(),
+                   "0",
+                   StringComparison.Ordinal);
+    }
+
     private void DrawPanelRect(Rect rect, Color color)
     {
         var previous = GUI.color;
@@ -2752,17 +2995,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(m_editingRuleId))
-        {
-            m_pendingInspectorAlarmEntityId = entity.Id.Value;
-            m_entityAlarmWindowOpen = true;
-            m_openEntityAlarmAfterInspection = false;
-            SetStatus(
-                "Bitte wählen: Objekt zur bearbeiteten Meldung hinzufügen oder neue Meldung beginnen.");
-            return;
-        }
-
-        RequestEntityInspection(entity.Id.Value, true);
+        m_entityAssignmentPending = true;
+        m_assignmentEntityId = entity.Id.Value;
+        m_assignmentEntity = null;
+        m_entityAlarmWindowOpen = false;
+        m_isOpen = true;
+        m_tab = 0;
+        RequestEntityInspection(
+            entity.Id.Value,
+            false,
+            preserveCurrentSelection: true);
+        SetStatus(
+            "Objekt wird hinzugefügt. Danach eigene Meldung oder leeres Karree anklicken.");
     }
 
     private void CaptureSelectedEntity()
@@ -2785,12 +3029,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void RequestEntityInspection(
         int entityId,
-        bool openEntityAlarmWindow)
+        bool openEntityAlarmWindow,
+        bool preserveCurrentSelection = false)
     {
-        m_selectedEntity = null;
-        m_selectedMetrics = Array.Empty<MetricDescriptor>();
-        m_selectedMetricIndex = 0;
-        m_selectedReferenceMetricIndex = 0;
+        if (!preserveCurrentSelection && m_entityAssignmentPending)
+        {
+            CancelEntityAssignment();
+        }
+        if (!preserveCurrentSelection)
+        {
+            m_selectedEntity = null;
+            m_selectedMetrics = Array.Empty<MetricDescriptor>();
+            m_selectedMetricIndex = 0;
+            m_selectedReferenceMetricIndex = 0;
+        }
         m_pendingInspectionEntityId = entityId;
         m_isAutomaticInspectionRefresh = false;
         m_openEntityAlarmAfterInspection = openEntityAlarmWindow;
@@ -2812,13 +3064,41 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_pendingInspectionEntityId = -1;
         var automaticRefresh = m_isAutomaticInspectionRefresh;
         m_isAutomaticInspectionRefresh = false;
+        var assignmentInspection = m_entityAssignmentPending &&
+                                   inspection.EntityId ==
+                                   m_assignmentEntityId;
 
         if (!string.IsNullOrWhiteSpace(inspection.Error))
         {
-            m_selectedEntity = null;
-            m_selectedMetrics = Array.Empty<MetricDescriptor>();
-            m_openEntityAlarmAfterInspection = false;
+            if (assignmentInspection)
+            {
+                CancelEntityAssignment();
+            }
+            else
+            {
+                m_selectedEntity = null;
+                m_selectedMetrics = Array.Empty<MetricDescriptor>();
+                m_openEntityAlarmAfterInspection = false;
+            }
             SetStatus(inspection.Error);
+            return;
+        }
+
+        if (assignmentInspection)
+        {
+            if (inspection.Metrics == null ||
+                inspection.Metrics.Count == 0)
+            {
+                CancelEntityAssignment();
+                SetStatus(
+                    "Für diese Entität wurden keine Messwerte gefunden.");
+                return;
+            }
+            m_assignmentEntity = inspection;
+            SetStatus(
+                inspection.Title +
+                " hinzugefügt. Jetzt eigene Meldung oder leeres " +
+                "Karree anklicken.");
             return;
         }
 
@@ -2832,7 +3112,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ? m_selectedMetrics[m_selectedReferenceMetricIndex].Path
             : "";
         m_selectedEntity = inspection;
-        m_selectedMetrics = inspection.Metrics;
+        m_selectedMetrics = inspection.Metrics ??
+                            Array.Empty<MetricDescriptor>();
         m_selectedMetricIndex = automaticRefresh
             ? FindMetricIndex(selectedMetricPath)
             : 0;
@@ -3009,7 +3290,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         };
         var saved = isEditing
             ? m_runtime.UpdateRule(rule)
-            : m_runtime.AddRule(rule);
+            : m_runtime.AddRule(rule, m_draftPreferredSlotIndex);
         if (!saved)
         {
             SetStatus(
@@ -3031,6 +3312,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         AlarmRuleDefinition rule,
         IReadOnlyList<SoundOption> sounds)
     {
+        m_draftPreferredSlotIndex = -1;
         m_editingRuleId = rule.Id;
         m_draftTargetPanelId = rule.PanelId;
         m_draftRuleName = rule.Name;
@@ -3056,6 +3338,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void ResetDraftRule()
     {
+        m_draftPreferredSlotIndex = -1;
         m_editingRuleId = "";
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
@@ -3068,6 +3351,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = false;
         m_draftValueMode = ConditionValueMode.Absolute;
+        m_draftComparison = ComparisonOperator.Less;
+        m_draftThreshold = "0";
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
         m_conditionReferencePickerIndex = -1;
@@ -3164,6 +3449,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal))
         {
             m_draftTargetPanelId = CurrentPanel?.Id ?? "";
+            m_draftPreferredSlotIndex = -1;
         }
         m_detachedPanels.RemoveAll(item => item.PanelId == panelId);
         SetStatus("Panel und zugehörige eigene Meldungen gelöscht.");
@@ -3563,6 +3849,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             wordWrap = true,
             clipping = TextClipping.Clip,
             normal = { textColor = Color.black },
+        };
+        m_assignmentActionStyle = new GUIStyle(m_tileDetailStyle)
+        {
+            fontSize = 10,
+            fontStyle = FontStyle.Bold,
+            normal = { textColor = Color.white },
         };
         m_buttonStyle = MakeButtonStyle(
             "button",

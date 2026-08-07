@@ -278,6 +278,16 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public void CancelEntityInspectionRequest()
+    {
+        lock (m_inspectionGate)
+        {
+            m_inspectionRequestGeneration++;
+            m_requestedInspectionEntityId = -1;
+            m_completedInspection = null;
+        }
+    }
+
     public bool TryTakeCompletedInspection(
         out EntityInspectionSnapshot inspection)
     {
@@ -596,7 +606,9 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
-    public bool AddRule(AlarmRuleDefinition rule)
+    public bool AddRule(
+        AlarmRuleDefinition rule,
+        int preferredSlotIndex = -1)
     {
         if (rule == null)
         {
@@ -607,9 +619,33 @@ public sealed class UnmaRuntime : IDisposable
         {
             rule.Id = Guid.NewGuid().ToString("N");
         }
+        else
+        {
+            rule.Id = rule.Id.Trim();
+        }
         lock (m_configurationGate)
         {
+            if (Configuration.Rules.Any(existing =>
+                    string.Equals(
+                        existing?.Id,
+                        rule.Id,
+                        StringComparison.Ordinal)))
+            {
+                return false;
+            }
             Configuration.Rules.Add(rule);
+            if (preferredSlotIndex >= 0)
+            {
+                var panel = Configuration.Panels.FirstOrDefault(candidate =>
+                    string.Equals(
+                        candidate.Id,
+                        rule.PanelId,
+                        StringComparison.Ordinal));
+                PanelSlotProjection.InsertRuleSlot(
+                    panel,
+                    rule,
+                    preferredSlotIndex);
+            }
         }
         if (SaveConfiguration())
         {
@@ -620,6 +656,14 @@ public sealed class UnmaRuntime : IDisposable
         lock (m_configurationGate)
         {
             Configuration.Rules.Remove(rule);
+            var alarmId = "rule:" + rule.Id;
+            foreach (var panel in Configuration.Panels)
+            {
+                panel.Slots?.RemoveAll(slot => string.Equals(
+                    slot.AlarmId,
+                    alarmId,
+                    StringComparison.Ordinal));
+            }
         }
         return false;
     }

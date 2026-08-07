@@ -413,7 +413,7 @@ public sealed class UnmaConfiguration
         {
             rule.Id = string.IsNullOrWhiteSpace(rule.Id)
                 ? Guid.NewGuid().ToString("N")
-                : rule.Id;
+                : rule.Id.Trim();
             rule.PanelId ??= Panels[0].Id;
             rule.Name = string.IsNullOrWhiteSpace(rule.Name)
                 ? "MELDUNG"
@@ -903,15 +903,7 @@ public sealed class UnmaConfiguration
     private static PanelSlotDefinition CreateRulePanelSlot(
         AlarmRuleDefinition rule)
     {
-        return new PanelSlotDefinition
-        {
-            AlarmId = "rule:" + rule.Id,
-            DisplayName = rule.Name,
-            Detail = rule.Conditions.Count + " Bedingung(en)",
-            Source = "custom",
-            Severity = rule.Severity,
-            ActiveColor = rule.ActiveColor,
-        };
+        return PanelSlotProjection.CreateRuleSlot(rule);
     }
 
     private void MigrateAlarmHistory()

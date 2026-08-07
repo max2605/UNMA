@@ -6,6 +6,8 @@ namespace UNMA.Domain;
 
 public static class PanelSlotProjection
 {
+    private const string RulePrefix = "rule:";
+
     public static string StableAlarmId(AlarmView view)
     {
         if (view == null)
@@ -98,6 +100,72 @@ public static class PanelSlotProjection
                 Severity = source.Severity,
                 ActiveColor = source.ActiveColor,
             };
+    }
+
+    public static PanelSlotDefinition CreateRuleSlot(
+        AlarmRuleDefinition rule)
+    {
+        if (rule == null || string.IsNullOrWhiteSpace(rule.Id))
+        {
+            return null;
+        }
+        return new PanelSlotDefinition
+        {
+            AlarmId = RulePrefix + rule.Id.Trim(),
+            DisplayName = string.IsNullOrWhiteSpace(rule.Name)
+                ? "MELDUNG"
+                : rule.Name.Trim(),
+            Detail = (rule.Conditions?.Count ?? 0) + " Bedingung(en)",
+            Source = "custom",
+            Severity = rule.Severity,
+            ActiveColor = string.IsNullOrWhiteSpace(rule.ActiveColor)
+                ? "#F0C541"
+                : rule.ActiveColor,
+        };
+    }
+
+    public static bool InsertRuleSlot(
+        PanelDefinition panel,
+        AlarmRuleDefinition rule,
+        int preferredIndex)
+    {
+        var slot = CreateRuleSlot(rule);
+        if (panel == null || slot == null)
+        {
+            return false;
+        }
+        panel.Slots ??= new List<PanelSlotDefinition>();
+        if (panel.Slots.Any(candidate => string.Equals(
+                candidate?.AlarmId,
+                slot.AlarmId,
+                StringComparison.Ordinal)))
+        {
+            return false;
+        }
+        panel.Slots.Insert(
+            Math.Max(0, Math.Min(preferredIndex, panel.Slots.Count)),
+            slot);
+        return true;
+    }
+
+    public static bool TryGetCustomRuleId(
+        AlarmView view,
+        out string ruleId)
+    {
+        ruleId = "";
+        if (view == null ||
+            !string.Equals(view.Source, "custom", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var stableId = StableAlarmId(view);
+        if (!stableId.StartsWith(RulePrefix, StringComparison.Ordinal) ||
+            stableId.Length <= RulePrefix.Length)
+        {
+            return false;
+        }
+        ruleId = stableId.Substring(RulePrefix.Length).Trim();
+        return ruleId.Length > 0;
     }
 
     public static IReadOnlyList<AlarmView> Project(

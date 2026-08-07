@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 – 2026-08-07
+
+- Die UNMA-Glocke im Gebäude-/Entity-Inspector fügt das angeklickte Objekt
+  jetzt zuerst zur Meldetafel hinzu, statt sofort einen losgelösten Entwurf zu
+  öffnen.
+- Im sichtbaren Zuweisungsmodus kann anschließend eine vorhandene eigene
+  Meldung angeklickt werden. Ihre bisherigen Bedingungen bleiben erhalten und
+  das neue Objekt kann als weitere UND-/ODER-Bedingung verknüpft werden.
+- Ein hervorgehobenes `+ NEUE MELDUNG`-Karree startet eine neue Meldung genau
+  im gewählten Panel und belegt dort nach dem Speichern einen festen Schlitz.
+  Das Ziel erscheint auch auf leeren Panels und hinter einer vollständig
+  belegten Reihe.
+- Vanilla- und Systemschlitze werden im Zuweisungsmodus klar als reine Anzeigen
+  gekennzeichnet, da ihre Werkbedingungen nicht aus Entity-Regeln bestehen.
+- Ungespeicherte Entwürfe werden nicht mehr still durch eine neue
+  Schlitzzuweisung überschrieben. Abbruch und Inspektionsfehler verändern den
+  vorhandenen Entwurf nicht; ein geschlossenes Objektfenster kann später mit
+  derselben gewählten Schlitzposition fortgesetzt werden.
+- Stabile `rule:<id>`-Slot-IDs lösen bestehende Verknüpfungsziele unabhängig
+  vom wechselnden Laufzeitereignis auf; doppelte Regel-IDs werden vor jeder
+  Konfigurationsänderung abgewiesen.
+
 ## 0.6.1 – 2026-08-07
 
 - `HomelessLeft` bleibt jetzt über Monatswechsel hinweg genau eine stehende

@@ -45,7 +45,11 @@ Zielversion: Captain of Industry **0.8.6c**.
   Vanilla- und Systemmeldung; eigene Regeln wählen Ton, Alarmstufe,
   Aktivfarbe und Quittierverhalten direkt im Editor.
 - Goldene UNMA-Alarmglocke direkt im Inspector jeder unterstützten Entität;
-  ein Klick öffnet ein separates, objektgebundenes Alarmfenster.
+  ein Klick fügt das Objekt hinzu und öffnet die Meldetafel im sichtbaren
+  Zuweisungsmodus.
+- Auf der Meldetafel verknüpft ein Klick auf eine vorhandene eigene Meldung das
+  Objekt mit deren Bedingungen. Das hervorgehobene `+ NEUE MELDUNG`-Karree
+  startet stattdessen einen neuen Alarm an genau diesem festen Panelplatz.
 - AWL-artige Bedingungstabelle mit sichtbarem Ist-Wert, verständlicher Kennung,
   allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
@@ -91,14 +95,18 @@ Zielversion: Captain of Industry **0.8.6c**.
    `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
    gespeichert, bis sie dort ausdrücklich gelöscht werden.
 6. Für eine eigene Meldung die Entität anklicken und im geöffneten Inspector
-   die goldene UNMA-Glocke drücken. Das separate Objekt-Alarmfenster übernimmt
-   Name, ID und aktuelle Messwerte automatisch.
-7. Ziel-Meldetafel und Kennung wählen, eines der sechs Steuerzeichen anklicken,
-   Soll-Wert eingeben und die AWL-Zeile hinzufügen. Für relative Bedingungen
-   `% VON` und anschließend den Bezugs-Messwert wählen.
-8. Für eine Sammelmeldung weitere Entitäten über deren Glocke hinzufügen und
-   global UND oder ODER festlegen. Danach Text, Stufe, Farbe und Ton wählen.
-   Der **EDITOR** bietet denselben Ablauf sowie die klar getrennte Panelpflege.
+   die goldene UNMA-Glocke drücken. UNMA merkt Name, ID und Messwerte und zeigt
+   auf der **MELDETAFEL** dauerhaft den Zuweisungsmodus mit Abbruchknopf.
+7. Eine vorhandene **eigene** Meldung anklicken, um das Objekt als weitere
+   Bedingung zu verknüpfen. Für eine neue Meldung das hervorgehobene
+   `+ NEUE MELDUNG`-Karree anklicken; nach dem Speichern wird daraus an dieser
+   Stelle ein fester Schlitz.
+8. Im geöffneten Objekt-Alarmfenster Kennung und eines der sechs
+   Steuerzeichen wählen, Soll-Wert eingeben und die AWL-Zeile hinzufügen. Für
+   relative Bedingungen `% VON` und anschließend den Bezugs-Messwert wählen.
+   Die Meldung zunächst speichern, danach für Sammelmeldungen weitere Entitäten
+   ebenso hinzufügen und global UND oder ODER festlegen. Der **EDITOR** bietet
+   denselben Ablauf sowie die Panelpflege.
 9. Unter **TÖNE** können Ton und Verhalten beim Gehen für jede bereits
    bekannte Vanilla-Meldung separat festgelegt werden.
 10. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
@@ -148,6 +156,9 @@ oder Dateien mit einer Lizenz, die Weitergabe und Nutzung erlaubt.
   benutztes Objekt bietet zunächst nur Gesamtmenge und Füllstand an.
 - Die Transportkapazität beschreibt den momentanen Inhaltsraum, nicht den
   Durchsatz pro Zeit.
+- Vanilla- und Systemmeldungen besitzen eigene feste Auswertungsmodelle und
+  nehmen deshalb keine Entity-Bedingungen direkt auf. Zum Verknüpfen wird eine
+  eigene Meldung beziehungsweise das freie Plus-Karree verwendet.
 - Abgekoppelte Panels bleiben innerhalb des Hauptfensters. Die offizielle
   Mod-API stellt keine beliebig verschiebbaren nativen Betriebssystemfenster
   für Monitor 2, 3 usw. bereit. Das wäre ein separates Companion-Projekt mit
