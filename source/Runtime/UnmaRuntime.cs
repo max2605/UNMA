@@ -8,6 +8,7 @@ using Mafi;
 using Mafi.Core;
 using Mafi.Core.Buildings.Settlements;
 using Mafi.Core.Entities;
+using Mafi.Core.Entities.Static;
 using Mafi.Core.Notifications;
 using Mafi.Core.Population;
 using Mafi.Core.Simulation;
@@ -115,6 +116,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_systemMetricsGate = new();
     private readonly object m_persistenceGate = new();
     private readonly object m_externalDefinitionsGate = new();
+    private readonly object m_removedEntitiesGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
     private readonly IWorkersManager m_workersManager;
@@ -132,6 +134,11 @@ public sealed class UnmaRuntime : IDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool>
         m_externalAutoAcknowledgeByKey = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, IEntity> m_removedEntityCandidates = new();
+    private readonly Dictionary<int, int>
+        m_missingStaticEntityObservations = new();
+    private readonly Dictionary<string, bool> m_staticEntityTypeCache =
+        new(StringComparer.Ordinal);
 
     private long m_sequence;
     private long m_alarmHistoryRevision;
@@ -214,6 +221,7 @@ public sealed class UnmaRuntime : IDisposable
 
     public void Initialize()
     {
+        m_entitiesManager.EntityRemoved.Add(this, OnEntityRemoved);
         m_notificationsManager.NotificationAdded += OnNotificationAdded;
         m_notificationsManager.NotificationRemoved += OnNotificationRemoved;
         m_notificationsManager.NotificationSuppressChanged +=
@@ -1004,69 +1012,128 @@ public sealed class UnmaRuntime : IDisposable
     {
         lock (m_persistenceGate)
         {
-            return RemoveRuleWithPersistenceLock(ruleId);
+            return RemoveRulesWithPersistenceLock(
+                new[] { ruleId },
+                out _);
         }
     }
 
-    private bool RemoveRuleWithPersistenceLock(string ruleId)
+    private bool RemoveRulesWithPersistenceLock(
+        IEnumerable<string> ruleIds,
+        out int removedCount)
     {
-        AlarmRuleDefinition removedRule;
-        var removedIndex = -1;
+        removedCount = 0;
+        var requestedIds = new HashSet<string>(
+            (ruleIds ?? Enumerable.Empty<string>()).Where(
+                id => !string.IsNullOrWhiteSpace(id)),
+            StringComparer.Ordinal);
+        if (requestedIds.Count == 0)
+        {
+            return false;
+        }
+
+        List<AlarmRuleDefinition> previousRules;
+        Dictionary<PanelDefinition, List<PanelSlotDefinition>>
+            previousPanelSlots;
+        Dictionary<PanelDefinition, List<string>> previousExcludedAlarmIds;
+        AlarmRuleDefinition[] removedRules;
         lock (m_configurationGate)
         {
-            removedIndex = Configuration.Rules.FindIndex(
-                rule => string.Equals(
-                    rule.Id,
-                    ruleId,
-                    StringComparison.Ordinal));
-            if (removedIndex < 0)
+            removedRules = Configuration.Rules
+                .Where(rule => rule != null && requestedIds.Contains(rule.Id))
+                .ToArray();
+            if (removedRules.Length == 0)
             {
                 return false;
             }
-            removedRule = Configuration.Rules[removedIndex];
-            Configuration.Rules.RemoveAt(removedIndex);
+            previousRules = Configuration.Rules.ToList();
+            previousPanelSlots = Configuration.Panels.ToDictionary(
+                panel => panel,
+                panel => (panel.Slots ?? new List<PanelSlotDefinition>())
+                    .Select(PanelSlotProjection.CloneSlot)
+                    .ToList());
+            previousExcludedAlarmIds = Configuration.Panels.ToDictionary(
+                panel => panel,
+                panel => (panel.ExcludedAlarmIds ?? new List<string>())
+                    .ToList());
+            Configuration.Rules.RemoveAll(rule =>
+                rule != null && requestedIds.Contains(rule.Id));
+            var removedAlarmIds = new HashSet<string>(
+                removedRules.Select(rule => "rule:" + rule.Id),
+                StringComparer.Ordinal);
+            foreach (var panel in Configuration.Panels)
+            {
+                panel.Slots?.RemoveAll(slot =>
+                    slot != null && removedAlarmIds.Contains(slot.AlarmId));
+                panel.ExcludedAlarmIds?.RemoveAll(removedAlarmIds.Contains);
+            }
         }
 
-        AlarmState removedAlarmState = null;
+        var removedAlarmStates = new Dictionary<string, AlarmState>(
+            StringComparer.Ordinal);
         List<AlarmHistoryDefinition> previousHistory;
+        long previousHistoryRevision;
         lock (m_gate)
         {
             previousHistory = m_alarmHistory
                 .Select(CloneHistory)
                 .ToList();
-            var alarmKey = "rule:" + ruleId;
-            m_alarms.TryGetValue(alarmKey, out removedAlarmState);
-            if (removedAlarmState != null &&
-                CloseHistoryLocked(
-                    removedAlarmState.Sequence,
-                    removedAlarmState.View.IsAcknowledged))
+            previousHistoryRevision = m_alarmHistoryRevision;
+            var historyChanged = false;
+            foreach (var removedRule in removedRules)
+            {
+                var alarmKey = "rule:" + removedRule.Id;
+                if (m_alarms.TryGetValue(alarmKey, out var removedState))
+                {
+                    removedAlarmStates[alarmKey] = removedState;
+                    historyChanged |= CloseHistoryLocked(
+                        removedState.Sequence,
+                        removedState.View.IsAcknowledged);
+                }
+                m_alarms.Remove(alarmKey);
+            }
+            if (historyChanged)
             {
                 m_alarmHistoryRevision++;
             }
-            m_alarms.Remove(alarmKey);
         }
 
         if (!SaveConfiguration())
         {
             lock (m_configurationGate)
             {
-                Configuration.Rules.Insert(removedIndex, removedRule);
-            }
-            if (removedAlarmState != null)
-            {
-                lock (m_gate)
+                Configuration.Rules.Clear();
+                Configuration.Rules.AddRange(previousRules);
+                foreach (var pair in previousPanelSlots)
                 {
-                    m_alarms["rule:" + ruleId] = removedAlarmState;
+                    pair.Key.Slots = pair.Value;
+                }
+                foreach (var pair in previousExcludedAlarmIds)
+                {
+                    pair.Key.ExcludedAlarmIds = pair.Value;
                 }
             }
             lock (m_gate)
             {
+                foreach (var pair in removedAlarmStates)
+                {
+                    m_alarms[pair.Key] = pair.Value;
+                }
                 m_alarmHistory.Clear();
                 m_alarmHistory.AddRange(previousHistory);
-                m_alarmHistoryRevision++;
+                m_alarmHistoryRevision = previousHistoryRevision;
+            }
+            CapturePersistentAlarmState(
+                out var restoredMemories,
+                out var restoredHistory);
+            lock (m_configurationGate)
+            {
+                Configuration.AlarmMemories = restoredMemories;
+                Configuration.AlarmHistory = restoredHistory;
             }
             return false;
         }
+        removedCount = removedRules.Length;
         return true;
     }
 
@@ -1601,6 +1668,7 @@ public sealed class UnmaRuntime : IDisposable
         m_notificationsManager.NotificationRemoved -= OnNotificationRemoved;
         m_notificationsManager.NotificationSuppressChanged -=
             OnNotificationSuppressChanged;
+        m_entitiesManager.EntityRemoved.Remove(this, OnEntityRemoved);
     }
 
     private void OnUpdateEndForUi()
@@ -1623,6 +1691,7 @@ public sealed class UnmaRuntime : IDisposable
             Interlocked.Exchange(
                 ref m_nextEvaluationTimestamp,
                 now + Stopwatch.Frequency * intervalMs / 1000L);
+            ProcessRemovedEntities();
             Evaluate();
         }
         catch (Exception exception)
@@ -1637,6 +1706,202 @@ public sealed class UnmaRuntime : IDisposable
                     $"UNMA: Alarm-Auswertung fehlgeschlagen: {exception.Message}");
             }
         }
+    }
+
+    private void OnEntityRemoved(IEntity entity)
+    {
+        if (m_disposed || entity == null)
+        {
+            return;
+        }
+        lock (m_removedEntitiesGate)
+        {
+            m_removedEntityCandidates[entity.Id.Value] = entity;
+        }
+        Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+    }
+
+    private void ProcessRemovedEntities()
+    {
+        KeyValuePair<int, IEntity>[] candidates;
+        lock (m_removedEntitiesGate)
+        {
+            if (m_removedEntityCandidates.Count == 0)
+            {
+                return;
+            }
+            candidates = m_removedEntityCandidates.ToArray();
+        }
+
+        var confirmed = new List<KeyValuePair<int, IEntity>>();
+        foreach (var candidate in candidates)
+        {
+            var current = m_entitiesManager.GetEntity(
+                new EntityId(candidate.Key));
+            var hasLiveReplacement = !current.IsNone &&
+                                     !current.Value.IsDestroyed;
+            if (CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
+                    candidate.Value.IsDestroyed,
+                    hasLiveReplacement))
+            {
+                confirmed.Add(candidate);
+            }
+        }
+
+        lock (m_removedEntitiesGate)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (m_removedEntityCandidates.TryGetValue(
+                        candidate.Key,
+                        out var currentCandidate) &&
+                    ReferenceEquals(currentCandidate, candidate.Value))
+                {
+                    m_removedEntityCandidates.Remove(candidate.Key);
+                }
+            }
+        }
+
+        if (confirmed.Count == 0)
+        {
+            return;
+        }
+        if (!TryRemoveRulesReferencingEntities(
+                confirmed.Select(candidate => candidate.Key),
+                out _))
+        {
+            lock (m_removedEntitiesGate)
+            {
+                foreach (var candidate in confirmed)
+                {
+                    if (!m_removedEntityCandidates.ContainsKey(candidate.Key))
+                    {
+                        m_removedEntityCandidates[candidate.Key] =
+                            candidate.Value;
+                    }
+                }
+            }
+        }
+    }
+
+    private bool TryRemoveRulesReferencingEntities(
+        IEnumerable<int> entityIds,
+        out int removedCount)
+    {
+        removedCount = 0;
+        var removedEntityIds = new HashSet<int>(
+            entityIds ?? Enumerable.Empty<int>());
+        if (removedEntityIds.Count == 0)
+        {
+            return true;
+        }
+
+        string[] ruleIds;
+        lock (m_persistenceGate)
+        {
+            lock (m_configurationGate)
+            {
+                ruleIds = CustomRuleLifecyclePolicy
+                    .FindRulesReferencingEntities(
+                        Configuration.Rules,
+                        removedEntityIds)
+                    .ToArray();
+            }
+            if (ruleIds.Length == 0)
+            {
+                return true;
+            }
+            if (!RemoveRulesWithPersistenceLock(ruleIds, out removedCount))
+            {
+                return false;
+            }
+        }
+
+        Log.Info(
+            "UNMA: " + removedCount +
+            " Meldung(en) entfernter Entitäten automatisch gelöscht.");
+        foreach (var entityId in removedEntityIds)
+        {
+            m_missingStaticEntityObservations.Remove(entityId);
+        }
+        return true;
+    }
+
+    private int[] ObserveMissingStaticRuleEntities(
+        IReadOnlyList<AlarmRuleDefinition> rules)
+    {
+        var staticEntityIds = new HashSet<int>(
+            (rules ?? Array.Empty<AlarmRuleDefinition>())
+            .Where(rule => rule?.Conditions != null)
+            .SelectMany(rule => rule.Conditions)
+            .Where(condition =>
+                condition != null && IsStaticEntityType(condition.EntityType))
+            .Select(condition => condition.EntityId));
+        foreach (var staleId in m_missingStaticEntityObservations.Keys
+                     .Where(id => !staticEntityIds.Contains(id))
+                     .ToArray())
+        {
+            m_missingStaticEntityObservations.Remove(staleId);
+        }
+
+        var confirmed = new List<int>();
+        foreach (var entityId in staticEntityIds)
+        {
+            var entity = m_entitiesManager.GetEntity(new EntityId(entityId));
+            if (!entity.IsNone && !entity.Value.IsDestroyed)
+            {
+                m_missingStaticEntityObservations.Remove(entityId);
+                continue;
+            }
+            if (!entity.IsNone)
+            {
+                confirmed.Add(entityId);
+                continue;
+            }
+
+            m_missingStaticEntityObservations.TryGetValue(
+                entityId,
+                out var observations);
+            observations++;
+            m_missingStaticEntityObservations[entityId] = observations;
+            if (CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(
+                    observations))
+            {
+                confirmed.Add(entityId);
+            }
+        }
+        return confirmed.ToArray();
+    }
+
+    private bool IsStaticEntityType(string entityTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(entityTypeName))
+        {
+            return false;
+        }
+        if (m_staticEntityTypeCache.TryGetValue(
+                entityTypeName,
+                out var cached))
+        {
+            return cached;
+        }
+
+        Type entityType = null;
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            entityType = assembly.GetType(
+                entityTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (entityType != null)
+            {
+                break;
+            }
+        }
+        var isStatic = entityType != null &&
+                       typeof(IStaticEntity).IsAssignableFrom(entityType);
+        m_staticEntityTypeCache[entityTypeName] = isStatic;
+        return isStatic;
     }
 
     private void ProcessRequestedEntityInspection()
@@ -2097,6 +2362,22 @@ public sealed class UnmaRuntime : IDisposable
             rules = Configuration.Rules
                 .Select(CloneRuleForEvaluation)
                 .ToArray();
+        }
+
+        var missingStaticEntityIds =
+            ObserveMissingStaticRuleEntities(rules);
+        if (missingStaticEntityIds.Length > 0 &&
+            TryRemoveRulesReferencingEntities(
+                missingStaticEntityIds,
+                out var removedCount) &&
+            removedCount > 0)
+        {
+            lock (m_configurationGate)
+            {
+                rules = Configuration.Rules
+                    .Select(CloneRuleForEvaluation)
+                    .ToArray();
+            }
         }
 
         foreach (var rule in rules)

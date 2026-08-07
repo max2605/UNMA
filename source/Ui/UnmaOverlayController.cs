@@ -245,6 +245,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ApplyCompletedInspection(inspection);
         }
 
+        if (!string.IsNullOrWhiteSpace(m_editingRuleId) &&
+            !m_runtime.Configuration.Rules.Any(rule => string.Equals(
+                rule.Id,
+                m_editingRuleId,
+                StringComparison.Ordinal)))
+        {
+            ResetDraftRule();
+            m_entityAlarmWindowOpen = false;
+            SetStatus(
+                "Die bearbeitete Meldung wurde entfernt, weil ihre " +
+                "überwachte Entity nicht mehr existiert.");
+        }
+
         var alarmEditorVisible = m_entityAlarmWindowOpen ||
                                  m_isOpen && m_tab == 2;
         if (alarmEditorVisible &&

@@ -95,6 +95,11 @@ Zielversion: Captain of Industry **0.8.6c**.
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
   Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern
   und Neuladen.
+- Beim endgültigen Abriss beziehungsweise Zerstören einer überwachten Entity
+  löscht UNMA deren eigene Regel samt festem Schlitz und aktivem Zustand
+  automatisch. Bei einer Sammelmeldung wird die ganze UND-/ODER-Regel entfernt,
+  damit ihre Logik nicht still verändert wird. Historische KG/KGQ-Einträge
+  bleiben im Verlauf; temporär despawnte Fahrzeuge werden nicht gelöscht.
   Beschädigte Konfigurationen werden gesichert und durch sichere Standardwerte
   ersetzt.
 

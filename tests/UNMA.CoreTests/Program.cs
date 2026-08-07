@@ -25,6 +25,7 @@ internal static class Program
         TestSystemAlarmSelection();
         TestSystemMetricMath();
         TestWindowResizeMath();
+        TestCustomRuleLifecyclePolicy();
         TestPanelSlotProjection();
         TestConfigurationRoundTrip();
         TestAlarmHistoryRoundTrip();
@@ -209,6 +210,114 @@ internal static class Program
             980f, 1000f, 700f, 1908f));
         AreEqual(700f, WindowResizeMath.ResizeExtent(
             980f, 100f, 700f, 600f));
+    }
+
+    private static void TestCustomRuleLifecyclePolicy()
+    {
+        IsTrue(CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
+            removedEntityIsDestroyed: true,
+            hasLiveReplacement: false));
+        IsFalse(CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
+            removedEntityIsDestroyed: false,
+            hasLiveReplacement: false));
+        IsFalse(CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
+            removedEntityIsDestroyed: true,
+            hasLiveReplacement: true));
+        IsFalse(CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
+            removedEntityIsDestroyed: false,
+            hasLiveReplacement: true));
+        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(0));
+        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(1));
+        IsTrue(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(2));
+        IsTrue(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(3));
+
+        var allRule = new AlarmRuleDefinition
+        {
+            Id = "all-rule",
+            Logic = AlarmLogic.All,
+            Conditions = new List<ConditionDefinition>
+            {
+                new() { EntityId = 1 },
+                new() { EntityId = 2 },
+            },
+        };
+        var anyRule = new AlarmRuleDefinition
+        {
+            Id = "any-rule",
+            Logic = AlarmLogic.Any,
+            Conditions = new List<ConditionDefinition>
+            {
+                new() { EntityId = 3 },
+                new() { EntityId = 4 },
+            },
+        };
+        var disabledRule = new AlarmRuleDefinition
+        {
+            Id = "disabled-rule",
+            Enabled = false,
+            Conditions = new List<ConditionDefinition>
+            {
+                new() { EntityId = 1 },
+            },
+        };
+        var unrelatedRule = new AlarmRuleDefinition
+        {
+            Id = "unrelated-rule",
+            Conditions = new List<ConditionDefinition>
+            {
+                new() { EntityId = 99 },
+            },
+        };
+        var malformedRule = new AlarmRuleDefinition
+        {
+            Id = "malformed-rule",
+            Conditions = new List<ConditionDefinition> { null },
+        };
+        var blankIdRule = new AlarmRuleDefinition
+        {
+            Id = " ",
+            Conditions = new List<ConditionDefinition>
+            {
+                new() { EntityId = 2 },
+            },
+        };
+
+        var oneRemoved = CustomRuleLifecyclePolicy
+            .FindRulesReferencingEntities(
+                new[] { allRule, anyRule, disabledRule, unrelatedRule },
+                new[] { 2 });
+        AreEqual(1, oneRemoved.Count);
+        AreEqual("all-rule", oneRemoved[0]);
+
+        var severalRemoved = CustomRuleLifecyclePolicy
+            .FindRulesReferencingEntities(
+                new AlarmRuleDefinition[]
+                {
+                    allRule,
+                    anyRule,
+                    disabledRule,
+                    unrelatedRule,
+                    malformedRule,
+                    blankIdRule,
+                    allRule,
+                    null,
+                },
+                new[] { 1, 2, 4 });
+        AreEqual(3, severalRemoved.Count);
+        AreEqual("all-rule", severalRemoved[0]);
+        AreEqual("any-rule", severalRemoved[1]);
+        AreEqual("disabled-rule", severalRemoved[2]);
+
+        AreEqual(0, CustomRuleLifecyclePolicy
+            .FindRulesReferencingEntities(
+                new[] { allRule },
+                Array.Empty<int>())
+            .Count);
+        AreEqual(0, CustomRuleLifecyclePolicy
+            .FindRulesReferencingEntities(
+                null,
+                new[] { 1 })
+            .Count);
     }
 
     private static void TestAlarmLatch()

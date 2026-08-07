@@ -2,6 +2,12 @@
 
 ## 0.8.0 – 2026-08-07
 
+- Wird eine überwachte Entity tatsächlich zerstört oder ein Gebäude
+  abgerissen, entfernt UNMA automatisch alle davon abhängigen eigenen Regeln,
+  festen Meldeschlitze und aktiven Zustände. Sammelmeldungen werden dabei als
+  unteilbare UND-/ODER-Regel behandelt; ihr Verlauf bleibt als KG/KGQ erhalten.
+- Temporäre Entity-Entfernungen wie Fahrzeug-/Zug-Despawn oder ein lebender
+  Ersatz unter derselben ID lösen ausdrücklich keine automatische Löschung aus.
 - Der Größenänderungsgriff der Haupttafel besitzt jetzt eine klar sichtbare,
   deckungsgleiche Trefferfläche und exklusiven Mauszeiger-Fokus. Ziehen im
   Fensterinhalt kann dadurch keine hängen gebliebene Skalierung mehr fortsetzen.
