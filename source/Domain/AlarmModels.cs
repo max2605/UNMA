@@ -29,6 +29,12 @@ public enum ComparisonOperator
     Greater = 5,
 }
 
+public enum ConditionValueMode
+{
+    Absolute = 0,
+    PercentOfReference = 1,
+}
+
 [DataContract]
 public sealed class ConditionDefinition
 {
@@ -41,6 +47,9 @@ public sealed class ConditionDefinition
     [DataMember(Order = 7)] public double Threshold;
     [DataMember(Order = 8)] public string ExpectedProductId = "";
     [DataMember(Order = 9)] public string EntityPrototypeId = "";
+    [DataMember(Order = 10)] public ConditionValueMode ValueMode;
+    [DataMember(Order = 11)] public string ReferenceMetricPath = "";
+    [DataMember(Order = 12)] public string ReferenceMetricLabel = "";
 }
 
 [DataContract]
@@ -166,7 +175,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 6;
+    [DataMember(Order = 1)] public int SchemaVersion = 7;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -384,6 +393,25 @@ public sealed class UnmaConfiguration
                 ? "MELDUNG"
                 : rule.Name.Trim();
             rule.Conditions ??= new List<ConditionDefinition>();
+            rule.Conditions.RemoveAll(condition => condition == null);
+            foreach (var condition in rule.Conditions)
+            {
+                condition.EntityTitle ??= "";
+                condition.EntityType ??= "";
+                condition.MetricPath = condition.MetricPath?.Trim() ?? "";
+                condition.MetricLabel ??= "";
+                condition.ExpectedProductId ??= "";
+                condition.EntityPrototypeId ??= "";
+                if (condition.ValueMode != ConditionValueMode.Absolute &&
+                    condition.ValueMode !=
+                    ConditionValueMode.PercentOfReference)
+                {
+                    condition.ValueMode = ConditionValueMode.Absolute;
+                }
+                condition.ReferenceMetricPath =
+                    condition.ReferenceMetricPath?.Trim() ?? "";
+                condition.ReferenceMetricLabel ??= "";
+            }
             rule.ActiveColor ??= "#F0C541";
             rule.SoundId ??= "auto";
         }
@@ -450,7 +478,7 @@ public sealed class UnmaConfiguration
         {
             MigrateSystemSoundOverrides();
         }
-        SchemaVersion = Math.Max(SchemaVersion, 6);
+        SchemaVersion = Math.Max(SchemaVersion, 7);
     }
 
     private void MigrateAlarmHistory()
@@ -682,6 +710,39 @@ public sealed class AlarmView
 public static class AlarmEvaluation
 {
     private const double EqualityTolerance = 0.000001d;
+
+    public static bool TryCalculateComparable(
+        double actual,
+        ConditionValueMode valueMode,
+        double reference,
+        out double comparable)
+    {
+        comparable = 0d;
+        if (!IsFinite(actual))
+        {
+            return false;
+        }
+
+        if (valueMode == ConditionValueMode.Absolute)
+        {
+            comparable = actual;
+            return true;
+        }
+
+        if (valueMode != ConditionValueMode.PercentOfReference ||
+            !IsFinite(reference) || reference <= EqualityTolerance)
+        {
+            return false;
+        }
+
+        comparable = actual / reference * 100d;
+        return IsFinite(comparable);
+    }
+
+    private static bool IsFinite(double value)
+    {
+        return !double.IsNaN(value) && !double.IsInfinity(value);
+    }
 
     public static bool Compare(
         double actual,

@@ -1600,19 +1600,89 @@ public sealed class UnmaRuntime : IDisposable
                 continue;
             }
 
-            lastValue = actual;
+            var reference = 0d;
+            if (condition.ValueMode ==
+                ConditionValueMode.PercentOfReference &&
+                (string.IsNullOrWhiteSpace(
+                     condition.ReferenceMetricPath) ||
+                 !EntityMetricCatalog.TryRead(
+                     entity,
+                     condition.ReferenceMetricPath,
+                     out reference)))
+            {
+                missingSource = true;
+                values.Add(false);
+                details.Add(
+                    condition.EntityTitle + ": Bezugsmesswert fehlt");
+                continue;
+            }
+
+            if (!AlarmEvaluation.TryCalculateComparable(
+                    actual,
+                    condition.ValueMode,
+                    reference,
+                    out var comparable))
+            {
+                missingSource = true;
+                values.Add(false);
+                details.Add(
+                    condition.EntityTitle + " · " +
+                    condition.MetricLabel +
+                    ": Bezug nicht berechenbar (ist " +
+                    actual.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) +
+                    ", Bezug " +
+                    reference.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + ")");
+                continue;
+            }
+
+            lastValue = comparable;
             var matches = AlarmEvaluation.Compare(
-                actual,
+                comparable,
                 condition.Comparison,
                 condition.Threshold);
             values.Add(matches);
-            details.Add(
-                condition.EntityTitle + " · " +
-                condition.MetricLabel + " " +
-                OperatorText(condition.Comparison) + " " +
-                condition.Threshold.ToString("0.###", CultureInfo.CurrentCulture) +
-                " (ist " +
-                actual.ToString("0.###", CultureInfo.CurrentCulture) + ")");
+            if (condition.ValueMode ==
+                ConditionValueMode.PercentOfReference)
+            {
+                var referenceLabel = string.IsNullOrWhiteSpace(
+                    condition.ReferenceMetricLabel)
+                    ? condition.ReferenceMetricPath
+                    : condition.ReferenceMetricLabel;
+                details.Add(
+                    condition.EntityTitle + " · " +
+                    condition.MetricLabel + " % von " + referenceLabel +
+                    " " + OperatorText(condition.Comparison) + " " +
+                    condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + " % (ist " +
+                    comparable.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + " %; " +
+                    actual.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + " / " +
+                    reference.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + ")");
+            }
+            else
+            {
+                details.Add(
+                    condition.EntityTitle + " · " +
+                    condition.MetricLabel + " " +
+                    OperatorText(condition.Comparison) + " " +
+                    condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) +
+                    " (ist " +
+                    actual.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + ")");
+            }
         }
 
         var isActive = AlarmEvaluation.Combine(values, rule.Logic);
@@ -2229,6 +2299,9 @@ public sealed class UnmaRuntime : IDisposable
                     Threshold = condition.Threshold,
                     ExpectedProductId = condition.ExpectedProductId,
                     EntityPrototypeId = condition.EntityPrototypeId,
+                    ValueMode = condition.ValueMode,
+                    ReferenceMetricPath = condition.ReferenceMetricPath,
+                    ReferenceMetricLabel = condition.ReferenceMetricLabel,
                 }).ToList(),
         };
     }

@@ -13,6 +13,7 @@ internal static class Program
     private static void Main()
     {
         TestComparisons();
+        TestComparableValues();
         TestBooleanLogic();
         TestAlarmLatch();
         TestAlarmHistoryState();
@@ -42,6 +43,90 @@ internal static class Program
             20));
         IsTrue(AlarmEvaluation.Compare(21, ComparisonOperator.Greater, 20));
         IsFalse(AlarmEvaluation.Compare(20, ComparisonOperator.Less, 20));
+    }
+
+    private static void TestComparableValues()
+    {
+        IsTrue(AlarmEvaluation.TryCalculateComparable(
+            42d,
+            ConditionValueMode.Absolute,
+            double.NaN,
+            out var absolute));
+        AreEqual(42d, absolute);
+
+        IsTrue(AlarmEvaluation.TryCalculateComparable(
+            25d,
+            ConditionValueMode.PercentOfReference,
+            100d,
+            out var percent));
+        AreEqual(25d, percent);
+        IsTrue(AlarmEvaluation.Compare(
+            percent,
+            ComparisonOperator.Less,
+            30d));
+        IsTrue(AlarmEvaluation.Compare(
+            percent,
+            ComparisonOperator.LessOrEqual,
+            25d));
+        IsTrue(AlarmEvaluation.Compare(
+            percent,
+            ComparisonOperator.Equal,
+            25d));
+        IsTrue(AlarmEvaluation.Compare(
+            percent,
+            ComparisonOperator.NotEqual,
+            24d));
+        IsTrue(AlarmEvaluation.Compare(
+            percent,
+            ComparisonOperator.GreaterOrEqual,
+            25d));
+        IsTrue(AlarmEvaluation.Compare(
+            percent,
+            ComparisonOperator.Greater,
+            20d));
+
+        IsTrue(AlarmEvaluation.TryCalculateComparable(
+            150d,
+            ConditionValueMode.PercentOfReference,
+            100d,
+            out var overCapacity));
+        AreEqual(150d, overCapacity);
+
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            10d,
+            ConditionValueMode.PercentOfReference,
+            0d,
+            out _));
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            10d,
+            ConditionValueMode.PercentOfReference,
+            -1d,
+            out _));
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            double.NaN,
+            ConditionValueMode.PercentOfReference,
+            100d,
+            out _));
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            double.PositiveInfinity,
+            ConditionValueMode.PercentOfReference,
+            100d,
+            out _));
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            10d,
+            ConditionValueMode.PercentOfReference,
+            double.NaN,
+            out _));
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            10d,
+            ConditionValueMode.PercentOfReference,
+            double.PositiveInfinity,
+            out _));
+        IsFalse(AlarmEvaluation.TryCalculateComparable(
+            10d,
+            (ConditionValueMode)999,
+            100d,
+            out _));
     }
 
     private static void TestBooleanLogic()
@@ -409,6 +494,9 @@ internal static class Program
                     MetricLabel = "Produkte / Count",
                     Comparison = ComparisonOperator.Less,
                     Threshold = 20,
+                    ValueMode = ConditionValueMode.PercentOfReference,
+                    ReferenceMetricPath = "$transport.capacity",
+                    ReferenceMetricLabel = "Transportkapazität",
                 },
             },
         });
@@ -447,7 +535,16 @@ internal static class Program
         AreEqual(1, restored.SoundOverrides.Count);
         AreEqual("siren", restored.SoundOverrides[0].SoundId);
         IsTrue(restored.SoundOverrides[0].AutoAcknowledgeOnClear);
-        AreEqual(6, restored.SchemaVersion);
+        AreEqual(7, restored.SchemaVersion);
+        AreEqual(
+            ConditionValueMode.PercentOfReference,
+            restored.Rules[0].Conditions[1].ValueMode);
+        AreEqual(
+            "$transport.capacity",
+            restored.Rules[0].Conditions[1].ReferenceMetricPath);
+        AreEqual(
+            "Transportkapazität",
+            restored.Rules[0].Conditions[1].ReferenceMetricLabel);
         AreEqual(3, restored.SystemAlarms.Count);
         IsTrue(restored.Rules[0].AutoAcknowledgeOnClear);
         var restoredSystemAlarm = restored.SystemAlarms
@@ -527,7 +624,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(6, restored.SchemaVersion);
+        AreEqual(7, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -554,7 +651,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(6, oldConfiguration.SchemaVersion);
+        AreEqual(7, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
@@ -574,7 +671,8 @@ internal static class Program
             "\"Panels\":[{\"Id\":\"main\",\"Name\":\"ALT\"," +
             "\"Columns\":3}]," +
             "\"Rules\":[{\"Id\":\"legacy\",\"PanelId\":\"main\"," +
-            "\"Name\":\"ALTE MELDUNG\",\"Conditions\":[]}]," +
+            "\"Name\":\"ALTE MELDUNG\",\"Conditions\":[{" +
+            "\"EntityId\":42,\"MetricPath\":\" value \"}]}]," +
             "\"SoundOverrides\":[{\"AlarmId\":\"vanilla:test\"," +
             "\"SoundId\":\"horn\"}]}";
         using var legacyStream = new MemoryStream(
@@ -582,7 +680,13 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(6, legacy.SchemaVersion);
+        AreEqual(7, legacy.SchemaVersion);
+        AreEqual(
+            ConditionValueMode.Absolute,
+            legacy.Rules[0].Conditions[0].ValueMode);
+        AreEqual("value", legacy.Rules[0].Conditions[0].MetricPath);
+        AreEqual("", legacy.Rules[0].Conditions[0].ReferenceMetricPath);
+        AreEqual("", legacy.Rules[0].Conditions[0].ReferenceMetricLabel);
         IsFalse(legacy.Rules[0].AutoAcknowledgeOnClear);
         IsFalse(legacy.SoundOverrides[0].AutoAcknowledgeOnClear);
         IsTrue(legacy.SystemAlarms.TrueForAll(alarm =>
@@ -616,7 +720,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(6, versionFive.SchemaVersion);
+        AreEqual(7, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",

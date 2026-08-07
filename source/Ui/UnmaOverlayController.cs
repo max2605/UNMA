@@ -33,6 +33,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     }
 
     private const int MainWindowId = 0x554E4D41;
+    private const int EntityAlarmWindowId = 0x4D4E5541;
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
 
@@ -57,14 +58,25 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private UnmaRuntime m_runtime;
     private InspectorsManager m_inspectorsManager;
     private UnmaAudioController m_audio;
+    private InspectorAlarmButtonBridge m_inspectorAlarmButtons;
     private Rect m_windowRect;
     private Rect m_launcherRect;
+    private Rect m_entityAlarmWindowRect = new(180f, 110f, 1080f, 720f);
     private Vector2 m_boardScroll;
     private Vector2 m_historyScroll;
     private Vector2 m_editorScroll;
+    private Vector2 m_entityAlarmScroll;
+    private Vector2 m_metricPickerScroll;
+    private Vector2 m_referenceMetricPickerScroll;
     private Vector2 m_soundOverrideScroll;
     private Vector2 m_systemAlarmScroll;
     private bool m_isOpen;
+    private bool m_entityAlarmWindowOpen;
+    private bool m_openEntityAlarmAfterInspection;
+    private int m_pendingInspectionEntityId = -1;
+    private int m_pendingInspectorAlarmEntityId = -1;
+    private bool m_isAutomaticInspectionRefresh;
+    private float m_nextEntityInspectionRefresh;
     private bool m_stylesReady;
     private int m_tab;
     private int m_currentPanelIndex;
@@ -82,6 +94,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private IReadOnlyList<MetricDescriptor> m_selectedMetrics =
         Array.Empty<MetricDescriptor>();
     private int m_selectedMetricIndex;
+    private int m_selectedReferenceMetricIndex;
+    private bool m_metricPickerOpen;
+    private bool m_referenceMetricPickerOpen;
+    private int m_conditionReferencePickerIndex = -1;
+    private string m_metricPickerFilter = "";
+    private string m_referenceMetricPickerFilter = "";
+    private ConditionValueMode m_draftValueMode = ConditionValueMode.Absolute;
     private ComparisonOperator m_draftComparison =
         ComparisonOperator.Less;
     private AlarmSeverity m_draftSeverity = AlarmSeverity.Warning;
@@ -94,6 +113,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_draftSoundChanged;
     private bool m_draftAutoAcknowledgeOnClear;
     private string m_editingRuleId = "";
+    private string m_draftTargetPanelId = "";
     private string m_newPanelName = "NEUES PANEL";
     private string m_soundOverrideFilter = "";
     private SystemAlarmDefinition m_systemAlarmDraft;
@@ -101,6 +121,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         new(StringComparer.Ordinal);
     private string m_pendingSystemResetId = "";
     private float m_pendingSystemResetUntil;
+    private string m_pendingPanelDeleteId = "";
+    private float m_pendingPanelDeleteUntil;
     private float m_pendingHistoryDeleteUntil;
     private string m_statusMessage = "";
     private float m_statusMessageUntil;
@@ -151,8 +173,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_runtime = runtime;
         m_inspectorsManager = inspectorsManager;
         m_audio = audio;
+        m_inspectorAlarmButtons = new InspectorAlarmButtonBridge(
+            inspectorsManager,
+            BeginEntityAlarmFromInspector);
         m_isOpen = runtime.Settings.ShowOnGameStart;
         var config = runtime.Configuration;
+        m_draftTargetPanelId = config.Panels.FirstOrDefault()?.Id ?? "";
         m_windowRect = new Rect(
             config.WindowX,
             config.WindowY,
@@ -191,9 +217,28 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         m_isUiSuppressedByMenu = !IsGameplayActive();
 
+        if (!m_isUiSuppressedByMenu)
+        {
+            m_inspectorAlarmButtons?.Update();
+        }
+
         if (m_runtime.TryTakeCompletedInspection(out var inspection))
         {
             ApplyCompletedInspection(inspection);
+        }
+
+        var alarmEditorVisible = m_entityAlarmWindowOpen ||
+                                 m_isOpen && m_tab == 2;
+        if (alarmEditorVisible &&
+            m_selectedEntity != null &&
+            m_pendingInspectionEntityId < 0 &&
+            Time.realtimeSinceStartup >= m_nextEntityInspectionRefresh)
+        {
+            m_pendingInspectionEntityId = m_selectedEntity.EntityId;
+            m_isAutomaticInspectionRefresh = true;
+            m_runtime.RequestEntityInspection(m_selectedEntity.EntityId);
+            m_nextEntityInspectionRefresh =
+                Time.realtimeSinceStartup + 1f;
         }
 
         if (!m_isUiSuppressedByMenu && Input.GetKeyDown(KeyCode.F8))
@@ -240,6 +285,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_pendingMainWindowSize = null;
             }
             m_windowRect = ClampToScreen(nextWindowRect);
+        }
+
+        if (m_entityAlarmWindowOpen)
+        {
+            m_entityAlarmWindowRect = ClampToScreen(GUI.Window(
+                EntityAlarmWindowId,
+                ClampToScreen(m_entityAlarmWindowRect),
+                DrawEntityAlarmWindow,
+                GUIContent.none,
+                m_windowStyle));
         }
 
         for (var index = m_detachedPanels.Count - 1; index >= 0; index--)
@@ -695,12 +750,65 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawEditor()
     {
-        var panel = CurrentPanel;
         m_editorScroll = GUILayout.BeginScrollView(m_editorScroll);
+        DrawStatusMessage();
+        DrawPanelManagement();
 
-        GUILayout.Label("PANEL", m_sectionStyle);
+        GUILayout.Space(12f);
+        GUILayout.Label(
+            string.IsNullOrWhiteSpace(m_editingRuleId)
+                ? "NEUE MELDUNG / SAMMELMELDUNG"
+                : "MELDUNG NACHTRÄGLICH BEARBEITEN",
+            m_sectionStyle);
+        GUILayout.Label(
+            "Am einfachsten: Glocke im Fenster eines Gebäudes, Fahrzeugs oder Transports drücken. Hier kann weiterhin die aktuelle Spielauswahl übernommen werden.",
+            m_smallLabelStyle);
+        DrawAlarmRuleEditor(false);
+
+        GUILayout.Space(12f);
+        DrawDefinedRules();
+        GUILayout.EndScrollView();
+    }
+
+    private void DrawPanelManagement()
+    {
+        if (Time.realtimeSinceStartup > m_pendingPanelDeleteUntil)
+        {
+            m_pendingPanelDeleteId = "";
+        }
+        GUILayout.Label("PANEL AUSWÄHLEN", m_sectionStyle);
+        GUILayout.Label(
+            "Ein Panel ist eine Meldetafel. Beim Speichern einer Meldung wird ausdrücklich gewählt, auf welcher Tafel sie erscheint.",
+            m_smallLabelStyle);
+
+        var panels = m_runtime.Configuration.Panels;
+        if (panels.Count > 0)
+        {
+            m_currentPanelIndex = Math.Max(
+                0,
+                Math.Min(m_currentPanelIndex, panels.Count - 1));
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("<", m_buttonStyle, GUILayout.Width(38f)))
+            {
+                m_currentPanelIndex = Wrap(m_currentPanelIndex - 1, panels.Count);
+            }
+            GUILayout.Label(
+                panels[m_currentPanelIndex].Name +
+                "   (" + (m_currentPanelIndex + 1) + "/" + panels.Count + ")",
+                m_headerStyle,
+                GUILayout.Height(30f));
+            if (GUILayout.Button(">", m_buttonStyle, GUILayout.Width(38f)))
+            {
+                m_currentPanelIndex = Wrap(m_currentPanelIndex + 1, panels.Count);
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        var panel = CurrentPanel;
         if (panel != null)
         {
+            GUILayout.Space(6f);
+            GUILayout.Label("AKTUELLES PANEL BEARBEITEN", m_sectionStyle);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Name", m_labelStyle, GUILayout.Width(90f));
             panel.Name = GUILayout.TextField(
@@ -712,7 +820,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "Spalten " + panel.Columns,
                 m_labelStyle,
                 GUILayout.Width(90f));
-            if (GUILayout.Button("−", m_buttonStyle, GUILayout.Width(34f)))
+            if (GUILayout.Button("-", m_buttonStyle, GUILayout.Width(34f)))
             {
                 panel.Columns = Math.Max(1, panel.Columns - 1);
             }
@@ -729,289 +837,69 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 " System",
                 GUILayout.Width(100f));
             if (GUILayout.Button(
-                    "PANEL SPEICHERN",
+                    "ÄNDERUNGEN SPEICHERN",
                     m_primaryButtonStyle,
-                    GUILayout.Width(155f)))
+                    GUILayout.Width(190f)))
             {
                 SaveConfiguration("Panel gespeichert.");
             }
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label(
-                "Filter",
-                m_labelStyle,
-                GUILayout.Width(90f));
+            GUILayout.Label("Filter", m_labelStyle, GUILayout.Width(90f));
             panel.NotificationFilter = GUILayout.TextField(
                 panel.NotificationFilter ?? "",
                 240,
                 m_textFieldStyle);
+            GUI.enabled = panels.Count > 1;
+            var pendingDelete = string.Equals(
+                m_pendingPanelDeleteId,
+                panel.Id,
+                StringComparison.Ordinal);
+            var affectedRules = m_runtime.Configuration.Rules.Count(rule =>
+                string.Equals(
+                    rule.PanelId,
+                    panel.Id,
+                    StringComparison.Ordinal));
+            if (GUILayout.Button(
+                    pendingDelete
+                        ? "SICHER? " + affectedRules + " MELDUNG(EN)"
+                        : "AKTUELLES PANEL LÖSCHEN",
+                    m_dangerButtonStyle,
+                    GUILayout.Width(220f)))
+            {
+                RemoveCurrentPanel();
+            }
+            GUI.enabled = true;
             GUILayout.EndHorizontal();
-            GUILayout.Label(
-                "Kommagetrennte Begriffe filtern Vanilla- und Systemmeldungen. Eigene Regeln sind fest dem Panel zugeordnet.",
-                m_smallLabelStyle);
         }
 
+        GUILayout.Space(6f);
+        GUILayout.Label("NEUES PANEL ANLEGEN", m_sectionStyle);
         GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            "Name der neuen Meldetafel",
+            m_labelStyle,
+            GUILayout.Width(205f));
         m_newPanelName = GUILayout.TextField(
             m_newPanelName,
             40,
             m_textFieldStyle,
-            GUILayout.Width(260f));
+            GUILayout.Width(300f));
         if (GUILayout.Button(
-                "+ PANEL",
-                m_buttonStyle,
-                GUILayout.Width(110f)))
+                "MELDETAFEL ANLEGEN",
+                m_primaryButtonStyle,
+                GUILayout.Width(190f)))
         {
             AddPanel();
         }
-        GUI.enabled = m_runtime.Configuration.Panels.Count > 1;
-        if (GUILayout.Button(
-                "AKTUELLES PANEL LÖSCHEN",
-                m_dangerButtonStyle,
-                GUILayout.Width(220f)))
-        {
-            RemoveCurrentPanel();
-        }
-        GUI.enabled = true;
         GUILayout.EndHorizontal();
+    }
 
-        GUILayout.Space(12f);
-        GUILayout.Label(
-            string.IsNullOrWhiteSpace(m_editingRuleId)
-                ? "NEUE MELDUNG / SAMMELMELDUNG"
-                : "MELDUNG NACHTRÄGLICH BEARBEITEN",
-            m_sectionStyle);
-        GUILayout.Label(
-            "1. Entität im Spiel anklicken und Inspector geöffnet lassen. 2. Auswahl übernehmen. 3. Messwert und Schwelle wählen. Für eine Sammelmeldung weitere Entitäten nacheinander hinzufügen.",
-            m_smallLabelStyle);
-
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button(
-                "AKTUELLE SPIEL-AUSWAHL ÜBERNEHMEN",
-                m_primaryButtonStyle,
-                GUILayout.Width(305f),
-                GUILayout.Height(30f)))
-        {
-            CaptureSelectedEntity();
-        }
-        GUILayout.Label(
-            m_selectedEntity == null
-                ? "Keine Entität übernommen"
-                : m_selectedEntity.Title +
-                  " · " + ShortTypeName(m_selectedEntity.EntityType) +
-                  " · ID " + m_selectedEntity.EntityId,
-            m_labelStyle);
-        GUILayout.EndHorizontal();
-
-        if (m_selectedEntity != null && m_selectedMetrics.Count > 0)
-        {
-            m_selectedMetricIndex = Math.Max(
-                0,
-                Math.Min(m_selectedMetricIndex, m_selectedMetrics.Count - 1));
-            var metric = m_selectedMetrics[m_selectedMetricIndex];
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Messwert", m_labelStyle, GUILayout.Width(90f));
-            if (GUILayout.Button("◀", m_buttonStyle, GUILayout.Width(34f)))
-            {
-                CycleMetric(-1);
-            }
-            GUILayout.Label(
-                metric.Label + "   [aktuell " +
-                metric.CurrentValue.ToString(
-                    "0.###",
-                    CultureInfo.CurrentCulture) + "]",
-                m_labelStyle,
-                GUILayout.Width(360f));
-            if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(34f)))
-            {
-                CycleMetric(1);
-            }
-            if (GUILayout.Button(
-                    UnmaRuntime.OperatorText(m_draftComparison),
-                    m_buttonStyle,
-                    GUILayout.Width(48f)))
-            {
-                m_draftComparison = NextEnum(m_draftComparison);
-            }
-            m_draftThreshold = GUILayout.TextField(
-                m_draftThreshold,
-                24,
-                m_textFieldStyle,
-                GUILayout.Width(105f));
-            if (GUILayout.Button(
-                    "+ BEDINGUNG",
-                    m_primaryButtonStyle,
-                    GUILayout.Width(145f)))
-            {
-                AddDraftCondition();
-            }
-            GUILayout.EndHorizontal();
-        }
-
-        if (m_draftConditions.Count > 0)
-        {
-            GUILayout.Space(4f);
-            for (var index = 0; index < m_draftConditions.Count; index++)
-            {
-                var condition = m_draftConditions[index];
-                while (m_draftConditionThresholdTexts.Count <= index)
-                {
-                    m_draftConditionThresholdTexts.Add(
-                        condition.Threshold.ToString(
-                            "0.###",
-                            CultureInfo.CurrentCulture));
-                }
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(
-                    (index + 1) + ". " + condition.EntityTitle + " · " +
-                    condition.MetricLabel,
-                    m_smallLabelStyle);
-                if (GUILayout.Button(
-                        UnmaRuntime.OperatorText(condition.Comparison),
-                        m_buttonStyle,
-                        GUILayout.Width(48f)))
-                {
-                    condition.Comparison = NextEnum(condition.Comparison);
-                }
-                m_draftConditionThresholdTexts[index] = GUILayout.TextField(
-                    m_draftConditionThresholdTexts[index],
-                    24,
-                    m_textFieldStyle,
-                    GUILayout.Width(95f));
-                if (GUILayout.Button(
-                        "ENTFERNEN",
-                        m_dangerButtonStyle,
-                        GUILayout.Width(105f)))
-                {
-                    m_draftConditions.RemoveAt(index);
-                    m_draftConditionThresholdTexts.RemoveAt(index);
-                    index--;
-                }
-                GUILayout.EndHorizontal();
-            }
-        }
-
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("Verknüpfung", m_labelStyle, GUILayout.Width(90f));
-        if (GUILayout.Button(
-                m_draftLogic == AlarmLogic.All
-                    ? "UND · alle Bedingungen"
-                    : "ODER · mindestens eine",
-                m_buttonStyle,
-                GUILayout.Width(210f)))
-        {
-            m_draftLogic = m_draftLogic == AlarmLogic.All
-                ? AlarmLogic.Any
-                : AlarmLogic.All;
-        }
-        GUILayout.Label("Stufe", m_labelStyle, GUILayout.Width(52f));
-        if (GUILayout.Button(
-                SeverityLabel(m_draftSeverity),
-                m_buttonStyle,
-                GUILayout.Width(125f)))
-        {
-            m_draftSeverity = NextEnum(m_draftSeverity);
-            m_draftColor = DefaultColorFor(m_draftSeverity);
-        }
-        GUILayout.Label("Farbe", m_labelStyle, GUILayout.Width(50f));
-        m_draftColor = GUILayout.TextField(
-            m_draftColor,
-            9,
-            m_textFieldStyle,
-            GUILayout.Width(92f));
-        GUILayout.EndHorizontal();
-
-        GUILayout.BeginHorizontal();
-        GUILayout.Space(90f);
-        m_draftAutoAcknowledgeOnClear = GUILayout.Toggle(
-            m_draftAutoAcknowledgeOnClear,
-            "BEIM GEHEN AUTOMATISCH QUITTIEREN",
-            GUILayout.Width(340f));
-        GUILayout.Label(
-            "AUS: GEGANGEN · UNQUITTIERT bleibt bis MASTER QUIT.",
-            m_smallLabelStyle);
-        GUILayout.EndHorizontal();
-
-        var sounds = m_audio.GetSoundOptions();
-        if (sounds.Count > 0)
-        {
-            m_draftSoundIndex = Math.Max(
-                0,
-                Math.Min(m_draftSoundIndex, sounds.Count - 1));
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Ton", m_labelStyle, GUILayout.Width(90f));
-            if (GUILayout.Button("◀", m_buttonStyle, GUILayout.Width(34f)))
-            {
-                m_draftSoundIndex = Wrap(
-                    m_draftSoundIndex - 1,
-                    sounds.Count);
-                m_draftSoundChanged = true;
-            }
-            var originalSoundMissing =
-                !string.IsNullOrWhiteSpace(m_editingRuleId) &&
-                !m_draftSoundChanged &&
-                !sounds.Any(sound => string.Equals(
-                    sound.Id,
-                    m_originalDraftSoundId,
-                    StringComparison.OrdinalIgnoreCase));
-            GUILayout.Label(
-                originalSoundMissing
-                    ? "DATEI FEHLT · " + m_originalDraftSoundId
-                    : sounds[m_draftSoundIndex].Label,
-                m_labelStyle,
-                GUILayout.Width(320f));
-            if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(34f)))
-            {
-                m_draftSoundIndex = Wrap(
-                    m_draftSoundIndex + 1,
-                    sounds.Count);
-                m_draftSoundChanged = true;
-            }
-            if (GUILayout.Button("TON TESTEN", m_buttonStyle, GUILayout.Width(125f)))
-            {
-                TestSound(sounds[m_draftSoundIndex].Id, m_draftSeverity);
-            }
-            if (GUILayout.Button("TON STOP", m_buttonStyle, GUILayout.Width(105f)))
-            {
-                StopTestSound();
-            }
-            GUILayout.EndHorizontal();
-        }
-
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("Meldetext", m_labelStyle, GUILayout.Width(90f));
-        m_draftRuleName = GUILayout.TextField(
-            m_draftRuleName,
-            80,
-            m_textFieldStyle);
-        GUI.enabled = m_draftConditions.Count > 0 && CurrentPanel != null;
-        if (GUILayout.Button(
-                string.IsNullOrWhiteSpace(m_editingRuleId)
-                    ? "MELDUNG SPEICHERN"
-                    : "ÄNDERUNGEN SPEICHERN",
-                m_primaryButtonStyle,
-                GUILayout.Width(190f),
-                GUILayout.Height(30f)))
-        {
-            SaveDraftRule(sounds);
-        }
-        GUI.enabled = true;
-        if (!string.IsNullOrWhiteSpace(m_editingRuleId) &&
-            GUILayout.Button(
-                "ABBRECHEN",
-                m_buttonStyle,
-                GUILayout.Width(110f),
-                GUILayout.Height(30f)))
-        {
-            ResetDraftRule();
-            SetStatus("Bearbeitung abgebrochen.");
-        }
-        GUILayout.EndHorizontal();
-
-        GUILayout.Space(12f);
+    private void DrawDefinedRules()
+    {
         GUILayout.Label("DEFINIERTE MELDUNGEN", m_sectionStyle);
+        var sounds = m_audio.GetSoundOptions();
         var panelId = CurrentPanel?.Id;
         foreach (var rule in m_runtime.Configuration.Rules
                      .Where(rule => rule.PanelId == panelId)
@@ -1048,6 +936,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     GUILayout.Width(105f)))
             {
                 BeginEditingRule(rule, sounds);
+                var firstCondition = rule.Conditions.FirstOrDefault();
+                if (firstCondition == null)
+                {
+                    m_entityAlarmWindowOpen = true;
+                }
+                else
+                {
+                    RequestEntityInspection(
+                        firstCondition.EntityId,
+                        true);
+                }
             }
             if (GUILayout.Button(
                     "LÖSCHEN",
@@ -1074,9 +973,759 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             GUILayout.EndHorizontal();
         }
+    }
 
+    private void DrawEntityAlarmWindow(int _)
+    {
+        var title = m_selectedEntity == null
+            ? "UNMA · OBJEKT-ALARM WIRD GELADEN"
+            : "UNMA · ALARM FÜR " + m_selectedEntity.Title.ToUpperInvariant() +
+              " · OBJEKT #" + m_selectedEntity.EntityId;
+        DrawWindowHeader(title);
+
+        if (GUI.Button(
+                new Rect(m_entityAlarmWindowRect.width - 52f, 8f, 40f, 28f),
+                "X",
+                m_buttonStyle))
+        {
+            m_entityAlarmWindowOpen = false;
+            m_openEntityAlarmAfterInspection = false;
+            m_pendingInspectorAlarmEntityId = -1;
+        }
+
+        GUILayout.BeginArea(new Rect(
+            12f,
+            42f,
+            m_entityAlarmWindowRect.width - 24f,
+            m_entityAlarmWindowRect.height - 56f));
         DrawStatusMessage();
+        m_entityAlarmScroll = GUILayout.BeginScrollView(m_entityAlarmScroll);
+        if (m_pendingInspectorAlarmEntityId >= 0)
+        {
+            DrawInspectorEditingDecision();
+        }
+        else
+        {
+            DrawAlarmRuleEditor(true);
+        }
         GUILayout.EndScrollView();
+        GUILayout.EndArea();
+
+        GUI.DragWindow(new Rect(
+            0f,
+            0f,
+            m_entityAlarmWindowRect.width - 58f,
+            38f));
+    }
+
+    private void DrawInspectorEditingDecision()
+    {
+        var editedRule = m_runtime.Configuration.Rules.FirstOrDefault(rule =>
+            string.Equals(
+                rule.Id,
+                m_editingRuleId,
+                StringComparison.Ordinal));
+        GUILayout.Label("BESTEHENDE MELDUNG WIRD BEARBEITET", m_sectionStyle);
+        GUILayout.Label(
+            "Aktuell ist \"" + (editedRule?.Name ?? "MELDUNG") +
+            "\" im Änderungsmodus. Soll Objekt #" +
+            m_pendingInspectorAlarmEntityId +
+            " zu dieser Meldung gehören oder soll ein neuer Entwurf beginnen?",
+            m_labelStyle);
+        GUILayout.Label(
+            "Eine neue Meldung verwirft nur ungespeicherte Editoränderungen; die bereits gespeicherte Meldung bleibt unverändert.",
+            m_smallLabelStyle);
+        GUILayout.Space(10f);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button(
+                "ZUR BESTEHENDEN MELDUNG HINZUFÜGEN",
+                m_primaryButtonStyle,
+                GUILayout.Height(38f)))
+        {
+            var entityId = m_pendingInspectorAlarmEntityId;
+            m_pendingInspectorAlarmEntityId = -1;
+            RequestEntityInspection(entityId, true);
+        }
+        if (GUILayout.Button(
+                "NEUE MELDUNG BEGINNEN",
+                m_dangerButtonStyle,
+                GUILayout.Height(38f)))
+        {
+            var entityId = m_pendingInspectorAlarmEntityId;
+            m_pendingInspectorAlarmEntityId = -1;
+            ResetDraftRule();
+            RequestEntityInspection(entityId, true);
+        }
+        if (GUILayout.Button(
+                "ABBRECHEN",
+                m_buttonStyle,
+                GUILayout.Width(130f),
+                GUILayout.Height(38f)))
+        {
+            m_pendingInspectorAlarmEntityId = -1;
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawAlarmRuleEditor(bool inEntityWindow)
+    {
+        DrawTargetPanelSelector(inEntityWindow);
+        GUILayout.Space(6f);
+        DrawEntitySourceSelector(inEntityWindow);
+        if (m_selectedEntity != null && m_selectedMetrics.Count > 0)
+        {
+            GUILayout.Space(6f);
+            DrawNewConditionForm();
+        }
+
+        GUILayout.Space(8f);
+        DrawConditionTable();
+        GUILayout.Space(8f);
+        DrawAlarmProperties();
+    }
+
+    private void DrawTargetPanelSelector(bool allowCreate)
+    {
+        var panels = m_runtime.Configuration.Panels;
+        GUILayout.Label("ZIEL-MELDETAFEL", m_sectionStyle);
+        if (panels.Count == 0)
+        {
+            GUILayout.Label("Keine Meldetafel vorhanden.", m_labelStyle);
+            return;
+        }
+
+        var targetIndex = panels.FindIndex(panel => string.Equals(
+            panel.Id,
+            m_draftTargetPanelId,
+            StringComparison.Ordinal));
+        if (targetIndex < 0)
+        {
+            targetIndex = Math.Max(
+                0,
+                Math.Min(m_currentPanelIndex, panels.Count - 1));
+            m_draftTargetPanelId = panels[targetIndex].Id;
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            "Hier erscheint die Meldung:",
+            m_labelStyle,
+            GUILayout.Width(205f));
+        if (GUILayout.Button("<", m_buttonStyle, GUILayout.Width(38f)))
+        {
+            targetIndex = Wrap(targetIndex - 1, panels.Count);
+            m_draftTargetPanelId = panels[targetIndex].Id;
+        }
+        GUILayout.Label(
+            panels[targetIndex].Name,
+            m_headerStyle,
+            GUILayout.Width(310f),
+            GUILayout.Height(30f));
+        if (GUILayout.Button(">", m_buttonStyle, GUILayout.Width(38f)))
+        {
+            targetIndex = Wrap(targetIndex + 1, panels.Count);
+            m_draftTargetPanelId = panels[targetIndex].Id;
+        }
+        GUILayout.Label("Ziel mit < / > wechseln.", m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+
+        if (allowCreate)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                "Neue Meldetafel",
+                m_labelStyle,
+                GUILayout.Width(205f));
+            m_newPanelName = GUILayout.TextField(
+                m_newPanelName,
+                40,
+                m_textFieldStyle,
+                GUILayout.Width(310f));
+            if (GUILayout.Button(
+                    "+ MELDETAFEL ANLEGEN",
+                    m_buttonStyle,
+                    GUILayout.Width(205f)))
+            {
+                AddPanel();
+            }
+            GUILayout.Label(
+                "Das neue Panel wird sofort als Ziel gewählt.",
+                m_smallLabelStyle);
+            GUILayout.EndHorizontal();
+        }
+    }
+
+    private void DrawEntitySourceSelector(bool inEntityWindow)
+    {
+        GUILayout.Label("QUELLOBJEKT", m_sectionStyle);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button(
+                "AKTUELLE SPIEL-AUSWAHL ÜBERNEHMEN",
+                m_primaryButtonStyle,
+                GUILayout.Width(315f),
+                GUILayout.Height(30f)))
+        {
+            CaptureSelectedEntity(inEntityWindow);
+        }
+        GUILayout.Label(
+            m_selectedEntity == null
+                ? "Noch kein Objekt geladen. Inspector öffnen und die UNMA-Glocke drücken."
+                : m_selectedEntity.Title + " · " +
+                  ShortTypeName(m_selectedEntity.EntityType) +
+                  " · ID " + m_selectedEntity.EntityId +
+                  " · " + m_selectedMetrics.Count + " Messwerte",
+            m_labelStyle);
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawNewConditionForm()
+    {
+        m_selectedMetricIndex = Math.Max(
+            0,
+            Math.Min(m_selectedMetricIndex, m_selectedMetrics.Count - 1));
+        var metric = m_selectedMetrics[m_selectedMetricIndex];
+
+        GUILayout.Label("NEUE AWL-BEDINGUNG", m_sectionStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Kennung / Ist-Wert", m_labelStyle, GUILayout.Width(150f));
+        if (GUILayout.Button(
+                metric.Label + "   [aktuell " + FormatMetricValue(metric) + "]",
+                m_metricPickerOpen ? m_primaryButtonStyle : m_buttonStyle,
+                GUILayout.Height(30f)))
+        {
+            m_metricPickerOpen = !m_metricPickerOpen;
+            m_referenceMetricPickerOpen = false;
+        }
+        GUILayout.EndHorizontal();
+
+        if (m_metricPickerOpen)
+        {
+            DrawMetricPicker(false);
+            metric = m_selectedMetrics[m_selectedMetricIndex];
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Berechnung", m_labelStyle, GUILayout.Width(150f));
+        if (GUILayout.Button(
+                "ABSOLUT",
+                m_draftValueMode == ConditionValueMode.Absolute
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(105f)))
+        {
+            m_draftValueMode = ConditionValueMode.Absolute;
+            m_referenceMetricPickerOpen = false;
+        }
+        if (GUILayout.Button(
+                "% VON",
+                m_draftValueMode == ConditionValueMode.PercentOfReference
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(105f)))
+        {
+            m_draftValueMode = ConditionValueMode.PercentOfReference;
+            SelectSuggestedReferenceMetric(metric);
+        }
+
+        if (m_draftValueMode == ConditionValueMode.PercentOfReference)
+        {
+            m_selectedReferenceMetricIndex = Math.Max(
+                0,
+                Math.Min(
+                    m_selectedReferenceMetricIndex,
+                    m_selectedMetrics.Count - 1));
+            var reference = m_selectedMetrics[m_selectedReferenceMetricIndex];
+            if (GUILayout.Button(
+                    "Bezug: " + reference.Label +
+                    " [" + FormatMetricValue(reference) + "]",
+                    m_referenceMetricPickerOpen
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Height(30f)))
+            {
+                m_referenceMetricPickerOpen = !m_referenceMetricPickerOpen;
+                m_metricPickerOpen = false;
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        if (m_referenceMetricPickerOpen &&
+            m_draftValueMode == ConditionValueMode.PercentOfReference)
+        {
+            DrawMetricPicker(true);
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Steuerzeichen", m_labelStyle, GUILayout.Width(150f));
+        DrawComparisonSelector(ref m_draftComparison);
+        GUILayout.Space(12f);
+        GUILayout.Label(
+            m_draftValueMode == ConditionValueMode.PercentOfReference
+                ? "Soll-Wert in %"
+                : "Soll-Wert",
+            m_labelStyle,
+            GUILayout.Width(105f));
+        m_draftThreshold = GUILayout.TextField(
+            m_draftThreshold,
+            24,
+            m_textFieldStyle,
+            GUILayout.Width(105f));
+        if (GUILayout.Button(
+                "+ ZEILE HINZUFÜGEN",
+                m_primaryButtonStyle,
+                GUILayout.Width(190f),
+                GUILayout.Height(30f)))
+        {
+            AddDraftCondition();
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawMetricPicker(bool referencePicker)
+    {
+        var filter = referencePicker
+            ? m_referenceMetricPickerFilter
+            : m_metricPickerFilter;
+        GUILayout.BeginHorizontal();
+        GUILayout.Space(150f);
+        GUILayout.Label("Suchen", m_smallLabelStyle, GUILayout.Width(60f));
+        filter = GUILayout.TextField(
+            filter,
+            60,
+            m_textFieldStyle,
+            GUILayout.Width(280f));
+        GUILayout.Label(
+            "Messwert anklicken; technische Pfade bleiben intern.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+        if (referencePicker)
+        {
+            m_referenceMetricPickerFilter = filter;
+        }
+        else
+        {
+            m_metricPickerFilter = filter;
+        }
+
+        var scroll = referencePicker
+            ? m_referenceMetricPickerScroll
+            : m_metricPickerScroll;
+        scroll = GUILayout.BeginScrollView(scroll, GUILayout.Height(170f));
+        var shown = 0;
+        for (var index = 0; index < m_selectedMetrics.Count; index++)
+        {
+            var candidate = m_selectedMetrics[index];
+            if (!string.IsNullOrWhiteSpace(filter) &&
+                candidate.Label.IndexOf(
+                    filter,
+                    StringComparison.CurrentCultureIgnoreCase) < 0 &&
+                candidate.Path.IndexOf(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+            if (++shown > 80)
+            {
+                GUILayout.Label(
+                    "Weitere Treffer ausblendet – Suche genauer eingrenzen.",
+                    m_smallLabelStyle);
+                break;
+            }
+
+            var selected = referencePicker
+                ? index == m_selectedReferenceMetricIndex
+                : index == m_selectedMetricIndex;
+            if (GUILayout.Button(
+                    candidate.Label + "   · aktuell " +
+                    FormatMetricValue(candidate),
+                    selected ? m_primaryButtonStyle : m_buttonStyle,
+                    GUILayout.Height(27f)))
+            {
+                if (referencePicker)
+                {
+                    m_selectedReferenceMetricIndex = index;
+                    m_referenceMetricPickerOpen = false;
+                }
+                else
+                {
+                    m_selectedMetricIndex = index;
+                    m_metricPickerOpen = false;
+                    SelectSuggestedReferenceMetric(candidate);
+                }
+            }
+        }
+        GUILayout.EndScrollView();
+        if (referencePicker)
+        {
+            m_referenceMetricPickerScroll = scroll;
+        }
+        else
+        {
+            m_metricPickerScroll = scroll;
+        }
+    }
+
+    private void DrawComparisonSelector(ref ComparisonOperator comparison)
+    {
+        foreach (ComparisonOperator candidate in Enum.GetValues(
+                     typeof(ComparisonOperator)))
+        {
+            if (GUILayout.Button(
+                    UnmaRuntime.OperatorText(candidate),
+                    comparison == candidate
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Width(42f),
+                    GUILayout.Height(28f)))
+            {
+                comparison = candidate;
+            }
+        }
+    }
+
+    private void DrawConditionTable()
+    {
+        GUILayout.Label("BEDINGUNGEN DER MELDUNG", m_sectionStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("IST-WERT", m_smallLabelStyle, GUILayout.Width(135f));
+        GUILayout.Label("KENNUNG", m_smallLabelStyle, GUILayout.Width(330f));
+        GUILayout.Label("STEUERZEICHEN", m_smallLabelStyle, GUILayout.Width(265f));
+        GUILayout.Label("SOLL-WERT", m_smallLabelStyle, GUILayout.Width(115f));
+        GUILayout.Label("BEDINGUNG", m_smallLabelStyle, GUILayout.Width(90f));
+        GUILayout.EndHorizontal();
+
+        if (m_draftConditions.Count == 0)
+        {
+            GUILayout.Label(
+                "Noch keine Zeile. Oben Messwert, Berechnung, Steuerzeichen und Soll-Wert auswählen.",
+                m_smallLabelStyle);
+            return;
+        }
+
+        for (var index = 0; index < m_draftConditions.Count; index++)
+        {
+            var condition = m_draftConditions[index];
+            while (m_draftConditionThresholdTexts.Count <= index)
+            {
+                m_draftConditionThresholdTexts.Add(
+                    condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture));
+            }
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                ConditionActualText(condition),
+                m_labelStyle,
+                GUILayout.Width(135f),
+                GUILayout.Height(42f));
+            GUILayout.BeginVertical(GUILayout.Width(330f));
+            GUILayout.Label(
+                condition.EntityTitle + " #" + condition.EntityId +
+                " · " + condition.MetricLabel,
+                m_labelStyle);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(
+                    condition.ValueMode == ConditionValueMode.Absolute
+                        ? "ABSOLUT"
+                        : "% VON",
+                    m_buttonStyle,
+                    GUILayout.Width(85f)))
+            {
+                condition.ValueMode =
+                    condition.ValueMode == ConditionValueMode.Absolute
+                        ? ConditionValueMode.PercentOfReference
+                        : ConditionValueMode.Absolute;
+                if (condition.ValueMode == ConditionValueMode.PercentOfReference &&
+                    string.IsNullOrWhiteSpace(condition.ReferenceMetricPath))
+                {
+                    condition.ReferenceMetricPath =
+                        SuggestedReferencePath(condition.MetricPath);
+                    condition.ReferenceMetricLabel =
+                        FindSelectedMetric(condition.ReferenceMetricPath)?.Label ??
+                        condition.ReferenceMetricPath;
+                }
+            }
+            if (condition.ValueMode == ConditionValueMode.PercentOfReference)
+            {
+                if (GUILayout.Button(
+                        string.IsNullOrWhiteSpace(condition.ReferenceMetricLabel)
+                            ? "BEZUG WÄHLEN"
+                            : "Bezug: " + condition.ReferenceMetricLabel,
+                        m_conditionReferencePickerIndex == index
+                            ? m_primaryButtonStyle
+                            : m_buttonStyle))
+                {
+                    m_conditionReferencePickerIndex =
+                        m_conditionReferencePickerIndex == index ? -1 : index;
+                }
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
+
+            var comparison = condition.Comparison;
+            GUILayout.BeginHorizontal(GUILayout.Width(265f));
+            DrawComparisonSelector(ref comparison);
+            GUILayout.EndHorizontal();
+            condition.Comparison = comparison;
+
+            m_draftConditionThresholdTexts[index] = GUILayout.TextField(
+                m_draftConditionThresholdTexts[index],
+                24,
+                m_textFieldStyle,
+                GUILayout.Width(105f),
+                GUILayout.Height(30f));
+            GUILayout.Label(
+                index == 0
+                    ? "START"
+                    : m_draftLogic == AlarmLogic.All ? "UND" : "ODER",
+                m_headerStyle,
+                GUILayout.Width(70f),
+                GUILayout.Height(30f));
+            if (GUILayout.Button(
+                    "X",
+                    m_dangerButtonStyle,
+                    GUILayout.Width(38f),
+                    GUILayout.Height(30f)))
+            {
+                m_draftConditions.RemoveAt(index);
+                m_draftConditionThresholdTexts.RemoveAt(index);
+                if (m_conditionReferencePickerIndex == index)
+                {
+                    m_conditionReferencePickerIndex = -1;
+                }
+                else if (m_conditionReferencePickerIndex > index)
+                {
+                    m_conditionReferencePickerIndex--;
+                }
+                index--;
+            }
+            GUILayout.EndHorizontal();
+
+            if (index >= 0 && m_conditionReferencePickerIndex == index)
+            {
+                DrawConditionReferencePicker(condition);
+            }
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Verknüpfung aller Zeilen", m_labelStyle, GUILayout.Width(210f));
+        if (GUILayout.Button(
+                "UND · alle Bedingungen müssen stimmen",
+                m_draftLogic == AlarmLogic.All
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(290f)))
+        {
+            m_draftLogic = AlarmLogic.All;
+        }
+        if (GUILayout.Button(
+                "ODER · mindestens eine muss stimmen",
+                m_draftLogic == AlarmLogic.Any
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(300f)))
+        {
+            m_draftLogic = AlarmLogic.Any;
+        }
+        GUILayout.Label(
+            "Gemischte Klammerlogik folgt in einer späteren Ausbaustufe.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawConditionReferencePicker(ConditionDefinition condition)
+    {
+        if (m_selectedEntity == null ||
+            m_selectedEntity.EntityId != condition.EntityId)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(135f);
+            GUILayout.Label(
+                "Zum Ändern des Bezugs muss das Quellobjekt kurz geladen werden.",
+                m_smallLabelStyle);
+            if (GUILayout.Button(
+                    "QUELLOBJEKT LADEN",
+                    m_buttonStyle,
+                    GUILayout.Width(190f)))
+            {
+                RequestEntityInspection(condition.EntityId, false);
+            }
+            GUILayout.EndHorizontal();
+            return;
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Space(135f);
+        GUILayout.Label("Bezug suchen", m_smallLabelStyle, GUILayout.Width(90f));
+        m_referenceMetricPickerFilter = GUILayout.TextField(
+            m_referenceMetricPickerFilter,
+            60,
+            m_textFieldStyle,
+            GUILayout.Width(280f));
+        GUILayout.Label(
+            "Der Ist-Wert selbst wird nicht als Bezug angeboten.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+
+        m_referenceMetricPickerScroll = GUILayout.BeginScrollView(
+            m_referenceMetricPickerScroll,
+            GUILayout.Height(170f));
+        foreach (var metric in m_selectedMetrics)
+        {
+            if (string.Equals(
+                    condition.MetricPath,
+                    metric.Path,
+                    StringComparison.Ordinal) ||
+                !string.IsNullOrWhiteSpace(m_referenceMetricPickerFilter) &&
+                metric.Label.IndexOf(
+                    m_referenceMetricPickerFilter,
+                    StringComparison.CurrentCultureIgnoreCase) < 0 &&
+                metric.Path.IndexOf(
+                    m_referenceMetricPickerFilter,
+                    StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+            if (GUILayout.Button(
+                    "BEZUG: " + metric.Label + " · aktuell " +
+                    FormatMetricValue(metric),
+                    string.Equals(
+                        condition.ReferenceMetricPath,
+                        metric.Path,
+                        StringComparison.Ordinal)
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Height(26f)))
+            {
+                condition.ReferenceMetricPath = metric.Path;
+                condition.ReferenceMetricLabel = metric.Label;
+                m_conditionReferencePickerIndex = -1;
+            }
+        }
+        GUILayout.EndScrollView();
+    }
+
+    private void DrawAlarmProperties()
+    {
+        GUILayout.Label("MELDUNG", m_sectionStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Meldetext", m_labelStyle, GUILayout.Width(105f));
+        m_draftRuleName = GUILayout.TextField(
+            m_draftRuleName,
+            80,
+            m_textFieldStyle);
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Stufe", m_labelStyle, GUILayout.Width(105f));
+        foreach (AlarmSeverity severity in Enum.GetValues(typeof(AlarmSeverity)))
+        {
+            if (GUILayout.Button(
+                    SeverityLabel(severity),
+                    m_draftSeverity == severity
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Width(125f)))
+            {
+                m_draftSeverity = severity;
+                m_draftColor = DefaultColorFor(severity);
+            }
+        }
+        GUILayout.Label("Aktivfarbe", m_labelStyle, GUILayout.Width(85f));
+        m_draftColor = GUILayout.TextField(
+            m_draftColor,
+            9,
+            m_textFieldStyle,
+            GUILayout.Width(95f));
+        GUILayout.EndHorizontal();
+
+        var sounds = m_audio.GetSoundOptions();
+        if (sounds.Count > 0)
+        {
+            m_draftSoundIndex = Math.Max(
+                0,
+                Math.Min(m_draftSoundIndex, sounds.Count - 1));
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Ton", m_labelStyle, GUILayout.Width(105f));
+            if (GUILayout.Button("<", m_buttonStyle, GUILayout.Width(38f)))
+            {
+                m_draftSoundIndex = Wrap(m_draftSoundIndex - 1, sounds.Count);
+                m_draftSoundChanged = true;
+            }
+            var originalSoundMissing =
+                !string.IsNullOrWhiteSpace(m_editingRuleId) &&
+                !m_draftSoundChanged &&
+                !sounds.Any(sound => string.Equals(
+                    sound.Id,
+                    m_originalDraftSoundId,
+                    StringComparison.OrdinalIgnoreCase));
+            GUILayout.Label(
+                originalSoundMissing
+                    ? "DATEI FEHLT · " + m_originalDraftSoundId
+                    : sounds[m_draftSoundIndex].Label,
+                m_labelStyle,
+                GUILayout.Width(310f));
+            if (GUILayout.Button(">", m_buttonStyle, GUILayout.Width(38f)))
+            {
+                m_draftSoundIndex = Wrap(m_draftSoundIndex + 1, sounds.Count);
+                m_draftSoundChanged = true;
+            }
+            GUI.enabled = !originalSoundMissing;
+            if (GUILayout.Button(
+                    "TON TESTEN",
+                    m_buttonStyle,
+                    GUILayout.Width(125f)))
+            {
+                TestSound(sounds[m_draftSoundIndex].Id, m_draftSeverity);
+            }
+            GUI.enabled = true;
+            if (GUILayout.Button(
+                    "TON STOP",
+                    m_buttonStyle,
+                    GUILayout.Width(105f)))
+            {
+                StopTestSound();
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Space(105f);
+        m_draftAutoAcknowledgeOnClear = GUILayout.Toggle(
+            m_draftAutoAcknowledgeOnClear,
+            "BEIM GEHEN AUTOMATISCH QUITTIEREN",
+            GUILayout.Width(340f));
+        GUILayout.Label(
+            "AUS: KG bleibt bis MASTER QUIT; quittiert wird sonst immer manuell.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUI.enabled = m_draftConditions.Count > 0 &&
+                      GetDraftTargetPanel() != null;
+        if (GUILayout.Button(
+                string.IsNullOrWhiteSpace(m_editingRuleId)
+                    ? "MELDUNG SPEICHERN"
+                    : "ÄNDERUNGEN SPEICHERN",
+                m_primaryButtonStyle,
+                GUILayout.Width(220f),
+                GUILayout.Height(34f)))
+        {
+            SaveDraftRule(sounds);
+        }
+        GUI.enabled = true;
+        if (GUILayout.Button(
+                "ENTWURF LEEREN",
+                m_buttonStyle,
+                GUILayout.Width(155f),
+                GUILayout.Height(34f)))
+        {
+            ResetDraftRule();
+            SetStatus("Entwurf geleert.");
+        }
+        GUILayout.EndHorizontal();
     }
 
     private void DrawSystemAlarms()
@@ -1900,7 +2549,35 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUI.color = previous;
     }
 
+    private void BeginEntityAlarmFromInspector(IEntityInspector inspector)
+    {
+        var entity = inspector?.EntityUntyped;
+        if (entity == null)
+        {
+            SetStatus(
+                "Das angeklickte Inspector-Objekt ist nicht mehr verfügbar.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(m_editingRuleId))
+        {
+            m_pendingInspectorAlarmEntityId = entity.Id.Value;
+            m_entityAlarmWindowOpen = true;
+            m_openEntityAlarmAfterInspection = false;
+            SetStatus(
+                "Bitte wählen: Objekt zur bearbeiteten Meldung hinzufügen oder neue Meldung beginnen.");
+            return;
+        }
+
+        RequestEntityInspection(entity.Id.Value, true);
+    }
+
     private void CaptureSelectedEntity()
+    {
+        CaptureSelectedEntity(false);
+    }
+
+    private void CaptureSelectedEntity(bool openEntityAlarmWindow)
     {
         var entity = m_inspectorsManager.GetFirstActiveEntityOrNull();
         if (entity == null)
@@ -1910,26 +2587,77 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        RequestEntityInspection(entity.Id.Value, openEntityAlarmWindow);
+    }
+
+    private void RequestEntityInspection(
+        int entityId,
+        bool openEntityAlarmWindow)
+    {
         m_selectedEntity = null;
         m_selectedMetrics = Array.Empty<MetricDescriptor>();
         m_selectedMetricIndex = 0;
-        m_runtime.RequestEntityInspection(entity.Id.Value);
+        m_selectedReferenceMetricIndex = 0;
+        m_pendingInspectionEntityId = entityId;
+        m_isAutomaticInspectionRefresh = false;
+        m_openEntityAlarmAfterInspection = openEntityAlarmWindow;
+        if (openEntityAlarmWindow)
+        {
+            m_entityAlarmWindowOpen = true;
+        }
+        m_runtime.RequestEntityInspection(entityId);
         SetStatus("Spielauswahl wird sicher im Simulations-Takt gelesen …");
     }
 
     private void ApplyCompletedInspection(EntityInspectionSnapshot inspection)
     {
+        if (m_pendingInspectionEntityId >= 0 &&
+            inspection.EntityId != m_pendingInspectionEntityId)
+        {
+            return;
+        }
+        m_pendingInspectionEntityId = -1;
+        var automaticRefresh = m_isAutomaticInspectionRefresh;
+        m_isAutomaticInspectionRefresh = false;
+
         if (!string.IsNullOrWhiteSpace(inspection.Error))
         {
             m_selectedEntity = null;
             m_selectedMetrics = Array.Empty<MetricDescriptor>();
+            m_openEntityAlarmAfterInspection = false;
             SetStatus(inspection.Error);
             return;
         }
 
+        var selectedMetricPath = m_selectedMetricIndex >= 0 &&
+                                 m_selectedMetricIndex < m_selectedMetrics.Count
+            ? m_selectedMetrics[m_selectedMetricIndex].Path
+            : "";
+        var selectedReferencePath = m_selectedReferenceMetricIndex >= 0 &&
+                                    m_selectedReferenceMetricIndex <
+                                    m_selectedMetrics.Count
+            ? m_selectedMetrics[m_selectedReferenceMetricIndex].Path
+            : "";
         m_selectedEntity = inspection;
         m_selectedMetrics = inspection.Metrics;
-        m_selectedMetricIndex = 0;
+        m_selectedMetricIndex = automaticRefresh
+            ? FindMetricIndex(selectedMetricPath)
+            : 0;
+        m_selectedReferenceMetricIndex = automaticRefresh
+            ? FindMetricIndex(selectedReferencePath)
+            : 0;
+        m_nextEntityInspectionRefresh =
+            Time.realtimeSinceStartup + 1f;
+        if (automaticRefresh)
+        {
+            return;
+        }
+        if (m_openEntityAlarmAfterInspection)
+        {
+            m_entityAlarmWindowOpen = true;
+            m_entityAlarmScroll = Vector2.zero;
+        }
+        m_openEntityAlarmAfterInspection = false;
         if (m_selectedMetrics.Count == 0)
         {
             SetStatus("Für diese Entität wurden keine Messwerte gefunden.");
@@ -1958,6 +2686,25 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         var metric = m_selectedMetrics[m_selectedMetricIndex];
+        MetricDescriptor referenceMetric = null;
+        if (m_draftValueMode == ConditionValueMode.PercentOfReference)
+        {
+            m_selectedReferenceMetricIndex = Math.Max(
+                0,
+                Math.Min(
+                    m_selectedReferenceMetricIndex,
+                    m_selectedMetrics.Count - 1));
+            referenceMetric = m_selectedMetrics[m_selectedReferenceMetricIndex];
+            if (string.Equals(
+                    metric.Path,
+                    referenceMetric.Path,
+                    StringComparison.Ordinal))
+            {
+                SetStatus(
+                    "Ist-Wert und Bezugswert dürfen bei % VON nicht identisch sein.");
+                return;
+            }
+        }
         m_draftConditions.Add(new ConditionDefinition
         {
             EntityId = m_selectedEntity.EntityId,
@@ -1968,6 +2715,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             MetricLabel = metric.Label,
             Comparison = m_draftComparison,
             Threshold = threshold,
+            ValueMode = m_draftValueMode,
+            ReferenceMetricPath = referenceMetric?.Path ?? "",
+            ReferenceMetricLabel = referenceMetric?.Label ?? "",
             ExpectedProductId = metric.Path.StartsWith(
                 "$stored.",
                 StringComparison.Ordinal)
@@ -1976,12 +2726,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         });
         m_draftConditionThresholdTexts.Add(
             threshold.ToString("0.###", CultureInfo.CurrentCulture));
+        m_metricPickerOpen = false;
+        m_referenceMetricPickerOpen = false;
         SetStatus("Bedingung zur Sammelmeldung hinzugefügt.");
     }
 
     private void SaveDraftRule(IReadOnlyList<SoundOption> sounds)
     {
-        var panel = CurrentPanel;
+        var panel = GetDraftTargetPanel();
         if (panel == null || m_draftConditions.Count == 0)
         {
             return;
@@ -2000,6 +2752,28 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 return;
             }
             m_draftConditions[index].Threshold = threshold;
+            if (m_draftConditions[index].ValueMode ==
+                    ConditionValueMode.PercentOfReference &&
+                string.IsNullOrWhiteSpace(
+                    m_draftConditions[index].ReferenceMetricPath))
+            {
+                SetStatus(
+                    "Bezugswert in Bedingung " + (index + 1) +
+                    " fehlt. Bei % VON bitte einen Bezug wählen.");
+                return;
+            }
+            if (m_draftConditions[index].ValueMode ==
+                    ConditionValueMode.PercentOfReference &&
+                string.Equals(
+                    m_draftConditions[index].MetricPath,
+                    m_draftConditions[index].ReferenceMetricPath,
+                    StringComparison.Ordinal))
+            {
+                SetStatus(
+                    "Ist- und Bezugswert in Bedingung " + (index + 1) +
+                    " sind identisch. Bitte einen anderen Bezug wählen.");
+                return;
+            }
         }
 
         var selectedSoundId = sounds.Count > 0
@@ -2028,7 +2802,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var rule = new AlarmRuleDefinition
         {
             Id = existingRule?.Id ?? Guid.NewGuid().ToString("N"),
-            PanelId = existingRule?.PanelId ?? panel.Id,
+            PanelId = panel.Id,
             Name = string.IsNullOrWhiteSpace(m_draftRuleName)
                 ? "MELDUNG"
                 : m_draftRuleName.Trim(),
@@ -2051,7 +2825,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
         var wasEditing = existingRule != null;
+        var savedPanelId = panel.Id;
         ResetDraftRule();
+        m_draftTargetPanelId = savedPanelId;
         SetStatus(
             wasEditing
                 ? "Meldung aktualisiert; neue Werte gelten im nächsten Takt."
@@ -2063,6 +2839,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         IReadOnlyList<SoundOption> sounds)
     {
         m_editingRuleId = rule.Id;
+        m_draftTargetPanelId = rule.PanelId;
         m_draftRuleName = rule.Name;
         m_draftSeverity = rule.Severity;
         m_draftLogic = rule.Logic;
@@ -2097,6 +2874,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = "auto";
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = false;
+        m_draftValueMode = ConditionValueMode.Absolute;
+        m_metricPickerOpen = false;
+        m_referenceMetricPickerOpen = false;
+        m_conditionReferencePickerIndex = -1;
+        if (CurrentPanel != null)
+        {
+            m_draftTargetPanelId = CurrentPanel.Id;
+        }
     }
 
     private void AddPanel()
@@ -2119,6 +2904,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
         m_currentPanelIndex = m_runtime.Configuration.Panels.Count - 1;
+        m_draftTargetPanelId = panel.Id;
         m_newPanelName = "NEUES PANEL";
         SetStatus("Panel angelegt.");
     }
@@ -2132,6 +2918,35 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         var panelId = CurrentPanel.Id;
+        var editingRuleWasInPanel =
+            !string.IsNullOrWhiteSpace(m_editingRuleId) &&
+            m_runtime.Configuration.Rules.Any(rule =>
+                string.Equals(
+                    rule.Id,
+                    m_editingRuleId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    rule.PanelId,
+                    panelId,
+                    StringComparison.Ordinal));
+        if (!string.Equals(
+                m_pendingPanelDeleteId,
+                panelId,
+                StringComparison.Ordinal) ||
+            Time.realtimeSinceStartup > m_pendingPanelDeleteUntil)
+        {
+            var affectedRules = m_runtime.Configuration.Rules.Count(rule =>
+                string.Equals(
+                    rule.PanelId,
+                    panelId,
+                    StringComparison.Ordinal));
+            m_pendingPanelDeleteId = panelId;
+            m_pendingPanelDeleteUntil = Time.realtimeSinceStartup + 6f;
+            SetStatus(
+                "Panel löschen entfernt auch " + affectedRules +
+                " eigene Meldung(en). Innerhalb von 6 Sekunden erneut bestätigen.");
+            return;
+        }
         if (!m_runtime.RemovePanel(panelId))
         {
             SetStatus(
@@ -2144,6 +2959,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Math.Min(
                 m_currentPanelIndex,
                 m_runtime.Configuration.Panels.Count - 1));
+        m_pendingPanelDeleteId = "";
+        m_pendingPanelDeleteUntil = 0f;
+        if (editingRuleWasInPanel)
+        {
+            ResetDraftRule();
+        }
+        else if (string.Equals(
+                m_draftTargetPanelId,
+                panelId,
+                StringComparison.Ordinal))
+        {
+            m_draftTargetPanelId = CurrentPanel?.Id ?? "";
+        }
         m_detachedPanels.RemoveAll(item => item.PanelId == panelId);
         SetStatus("Panel und zugehörige eigene Meldungen gelöscht.");
     }
@@ -2191,6 +3019,175 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_testAlarm = null;
         m_testAlarmUntil = 0f;
         m_audio.StopAlarm();
+    }
+
+    private PanelDefinition GetDraftTargetPanel()
+    {
+        return m_runtime.Configuration.Panels.FirstOrDefault(panel =>
+            string.Equals(
+                panel.Id,
+                m_draftTargetPanelId,
+                StringComparison.Ordinal));
+    }
+
+    private string FormatMetricValue(MetricDescriptor metric)
+    {
+        if (metric == null)
+        {
+            return "—";
+        }
+        var value = metric.CurrentValue.ToString(
+            "0.###",
+            CultureInfo.CurrentCulture);
+        return string.IsNullOrWhiteSpace(metric.Unit)
+            ? value
+            : value + " " + metric.Unit;
+    }
+
+    private MetricDescriptor FindSelectedMetric(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+        return m_selectedMetrics.FirstOrDefault(metric => string.Equals(
+            metric.Path,
+            path,
+            StringComparison.Ordinal));
+    }
+
+    private int FindMetricIndex(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return 0;
+        }
+        for (var index = 0; index < m_selectedMetrics.Count; index++)
+        {
+            if (string.Equals(
+                    m_selectedMetrics[index].Path,
+                    path,
+                    StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+        return 0;
+    }
+
+    private void SelectSuggestedReferenceMetric(MetricDescriptor metric)
+    {
+        if (metric == null || m_selectedMetrics.Count == 0)
+        {
+            return;
+        }
+
+        var suggestedPath = string.IsNullOrWhiteSpace(
+            metric.SuggestedPercentReferencePath)
+            ? SuggestedReferencePath(metric.Path)
+            : metric.SuggestedPercentReferencePath;
+        var index = -1;
+        if (!string.IsNullOrWhiteSpace(suggestedPath))
+        {
+            for (var candidateIndex = 0;
+                 candidateIndex < m_selectedMetrics.Count;
+                 candidateIndex++)
+            {
+                if (string.Equals(
+                        m_selectedMetrics[candidateIndex].Path,
+                        suggestedPath,
+                        StringComparison.Ordinal))
+                {
+                    index = candidateIndex;
+                    break;
+                }
+            }
+        }
+
+        if (index < 0)
+        {
+            index = m_selectedMetrics
+                .Select((candidate, candidateIndex) => new
+                {
+                    Candidate = candidate,
+                    Index = candidateIndex,
+                })
+                .Where(item =>
+                    item.Index != m_selectedMetricIndex &&
+                    item.Candidate.Label.IndexOf(
+                        "kapaz",
+                        StringComparison.CurrentCultureIgnoreCase) >= 0)
+                .Select(item => item.Index)
+                .DefaultIfEmpty(0)
+                .First();
+        }
+        m_selectedReferenceMetricIndex = index;
+    }
+
+    private static string SuggestedReferencePath(string metricPath)
+    {
+        if (string.Equals(
+                metricPath,
+                "$stored.quantity",
+                StringComparison.Ordinal))
+        {
+            return "$stored.capacity";
+        }
+        if (string.Equals(
+                metricPath,
+                "$transport.quantity",
+                StringComparison.Ordinal) ||
+            metricPath.StartsWith(
+                "$transport.product:",
+                StringComparison.Ordinal))
+        {
+            return "$transport.capacity";
+        }
+        if (string.Equals(
+                metricPath,
+                "$cargo.quantity",
+                StringComparison.Ordinal) ||
+            metricPath.StartsWith(
+                "$cargo.product:",
+                StringComparison.Ordinal))
+        {
+            return "$cargo.capacity";
+        }
+        return "";
+    }
+
+    private string ConditionActualText(ConditionDefinition condition)
+    {
+        if (m_selectedEntity == null ||
+            m_selectedEntity.EntityId != condition.EntityId)
+        {
+            return "LIVE IM SPIEL";
+        }
+
+        var actualMetric = FindSelectedMetric(condition.MetricPath);
+        if (actualMetric == null)
+        {
+            return "MESSWERT FEHLT";
+        }
+        if (condition.ValueMode == ConditionValueMode.Absolute)
+        {
+            return FormatMetricValue(actualMetric);
+        }
+
+        var referenceMetric = FindSelectedMetric(
+            condition.ReferenceMetricPath);
+        if (referenceMetric == null ||
+            !AlarmEvaluation.TryCalculateComparable(
+                actualMetric.CurrentValue,
+                condition.ValueMode,
+                referenceMetric.CurrentValue,
+                out var comparable))
+        {
+            return "BEZUG FEHLT";
+        }
+        return comparable.ToString(
+                   "0.###",
+                   CultureInfo.CurrentCulture) + " %";
     }
 
     private void SaveConfiguration(string successMessage)
@@ -2525,6 +3522,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Threshold = source.Threshold,
             ExpectedProductId = source.ExpectedProductId,
             EntityPrototypeId = source.EntityPrototypeId,
+            ValueMode = source.ValueMode,
+            ReferenceMetricPath = source.ReferenceMetricPath,
+            ReferenceMetricLabel = source.ReferenceMetricLabel,
         };
     }
 
@@ -2564,16 +3564,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private static bool TryParseDouble(string text, out double value)
     {
-        return double.TryParse(
-                   text,
-                   NumberStyles.Float,
-                   CultureInfo.CurrentCulture,
-                   out value) ||
-               double.TryParse(
-                   text,
-                   NumberStyles.Float,
-                   CultureInfo.InvariantCulture,
-                   out value);
+        var parsed = double.TryParse(
+            text,
+            NumberStyles.Float,
+            CultureInfo.CurrentCulture,
+            out value);
+        if (!parsed)
+        {
+            parsed = double.TryParse(
+                text,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out value);
+        }
+        return parsed && !double.IsNaN(value) && !double.IsInfinity(value);
     }
 
     private static string SeverityLabel(AlarmSeverity severity)
@@ -2669,6 +3673,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void OnDestroy()
     {
+        m_inspectorAlarmButtons?.Dispose();
         m_runtime?.SetGameplayActive(false);
         if (m_audio != null)
         {

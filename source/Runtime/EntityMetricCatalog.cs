@@ -22,12 +22,22 @@ public sealed class MetricDescriptor
     public string Path { get; }
     public string Label { get; }
     public double CurrentValue { get; }
+    public string Unit { get; }
+    public string SuggestedPercentReferencePath { get; }
 
-    public MetricDescriptor(string path, string label, double currentValue)
+    public MetricDescriptor(
+        string path,
+        string label,
+        double currentValue,
+        string unit = "",
+        string suggestedPercentReferencePath = "")
     {
         Path = path;
         Label = label;
         CurrentValue = currentValue;
+        Unit = unit ?? "";
+        SuggestedPercentReferencePath =
+            suggestedPercentReferencePath ?? "";
     }
 }
 
@@ -132,14 +142,15 @@ public static class EntityMetricCatalog
             var quantity = stored.CurrentQuantity.Value;
             var storedCapacity = stored.Capacity.Value;
             Add(result, paths, StoredQuantityPath,
-                "Lagerinhalt", quantity);
+                "Lagerinhalt", quantity, "Einheiten", StorageCapacityPath);
             Add(result, paths, StorageCapacityPath,
-                "Lagerkapazität", storedCapacity);
+                "Lagerkapazität", storedCapacity, "Einheiten");
             Add(result, paths, FillPercentPath,
                 "Füllstand (%)",
                 storedCapacity <= 0
                     ? 0d
-                    : quantity * 100d / storedCapacity);
+                    : quantity * 100d / storedCapacity,
+                "%");
         }
 
         if (entity is Transport transport)
@@ -349,12 +360,14 @@ public static class EntityMetricCatalog
 
         var capacity = GetTransportCapacity(transport);
         Add(result, paths, TransportQuantityPath,
-            "Transportierte Menge", total);
+            "Transportierte Menge", total, "Einheiten",
+            TransportCapacityPath);
         Add(result, paths, TransportCapacityPath,
-            "Transportkapazität", capacity);
+            "Transportkapazität", capacity, "Einheiten");
         Add(result, paths, TransportFillPercentPath,
             "Transportfüllstand (%)",
-            capacity <= 0d ? 0d : total * 100d / capacity);
+            capacity <= 0d ? 0d : total * 100d / capacity,
+            "%");
 
         foreach (var pair in quantitiesByProduct)
         {
@@ -366,7 +379,9 @@ public static class EntityMetricCatalog
             Add(result, paths,
                 TransportProductPrefix + product.Id.Value,
                 "Transport: " + GetProductName(product),
-                pair.Value);
+                pair.Value,
+                "Einheiten",
+                TransportCapacityPath);
         }
     }
 
@@ -378,19 +393,22 @@ public static class EntityMetricCatalog
     {
         var total = cargo.TotalQuantity.Value;
         Add(result, paths, CargoQuantityPath,
-            "Fahrzeugladung", total);
+            "Fahrzeugladung", total, "Einheiten", CargoCapacityPath);
         Add(result, paths, CargoCapacityPath,
-            "Fahrzeugkapazität", capacity);
+            "Fahrzeugkapazität", capacity, "Einheiten");
         Add(result, paths, CargoFillPercentPath,
             "Fahrzeugfüllstand (%)",
-            capacity <= 0d ? 0d : total * 100d / capacity);
+            capacity <= 0d ? 0d : total * 100d / capacity,
+            "%");
 
         foreach (var pair in cargo)
         {
             Add(result, paths,
                 CargoProductPrefix + pair.Key.Id.Value,
                 "Fracht: " + GetProductName(pair.Key),
-                pair.Value.Value);
+                pair.Value.Value,
+                "Einheiten",
+                CargoCapacityPath);
         }
     }
 
@@ -402,15 +420,16 @@ public static class EntityMetricCatalog
     {
         var total = cargo.Quantity.Value;
         Add(result, paths, CargoQuantityPath,
-            "Fahrzeugladung", total);
+            "Fahrzeugladung", total, "Einheiten", CargoCapacityPath);
 
         if (capacity >= 0d)
         {
             Add(result, paths, CargoCapacityPath,
-                "Fahrzeugkapazität", capacity);
+                "Fahrzeugkapazität", capacity, "Einheiten");
             Add(result, paths, CargoFillPercentPath,
                 "Fahrzeugfüllstand (%)",
-                capacity <= 0d ? 0d : total * 100d / capacity);
+                capacity <= 0d ? 0d : total * 100d / capacity,
+                "%");
         }
 
         if (cargo.IsNotEmpty)
@@ -418,7 +437,9 @@ public static class EntityMetricCatalog
             Add(result, paths,
                 CargoProductPrefix + cargo.Product.Id.Value,
                 "Fracht: " + GetProductName(cargo.Product),
-                total);
+                total,
+                "Einheiten",
+                CargoCapacityPath);
         }
     }
 
@@ -815,11 +836,18 @@ public static class EntityMetricCatalog
         ISet<string> paths,
         string path,
         string label,
-        double value)
+        double value,
+        string unit = "",
+        string suggestedPercentReferencePath = "")
     {
         if (paths.Add(path))
         {
-            result.Add(new MetricDescriptor(path, label, value));
+            result.Add(new MetricDescriptor(
+                path,
+                label,
+                value,
+                unit,
+                suggestedPercentReferencePath));
         }
     }
 

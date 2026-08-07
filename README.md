@@ -36,7 +36,12 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Eigene Tonzuordnung und frei wählbare automatische Quittierung je bekannter
   Vanilla- und Systemmeldung; eigene Regeln wählen Ton, Alarmstufe,
   Aktivfarbe und Quittierverhalten direkt im Editor.
-- Eigene Meldungen für die aktuell im Spiel inspizierte Entität.
+- Goldene UNMA-Alarmglocke direkt im Inspector jeder unterstützten Entität;
+  ein Klick öffnet ein separates, objektgebundenes Alarmfenster.
+- AWL-artige Bedingungstabelle mit sichtbarem Ist-Wert, verständlicher Kennung,
+  allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
+- Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
+  werden für Lager, Förderer/Rohre und Fahrzeugfracht automatisch empfohlen.
 - Automatische Erkennung öffentlicher numerischer und boolescher Messwerte von
   Gebäuden, Lagern, Fahrzeugen, Rohren und Förderbändern.
 - Typisierte Produktmengen für Lager, Förderbänder/Rohre sowie Frachten von
@@ -45,8 +50,8 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Eigene Meldungen lassen sich nach dem Speichern erneut in den Editor laden
   und vollständig ändern.
 - Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
-- Beliebig viele Panels, Spaltenzahl, Vanilla-/Systemfilter und
-  kommagetrennte Suchfilter.
+- Beliebig viele Panels mit klar getrennter Auswahl, Bearbeitung und Neuanlage,
+  Spaltenzahl, Vanilla-/Systemfilter und kommagetrennten Suchfiltern.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
@@ -74,13 +79,16 @@ Zielversion: Captain of Industry **0.8.6c**.
 5. In **VERLAUF** zeigt eine eigene Zeile je Alarmereignis den Zustand `K`,
    `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
    gespeichert, bis sie dort ausdrücklich gelöscht werden.
-6. Für eine eigene Meldung zuerst eine Entität im Spiel anklicken und deren
-   Inspector offen lassen.
-7. In **EDITOR** die aktuelle Spiel-Auswahl übernehmen, Messwert, Operator und
-   Schwelle wählen und die Bedingung hinzufügen.
-8. Für eine Sammelmeldung weitere Entitäten nacheinander auswählen und
-   Bedingungen ergänzen. Danach UND/ODER, Stufe, Farbe und Ton festlegen.
-9. Unter **MELDUNGSTÖNE** können Ton und Verhalten beim Gehen für jede bereits
+6. Für eine eigene Meldung die Entität anklicken und im geöffneten Inspector
+   die goldene UNMA-Glocke drücken. Das separate Objekt-Alarmfenster übernimmt
+   Name, ID und aktuelle Messwerte automatisch.
+7. Ziel-Meldetafel und Kennung wählen, eines der sechs Steuerzeichen anklicken,
+   Soll-Wert eingeben und die AWL-Zeile hinzufügen. Für relative Bedingungen
+   `% VON` und anschließend den Bezugs-Messwert wählen.
+8. Für eine Sammelmeldung weitere Entitäten über deren Glocke hinzufügen und
+   global UND oder ODER festlegen. Danach Text, Stufe, Farbe und Ton wählen.
+   Der **EDITOR** bietet denselben Ablauf sowie die klar getrennte Panelpflege.
+9. Unter **TÖNE** können Ton und Verhalten beim Gehen für jede bereits
    bekannte Vanilla-Meldung separat festgelegt werden.
 10. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
    ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
@@ -99,6 +107,11 @@ produktbezogenen Menge auf einem Förderband über UND verknüpft werden. Bei
 Transporten stehen Gesamtmenge, theoretischer Inhaltsraum, Füllstand und die
 aktuell vorkommenden Produkte zur Wahl. Gespeicherte Produktbedingungen lesen
 auch nach dem Leerlaufen weiterhin korrekt `0`.
+
+Für `Lagerinhalt % VON Lagerkapazität < 5` berechnet UNMA beispielsweise den
+vergleichbaren Wert als `Istwert / Bezugswert × 100`. Ein fehlender, null oder
+negativer Bezugswert erfüllt die Bedingung bewusst nicht und wird als nicht
+berechenbar angezeigt; Werte über 100 % werden nicht künstlich begrenzt.
 
 ## Audio und Lizenzen
 

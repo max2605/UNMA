@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 – 2026-08-07
+
+- Goldene UNMA-Alarmglocke direkt in den Inspectoren von Gebäuden, Lagern,
+  Fahrzeugen, Transporten, Straßen und Schienen ergänzt. Sie bindet immer das
+  tatsächlich angeklickte beziehungsweise angeheftete Objekt.
+- Neues separates Objekt-Alarmfenster mit verständlicher AWL-Tabelle:
+  `Ist-Wert | Kennung | Steuerzeichen | Soll-Wert | Bedingung`.
+- Alle sechs Vergleiche (`<`, `<=`, `=`, `!=`, `>=`, `>`) sind gleichzeitig
+  sichtbar auswählbar; Messwerte werden über eine durchsuchbare Liste statt
+  über Pfeile gewählt.
+- Neuer Modus `% VON`: Ein Ist-Wert kann sicher als Prozent eines frei
+  gewählten Bezugs-Messwerts derselben Entität ausgewertet werden. Für Lager,
+  Förderer/Rohre und Fahrzeugfracht wird die jeweilige Kapazität vorgeschlagen.
+- Klare Ziel-Meldetafel pro Meldung sowie direkte Anlage einer neuen Tafel aus
+  dem Alarmfenster. Der Panel-Editor trennt Auswahl, Bearbeitung und Neuanlage.
+- Panel-Löschen verlangt eine zweite Bestätigung und zeigt vorher die Zahl der
+  ebenfalls betroffenen eigenen Meldungen.
+- Konfigurationsschema 7 migriert bestehende Regeln unverändert als absolute
+  Bedingungen und speichert Prozentmodus sowie Bezugs-Messwert dauerhaft.
+
 ## 0.4.0 – 2026-08-07
 
 - Neuer persistenter **VERLAUF** mit einer eigenen Zeile pro Alarmereignis und
