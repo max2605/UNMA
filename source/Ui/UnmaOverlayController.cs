@@ -121,6 +121,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_draftAutoAcknowledgeOnClear;
     private string m_editingRuleId = "";
     private string m_draftTargetPanelId = "";
+    private string m_lastAlarmTileClickId = "";
+    private float m_lastAlarmTileClickAt;
     private string m_newPanelName = "NEUES PANEL";
     private string m_panelSlotFilter = "";
     private string m_soundOverrideFilter = "";
@@ -521,6 +523,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         DrawStatusMessage();
+        if (!m_entityAssignmentPending)
+        {
+            GUILayout.Label(
+                "Eigene Meldung doppelklicken = direkt im Editor öffnen.",
+                m_smallLabelStyle);
+        }
         m_boardScroll = GUILayout.BeginScrollView(m_boardScroll);
         DrawAlarmGrid(
             alarms,
@@ -1470,17 +1478,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_draftValueMode == ConditionValueMode.Absolute
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
-                GUILayout.Width(105f)))
+                GUILayout.Width(125f)))
         {
             m_draftValueMode = ConditionValueMode.Absolute;
             m_referenceMetricPickerOpen = false;
         }
         if (GUILayout.Button(
-                "% VON",
+                metric.Path.StartsWith(
+                    "$input.product:",
+                    StringComparison.Ordinal)
+                    ? "% KAPAZITÄT"
+                    : "% VON",
                 m_draftValueMode == ConditionValueMode.PercentOfReference
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
-                GUILayout.Width(105f)))
+                GUILayout.Width(125f)))
         {
             m_draftValueMode = ConditionValueMode.PercentOfReference;
             SelectSuggestedReferenceMetric(metric);
@@ -1507,6 +1519,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
         }
         GUILayout.EndHorizontal();
+
+        if (metric.Path.StartsWith(
+                "$input.product:",
+                StringComparison.Ordinal))
+        {
+            GUILayout.Label(
+                "ABSOLUT prüft die Produktmenge, z. B. Kartoffeln < 400. " +
+                "% KAPAZITÄT prüft den Füllstand, z. B. Kartoffeln < 50 %.",
+                m_smallLabelStyle);
+        }
 
         if (m_referenceMetricPickerOpen &&
             m_draftValueMode == ConditionValueMode.PercentOfReference)
@@ -2799,6 +2821,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
                             interactionPanel,
                             alarms[index]);
                     }
+                    else if (!m_entityAssignmentPending &&
+                             GUI.Button(
+                                 rect,
+                                 GUIContent.none,
+                                 GUIStyle.none))
+                    {
+                        HandleAlarmTileClick(alarms[index]);
+                    }
                 }
                 else if (showCreationTarget && index == alarms.Count)
                 {
@@ -2838,6 +2868,96 @@ public sealed class UnmaOverlayController : MonoBehaviour
             entry.Views = m_runtime.GetViews(panel);
         }
         return entry.Views;
+    }
+
+    private void HandleAlarmTileClick(AlarmView alarm)
+    {
+        if (m_entityAssignmentPending)
+        {
+            return;
+        }
+
+        var alarmId = PanelSlotProjection.StableAlarmId(alarm);
+        var now = Time.realtimeSinceStartup;
+        if (!string.Equals(
+                m_lastAlarmTileClickId,
+                alarmId,
+                StringComparison.Ordinal) ||
+            now - m_lastAlarmTileClickAt > 0.5f)
+        {
+            m_lastAlarmTileClickId = alarmId;
+            m_lastAlarmTileClickAt = now;
+            return;
+        }
+
+        m_lastAlarmTileClickId = "";
+        m_lastAlarmTileClickAt = 0f;
+        OpenRuleFromAlarmTile(alarm);
+    }
+
+    private bool OpenRuleFromAlarmTile(AlarmView alarm)
+    {
+        if (!PanelSlotProjection.TryGetCustomRuleId(alarm, out var ruleId))
+        {
+            return false;
+        }
+
+        var rule = m_runtime.Configuration.Rules.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, ruleId, StringComparison.Ordinal));
+        if (rule == null)
+        {
+            m_entityAlarmWindowOpen = false;
+            m_isOpen = true;
+            m_tab = 2;
+            SetStatus(
+                "Die eigene Meldung in diesem Schlitz existiert nicht mehr.");
+            return true;
+        }
+
+        var alreadyEditing = string.Equals(
+                m_editingRuleId,
+                rule.Id,
+                StringComparison.Ordinal);
+        if (!alreadyEditing)
+        {
+            if (HasDraftRuleWork())
+            {
+                m_entityAlarmWindowOpen = false;
+                m_isOpen = true;
+                m_tab = 2;
+                SetStatus(
+                    "Im Editor liegt bereits eine andere oder ungespeicherte " +
+                    "Meldung. Erst speichern oder ENTWURF LEEREN.");
+                return true;
+            }
+            BeginEditingRule(rule, m_audio.GetSoundOptions());
+        }
+
+        var panelIndex = m_runtime.Configuration.Panels.FindIndex(panel =>
+            string.Equals(panel.Id, rule.PanelId, StringComparison.Ordinal));
+        if (panelIndex >= 0)
+        {
+            m_currentPanelIndex = panelIndex;
+        }
+        m_entityAlarmWindowOpen = false;
+        m_openEntityAlarmAfterInspection = false;
+        m_isOpen = true;
+        m_tab = 2;
+
+        var firstCondition = rule.Conditions.FirstOrDefault();
+        if (alreadyEditing)
+        {
+            SetStatus("Bereits geöffnete Meldung im Editor fokussiert.");
+        }
+        else if (firstCondition != null)
+        {
+            RequestEntityInspection(firstCondition.EntityId, false);
+        }
+        else
+        {
+            SetStatus("Meldung per Doppelklick im Editor geöffnet.");
+        }
+        return true;
     }
 
     private void DrawAlarmTile(Rect rect, AlarmView alarm)
@@ -3762,6 +3882,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal))
         {
             return "$stored.capacity";
+        }
+        const string inputProductPrefix = "$input.product:";
+        if (metricPath.StartsWith(
+                inputProductPrefix,
+                StringComparison.Ordinal))
+        {
+            return "$input.capacity:" +
+                   metricPath.Substring(inputProductPrefix.Length);
         }
         if (string.Equals(
                 metricPath,

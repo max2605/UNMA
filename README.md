@@ -73,6 +73,12 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Mehrere Bedingungen pro Sammelmeldung mit UND- oder ODER-Verknüpfung.
 - Eigene Meldungen lassen sich nach dem Speichern erneut in den Editor laden
   und vollständig ändern.
+- Ein Doppelklick auf einen eigenen Meldeschlitz öffnet dessen Regel direkt im
+  Editor; ungespeicherte andere Entwürfe werden dabei nicht überschrieben.
+- Mehrprodukt-Gebäude wie Lebensmittelmärkte bieten jeden zugewiesenen Artikel
+  als verständlichen Messwert an, beispielsweise `Kartoffeln · Bestand`.
+  Bedingungen können absolut (`< 400`) oder automatisch relativ zur summierten
+  Produktkapazität (`< 50 %`) definiert werden.
 - Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
 - Beliebig viele Panels mit klar getrennter Auswahl, Bearbeitung und Neuanlage,
   Spaltenzahl, festen hoch/runter sortierbaren Schlitzen, gezieltem Hinzufügen

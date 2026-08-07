@@ -96,6 +96,27 @@ internal static class Program
             20d));
 
         IsTrue(AlarmEvaluation.TryCalculateComparable(
+            199d,
+            ConditionValueMode.PercentOfReference,
+            400d,
+            out var potatoesBelowHalf));
+        AreEqual(49.75d, potatoesBelowHalf);
+        IsTrue(AlarmEvaluation.Compare(
+            potatoesBelowHalf,
+            ComparisonOperator.Less,
+            50d));
+        IsTrue(AlarmEvaluation.TryCalculateComparable(
+            200d,
+            ConditionValueMode.PercentOfReference,
+            400d,
+            out var potatoesAtHalf));
+        AreEqual(50d, potatoesAtHalf);
+        IsFalse(AlarmEvaluation.Compare(
+            potatoesAtHalf,
+            ComparisonOperator.Less,
+            50d));
+
+        IsTrue(AlarmEvaluation.TryCalculateComparable(
             150d,
             ConditionValueMode.PercentOfReference,
             100d,
@@ -1051,6 +1072,21 @@ internal static class Program
                     ReferenceMetricPath = "$transport.capacity",
                     ReferenceMetricLabel = "Transportkapazität",
                 },
+                new()
+                {
+                    EntityId = 19,
+                    EntityTitle = "Lebensmittelmarkt",
+                    EntityType =
+                        "Mafi.Core.Buildings.Settlements.SettlementFoodModule",
+                    EntityPrototypeId = "SettlementFoodModuleT2",
+                    MetricPath = "$input.product:Potato",
+                    MetricLabel = "Kartoffeln · Bestand",
+                    Comparison = ComparisonOperator.Less,
+                    Threshold = 50,
+                    ValueMode = ConditionValueMode.PercentOfReference,
+                    ReferenceMetricPath = "$input.capacity:Potato",
+                    ReferenceMetricLabel = "Kartoffeln · Kapazität",
+                },
             },
         });
         configuration.AlarmMemories.Add(new AlarmMemoryDefinition
@@ -1081,7 +1117,7 @@ internal static class Program
 
         AreEqual(2, restored.Panels.Count);
         AreEqual(1, restored.Rules.Count);
-        AreEqual(2, restored.Rules[0].Conditions.Count);
+        AreEqual(3, restored.Rules[0].Conditions.Count);
         AreEqual("LAGER UND BAND LEER", restored.Rules[0].Name);
         AreEqual(20d, restored.Rules[0].Conditions[1].Threshold);
         AreEqual(
@@ -1102,6 +1138,13 @@ internal static class Program
         AreEqual(
             "Transportkapazität",
             restored.Rules[0].Conditions[1].ReferenceMetricLabel);
+        AreEqual(
+            "$input.product:Potato",
+            restored.Rules[0].Conditions[2].MetricPath);
+        AreEqual(
+            "$input.capacity:Potato",
+            restored.Rules[0].Conditions[2].ReferenceMetricPath);
+        AreEqual(50d, restored.Rules[0].Conditions[2].Threshold);
         AreEqual(3, restored.SystemAlarms.Count);
         IsTrue(restored.Rules[0].AutoAcknowledgeOnClear);
         var restoredSystemAlarm = restored.SystemAlarms

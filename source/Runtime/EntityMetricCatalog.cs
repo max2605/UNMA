@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using Mafi.Core;
 using Mafi.Core.Entities;
+using Mafi.Core.Entities.Static;
 using Mafi.Core.Factory.Transports;
 using Mafi.Core.Products;
 using Mafi.Core.Prototypes;
@@ -77,6 +78,8 @@ public static class EntityMetricCatalog
     private const string StoredQuantityPath = "$stored.quantity";
     private const string StorageCapacityPath = "$stored.capacity";
     private const string FillPercentPath = "$stored.percent";
+    private const string InputProductPrefix = "$input.product:";
+    private const string InputCapacityPrefix = "$input.capacity:";
     private const string TransportQuantityPath = "$transport.quantity";
     private const string TransportCapacityPath = "$transport.capacity";
     private const string TransportFillPercentPath = "$transport.percent";
@@ -90,6 +93,13 @@ public static class EntityMetricCatalog
         new(StringComparer.Ordinal);
     private static readonly Dictionary<ushort, ProductProto>
         s_productsBySlimId = new();
+
+    private sealed class ProductBufferTotals
+    {
+        public ProductProto Product;
+        public double Quantity;
+        public double Capacity;
+    }
 
     private static readonly string[] s_nestedPropertyHints =
     {
@@ -153,6 +163,11 @@ public static class EntityMetricCatalog
                     ? 0d
                     : quantity * 100d / storedCapacity,
                 "%");
+        }
+
+        if (entity is IEntityWithInputBuffersForUi inputBuffers)
+        {
+            AddInputBufferMetrics(result, paths, inputBuffers);
         }
 
         if (entity is Transport transport)
@@ -221,9 +236,7 @@ public static class EntityMetricCatalog
         }
 
         return result
-            .OrderBy(metric => metric.Path.StartsWith(
-                "external:",
-                StringComparison.Ordinal) ? 0 : 1)
+            .OrderBy(MetricSortPriority)
             .ThenBy(metric => metric.Label, StringComparer.CurrentCulture)
             .Take(160)
             .ToArray();
@@ -254,6 +267,12 @@ public static class EntityMetricCatalog
                 metric.Id,
                 entity,
                 out value);
+        }
+
+        if (path.StartsWith("$input.", StringComparison.Ordinal))
+        {
+            return entity is IEntityWithInputBuffersForUi inputBuffers &&
+                   TryReadInputBuffers(inputBuffers, path, out value);
         }
 
         if (path.StartsWith("$transport.", StringComparison.Ordinal))
@@ -431,6 +450,130 @@ public static class EntityMetricCatalog
         }
 
         return stored.StoredProduct.Value.Id.Value;
+    }
+
+    private static void AddInputBufferMetrics(
+        ICollection<MetricDescriptor> result,
+        ISet<string> paths,
+        IEntityWithInputBuffersForUi entity)
+    {
+        foreach (var totals in CollectInputBufferTotals(entity).Values
+                     .OrderBy(item =>
+                         GetProductName(item.Product),
+                         StringComparer.CurrentCulture))
+        {
+            var productId = totals.Product.Id.Value;
+            var productName = GetProductName(totals.Product);
+            Add(
+                result,
+                paths,
+                InputProductPrefix + productId,
+                productName + " · Bestand",
+                totals.Quantity,
+                "Einheiten",
+                InputCapacityPrefix + productId);
+            Add(
+                result,
+                paths,
+                InputCapacityPrefix + productId,
+                productName + " · Kapazität",
+                totals.Capacity,
+                "Einheiten");
+        }
+    }
+
+    private static bool TryReadInputBuffers(
+        IEntityWithInputBuffersForUi entity,
+        string path,
+        out double value)
+    {
+        value = 0d;
+        var quantity = path.StartsWith(
+            InputProductPrefix,
+            StringComparison.Ordinal);
+        var capacity = path.StartsWith(
+            InputCapacityPrefix,
+            StringComparison.Ordinal);
+        if (!quantity && !capacity)
+        {
+            return false;
+        }
+
+        var prefix = quantity ? InputProductPrefix : InputCapacityPrefix;
+        var productId = path.Substring(prefix.Length);
+        if (string.IsNullOrWhiteSpace(productId))
+        {
+            return false;
+        }
+
+        var found = false;
+        foreach (var buffer in entity.InputBuffers ??
+                     Enumerable.Empty<IProductBufferReadOnly>())
+        {
+            if (buffer?.Product == null ||
+                !string.Equals(
+                    buffer.Product.Id.Value,
+                    productId,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+            found = true;
+            value += quantity
+                ? buffer.Quantity.Value
+                : buffer.Capacity.Value;
+        }
+        return found;
+    }
+
+    private static Dictionary<string, ProductBufferTotals>
+        CollectInputBufferTotals(IEntityWithInputBuffersForUi entity)
+    {
+        var totalsByProduct = new Dictionary<string, ProductBufferTotals>(
+            StringComparer.Ordinal);
+        foreach (var buffer in entity.InputBuffers ??
+                     Enumerable.Empty<IProductBufferReadOnly>())
+        {
+            if (buffer?.Product == null)
+            {
+                continue;
+            }
+
+            var productId = buffer.Product.Id.Value;
+            if (!totalsByProduct.TryGetValue(productId, out var totals))
+            {
+                totals = new ProductBufferTotals
+                {
+                    Product = buffer.Product,
+                };
+                totalsByProduct[productId] = totals;
+            }
+            totals.Quantity += buffer.Quantity.Value;
+            totals.Capacity += buffer.Capacity.Value;
+        }
+        return totalsByProduct;
+    }
+
+    private static int MetricSortPriority(MetricDescriptor metric)
+    {
+        if (metric.Path.StartsWith(
+                InputProductPrefix,
+                StringComparison.Ordinal))
+        {
+            return 0;
+        }
+        if (metric.Path.StartsWith(
+                InputCapacityPrefix,
+                StringComparison.Ordinal) ||
+            metric.Path.StartsWith("external:", StringComparison.Ordinal))
+        {
+            return 1;
+        }
+        if (metric.Path.StartsWith("$", StringComparison.Ordinal))
+        {
+            return 2;
+        }
+        return 3;
     }
 
     private static void AddTransportMetrics(

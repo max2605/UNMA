@@ -2,6 +2,11 @@
 
 ## 0.8.0 – 2026-08-07
 
+- Eigene Meldeschlitze öffnen ihre Regel nun per Doppelklick direkt im Editor;
+  bestehende ungespeicherte Entwürfe bleiben geschützt.
+- Mehrprodukt-Eingabepuffer werden pro Produkt aggregiert. Damit lassen sich in
+  Lebensmittelmärkten und ähnlichen Gebäuden Bedingungen wie
+  `Kartoffeln < 400` oder `Kartoffeln < 50 % Kapazität` auswählen.
 - Das Home-/Dashboard-Panel ist jetzt eine reine aktive Übersicht: Es zeigt nur
   anstehende quittierte und unquittierte Meldungen (`K`/`KQ`) und blendet
   Normalzustände, gegangene Meldungen sowie leere Rasterplätze aus.
