@@ -8,6 +8,7 @@ using UNMA.Audio;
 using UNMA.Domain;
 using UNMA.Extensions;
 using UNMA.Runtime;
+using UNMA.Ui;
 
 internal static class Program
 {
@@ -23,6 +24,7 @@ internal static class Program
         TestAlarmHistoryState();
         TestSystemAlarmSelection();
         TestSystemMetricMath();
+        TestWindowResizeMath();
         TestPanelSlotProjection();
         TestConfigurationRoundTrip();
         TestAlarmHistoryRoundTrip();
@@ -174,6 +176,39 @@ internal static class Program
         IsFalse(AlarmEvaluation.Combine(
             Array.Empty<bool>(),
             AlarmLogic.Any));
+    }
+
+    private static void TestWindowResizeMath()
+    {
+        AreEqual(946f, WindowResizeMath.GetHandleOrigin(980f, 30f, 4f));
+        AreEqual(686f, WindowResizeMath.GetHandleOrigin(720f, 30f, 4f));
+        IsTrue(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 961f, 701f, 30f, 4f));
+        IsTrue(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 946f, 686f, 30f, 4f));
+        IsFalse(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 490f, 360f, 30f, 4f));
+        IsFalse(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 945f, 701f, 30f, 4f));
+        IsFalse(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 976f, 701f, 30f, 4f));
+        IsFalse(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 961f, 685f, 30f, 4f));
+        IsFalse(WindowResizeMath.IsInsideHandle(
+            980f, 720f, 961f, 716f, 30f, 4f));
+
+        AreEqual(1080f, WindowResizeMath.ResizeExtent(
+            980f, 100f, 700f, 1908f));
+        AreEqual(770f, WindowResizeMath.ResizeExtent(
+            720f, 50f, 520f, 1068f));
+        AreEqual(700f, WindowResizeMath.ResizeExtent(
+            980f, -1000f, 700f, 1908f));
+        AreEqual(1068f, WindowResizeMath.ResizeExtent(
+            720f, 1000f, 520f, 1068f));
+        AreEqual(1908f, WindowResizeMath.ResizeExtent(
+            980f, 1000f, 700f, 1908f));
+        AreEqual(700f, WindowResizeMath.ResizeExtent(
+            980f, 100f, 700f, 600f));
     }
 
     private static void TestAlarmLatch()

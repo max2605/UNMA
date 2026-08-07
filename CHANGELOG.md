@@ -2,6 +2,9 @@
 
 ## 0.8.0 – 2026-08-07
 
+- Der Größenänderungsgriff der Haupttafel besitzt jetzt eine klar sichtbare,
+  deckungsgleiche Trefferfläche und exklusiven Mauszeiger-Fokus. Ziehen im
+  Fensterinhalt kann dadurch keine hängen gebliebene Skalierung mehr fortsetzen.
 - Eigene Meldeschlitze öffnen ihre Regel nun per Doppelklick direkt im Editor;
   bestehende ungespeicherte Entwürfe bleiben geschützt.
 - Mehrprodukt-Eingabepuffer werden pro Produkt aggregiert. Damit lassen sich in

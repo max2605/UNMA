@@ -35,6 +35,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private const int MainWindowId = 0x554E4D41;
     private const int EntityAlarmWindowId = 0x4D4E5541;
+    private const int MainResizeControlHint = 0x554E5253;
+    private const float MainResizeHandleSize = 30f;
+    private const float MainResizeHandleInset = 4f;
+    private const float MainWindowContentBottomInset =
+        MainResizeHandleSize + MainResizeHandleInset + 4f;
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
 
@@ -91,6 +96,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_gameplayWasActive;
     private bool m_isUiSuppressedByMenu;
     private bool m_isResizing;
+    private int m_resizeControlId;
     private bool m_isDraggingLauncher;
     private Vector2 m_resizeStartMouse;
     private Vector2 m_resizeStartSize;
@@ -153,6 +159,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private GUIStyle m_buttonStyle;
     private GUIStyle m_primaryButtonStyle;
     private GUIStyle m_dangerButtonStyle;
+    private GUIStyle m_resizeHandleStyle;
     private GUIStyle m_textFieldStyle;
     private GUIStyle m_historyHeaderStyle;
     private GUIStyle m_historyTextStyle;
@@ -276,6 +283,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (!m_gameplayWasActive || m_isUiSuppressedByMenu)
         {
+            CancelResizeCapture();
             return;
         }
 
@@ -284,9 +292,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         if (m_isOpen)
         {
+            // Keep the dimensions used inside DrawMainWindow identical to the
+            // rectangle passed to GUI.Window, including after a resolution
+            // change or a previously saved oversized window.
+            m_windowRect = ClampToScreen(m_windowRect);
             var nextWindowRect = GUI.Window(
                 MainWindowId,
-                ClampToScreen(m_windowRect),
+                m_windowRect,
                 DrawMainWindow,
                 GUIContent.none,
                 m_windowStyle);
@@ -297,6 +309,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_pendingMainWindowSize = null;
             }
             m_windowRect = ClampToScreen(nextWindowRect);
+        }
+        else
+        {
+            CancelResizeCapture();
         }
 
         if (m_entityAlarmWindowOpen)
@@ -405,6 +421,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawMainWindow(int _)
     {
+        HandleResizeInput();
         DrawWindowHeader(UnmaText.Get(
             "window.title",
             "UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE"));
@@ -413,7 +430,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             12f,
             42f,
             m_windowRect.width - 24f,
-            m_windowRect.height - 56f));
+            m_windowRect.height - 42f - MainWindowContentBottomInset));
 
         GUILayout.BeginHorizontal();
         DrawTabButton(0, UnmaText.Get("tab.board", "MELDETAFEL"));
@@ -453,7 +470,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.EndArea();
-        HandleResize();
+        DrawResizeHandle();
         GUI.DragWindow(new Rect(0f, 0f, m_windowRect.width - 44f, 38f));
         PersistWindowRectOnMouseUp();
     }
@@ -4008,18 +4025,63 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_selectedMetrics.Count);
     }
 
-    private void HandleResize()
+    private Rect GetResizeHandleRect()
     {
-        var handle = new Rect(
-            m_windowRect.width - 24f,
-            m_windowRect.height - 24f,
-            20f,
-            20f);
-        GUI.Label(handle, "◢", m_labelStyle);
+        return new Rect(
+            WindowResizeMath.GetHandleOrigin(
+                m_windowRect.width,
+                MainResizeHandleSize,
+                MainResizeHandleInset),
+            WindowResizeMath.GetHandleOrigin(
+                m_windowRect.height,
+                MainResizeHandleSize,
+                MainResizeHandleInset),
+            MainResizeHandleSize,
+            MainResizeHandleSize);
+    }
+
+    private void HandleResizeInput()
+    {
         var currentEvent = UnityEngine.Event.current;
-        if (currentEvent.type == EventType.MouseDown &&
-            handle.Contains(currentEvent.mousePosition))
+        var controlId = GUIUtility.GetControlID(
+            MainResizeControlHint,
+            FocusType.Passive);
+        m_resizeControlId = controlId;
+        var eventType = currentEvent.GetTypeForControl(controlId);
+
+        if (m_isResizing && GUIUtility.hotControl != controlId)
         {
+            // Never leave resizing armed after Unity has released or replaced
+            // the captured pointer. Otherwise a later drag in the window body
+            // can accidentally continue the old resize operation.
+            m_isResizing = false;
+        }
+
+        if (m_isResizing &&
+            GUIUtility.hotControl == controlId &&
+            eventType == EventType.Repaint &&
+            !Input.GetMouseButton(0))
+        {
+            // A mouse-up outside the game window is not guaranteed to arrive
+            // as an IMGUI event. Recover the capture as soon as Unity reports
+            // that the physical button is no longer held.
+            GUIUtility.hotControl = 0;
+            m_resizeControlId = 0;
+            m_isResizing = false;
+            PersistWindowRect();
+        }
+
+        if (eventType == EventType.MouseDown &&
+            currentEvent.button == 0 &&
+            WindowResizeMath.IsInsideHandle(
+                m_windowRect.width,
+                m_windowRect.height,
+                currentEvent.mousePosition.x,
+                currentEvent.mousePosition.y,
+                MainResizeHandleSize,
+                MainResizeHandleInset))
+        {
+            GUIUtility.hotControl = controlId;
             m_isResizing = true;
             m_resizeStartMouse = GUIUtility.GUIToScreenPoint(
                 currentEvent.mousePosition);
@@ -4028,25 +4090,54 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_windowRect.height);
             currentEvent.Use();
         }
-        else if (m_isResizing && currentEvent.type == EventType.MouseDrag)
+        else if (eventType == EventType.MouseDrag &&
+                 m_isResizing &&
+                 GUIUtility.hotControl == controlId)
         {
             var current = GUIUtility.GUIToScreenPoint(currentEvent.mousePosition);
             var delta = current - m_resizeStartMouse;
             m_pendingMainWindowSize = new Vector2(
-                Mathf.Clamp(
-                    m_resizeStartSize.x + delta.x,
+                WindowResizeMath.ResizeExtent(
+                    m_resizeStartSize.x,
+                    delta.x,
                     700f,
                     Math.Max(700f, Screen.width - 12f)),
-                Mathf.Clamp(
-                    m_resizeStartSize.y + delta.y,
+                WindowResizeMath.ResizeExtent(
+                    m_resizeStartSize.y,
+                    delta.y,
                     520f,
                     Math.Max(520f, Screen.height - 12f)));
             currentEvent.Use();
         }
-        else if (currentEvent.type == EventType.MouseUp)
+        else if (eventType == EventType.MouseUp &&
+                 GUIUtility.hotControl == controlId)
         {
+            GUIUtility.hotControl = 0;
+            m_resizeControlId = 0;
             m_isResizing = false;
+            PersistWindowRect();
+            currentEvent.Use();
         }
+    }
+
+    private void DrawResizeHandle()
+    {
+        GUI.Label(GetResizeHandleRect(), "◢", m_resizeHandleStyle);
+    }
+
+    private void CancelResizeCapture()
+    {
+        if (!m_isResizing)
+        {
+            return;
+        }
+        m_isResizing = false;
+        m_pendingMainWindowSize = null;
+        if (GUIUtility.hotControl == m_resizeControlId)
+        {
+            GUIUtility.hotControl = 0;
+        }
+        m_resizeControlId = 0;
     }
 
     private void PersistWindowRectOnMouseUp()
@@ -4055,6 +4146,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             return;
         }
+        PersistWindowRect();
+    }
+
+    private void PersistWindowRect()
+    {
         var config = m_runtime.Configuration;
         config.WindowX = m_windowRect.x;
         config.WindowY = m_windowRect.y;
@@ -4147,6 +4243,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             "danger",
             new Color(0.55f, 0.09f, 0.08f),
             new Color(0.75f, 0.13f, 0.10f));
+        m_resizeHandleStyle = new GUIStyle(m_buttonStyle)
+        {
+            fontSize = 16,
+            alignment = TextAnchor.MiddleCenter,
+            padding = new RectOffset(0, 0, 0, 0),
+        };
         m_textFieldStyle = new GUIStyle(GUI.skin.textField)
         {
             fontSize = 13,
@@ -4430,8 +4532,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         rect.width = Mathf.Min(rect.width, Math.Max(320f, Screen.width - 8f));
         rect.height = Mathf.Min(rect.height, Math.Max(260f, Screen.height - 8f));
-        rect.x = Mathf.Clamp(rect.x, 0f, Math.Max(0f, Screen.width - 80f));
-        rect.y = Mathf.Clamp(rect.y, 0f, Math.Max(0f, Screen.height - 44f));
+        rect.x = Mathf.Clamp(
+            rect.x,
+            0f,
+            Math.Max(0f, Screen.width - rect.width));
+        rect.y = Mathf.Clamp(
+            rect.y,
+            0f,
+            Math.Max(0f, Screen.height - rect.height));
         return rect;
     }
 
