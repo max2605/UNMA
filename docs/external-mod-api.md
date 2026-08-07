@@ -119,7 +119,7 @@ Stabilität angegeben.
 | `id` | ja | Stabile, innerhalb des Provider-Mods eindeutige Alarm-ID. Nach Veröffentlichung nicht umbenennen. |
 | `prototype_ids` | ja | Mindestens eine COI-Prototyp-ID für Gebäude oder Fahrzeuge. |
 | `scope` | nein | `aggregate` (Standard) oder `per_entity`. |
-| `panel_id` | nein | Zielpanel, zum Beispiel `main` oder `supply`. Ein unbekanntes Panel fällt sicher auf das Standardpanel zurück. |
+| `panel_id` | nein | Zielpanel. `main` ist das dynamische Home-Dashboard ohne festen Schlitz; ein Fachpanel wie `supply` erzeugt eine dauerhafte Position. Ein unbekanntes Panel fällt sicher auf das Standardpanel zurück. |
 | `localization_namespace` | nein | LangLib-Mod-Namensraum; standardmäßig die Provider-ID. |
 | `message_key` | bedingt | Voller LangLib-Schlüssel, zum Beispiel `langlib.ExampleProvider.alarm.storage_low`. |
 | `message_fallback` | bedingt | Lesbarer Text, falls der LangLib-Schlüssel fehlt. |

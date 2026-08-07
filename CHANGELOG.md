@@ -2,6 +2,12 @@
 
 ## 0.8.0 – 2026-08-07
 
+- Das Home-/Dashboard-Panel ist jetzt eine reine aktive Übersicht: Es zeigt nur
+  anstehende quittierte und unquittierte Meldungen (`K`/`KQ`) und blendet
+  Normalzustände, gegangene Meldungen sowie leere Rasterplätze aus.
+- Alle Fachpanels bleiben reale, dauerhaft definierte Schlitzmeldetafeln. Das
+  Dashboard kann weder gelöscht noch mit festen Schlitzen oder Auto-Filtern
+  belegt werden; Konfigurationsschema 10 speichert diese Panelrolle eindeutig.
 - Versionierte Fremdmod-API V1 für prototypgebundene Alarmvorlagen,
   fehlertolerante Messwert-Reader und direkt veröffentlichte Alarmzustände.
 - Deklarative Definitionen aktiver Mods werden deterministisch aus deren

@@ -124,6 +124,7 @@ public sealed class PanelDefinition
     [DataMember(Order = 6)] public string NotificationFilter = "";
     [DataMember(Order = 7)] public List<PanelSlotDefinition> Slots = new();
     [DataMember(Order = 8)] public List<string> ExcludedAlarmIds = new();
+    [DataMember(Order = 9)] public bool IsDashboard;
 }
 
 [DataContract]
@@ -191,7 +192,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 9;
+    [DataMember(Order = 1)] public int SchemaVersion = 10;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -224,6 +225,7 @@ public sealed class UnmaConfiguration
             Columns = 3,
             IncludeVanilla = true,
             IncludeSystem = true,
+            IsDashboard = true,
         });
         config.Panels.Add(new PanelDefinition
         {
@@ -410,6 +412,21 @@ public sealed class UnmaConfiguration
             NormalizePanelSlots(panel.Slots);
         }
 
+        var dashboardPanel = loadedSchemaVersion >= 10
+            ? Panels.FirstOrDefault(panel => panel.IsDashboard)
+            : null;
+        dashboardPanel ??= Panels.FirstOrDefault(panel => string.Equals(
+                              panel.Id,
+                              "main",
+                              StringComparison.Ordinal)) ??
+                          Panels[0];
+        foreach (var panel in Panels)
+        {
+            panel.IsDashboard = ReferenceEquals(panel, dashboardPanel);
+        }
+        // Keep legacy dashboard slots serialized for lossless downgrade and
+        // recovery. Dashboard projection and editing deliberately ignore them.
+
         foreach (var rule in Rules)
         {
             rule.Id = string.IsNullOrWhiteSpace(rule.Id)
@@ -529,7 +546,7 @@ public sealed class UnmaConfiguration
             SeedPanelSlots(includeMemories: true);
         }
         SynchronizeRuleSlots();
-        SchemaVersion = Math.Max(SchemaVersion, 9);
+        SchemaVersion = Math.Max(SchemaVersion, 10);
     }
 
     private void MigrateSustainedVanillaAlarmMemories()
@@ -611,6 +628,10 @@ public sealed class UnmaConfiguration
     {
         foreach (var panel in Panels)
         {
+            if (panel.IsDashboard)
+            {
+                continue;
+            }
             panel.Slots ??= new List<PanelSlotDefinition>();
             if (panel.IncludeSystem)
             {
@@ -704,7 +725,8 @@ public sealed class UnmaConfiguration
 
     private void SynchronizeAutomaticSystemSlots()
     {
-        foreach (var panel in Panels.Where(panel => panel.IncludeSystem))
+        foreach (var panel in Panels.Where(panel =>
+                     !panel.IsDashboard && panel.IncludeSystem))
         {
             foreach (var alarm in SystemAlarms.Where(alarm =>
                          MatchesPanelFilter(
@@ -727,7 +749,7 @@ public sealed class UnmaConfiguration
         {
             rulesById["rule:" + rule.Id] = rule;
         }
-        foreach (var panel in Panels)
+        foreach (var panel in Panels.Where(panel => !panel.IsDashboard))
         {
             panel.Slots.RemoveAll(slot =>
                 string.Equals(
@@ -747,6 +769,10 @@ public sealed class UnmaConfiguration
                 rule.PanelId,
                 StringComparison.Ordinal));
             if (panel == null)
+            {
+                continue;
+            }
+            if (panel.IsDashboard)
             {
                 continue;
             }

@@ -653,6 +653,83 @@ internal static class Program
         AreEqual("NICHT GENUG ARBEITER", normal[2].Name);
         IsFalse(normal[2].IsLatched);
 
+        var dashboard = PanelSlotProjection.ProjectActive(new[]
+        {
+            new AlarmView
+            {
+                Key = "active-unacknowledged",
+                SlotId = "dashboard:a",
+                Name = "AKTIV K",
+                IsActive = true,
+                Severity = AlarmSeverity.Warning,
+                Sequence = 10,
+            },
+            new AlarmView
+            {
+                Key = "same-slot-acknowledged",
+                SlotId = "dashboard:a",
+                Name = "AKTIV KQ ZWEITZUSTAND",
+                IsActive = true,
+                IsAcknowledged = true,
+                Severity = AlarmSeverity.Emergency,
+                Sequence = 9,
+            },
+            new AlarmView
+            {
+                Key = "active-acknowledged",
+                SlotId = "dashboard:b",
+                Name = "AKTIV KQ",
+                IsActive = true,
+                IsAcknowledged = true,
+                Severity = AlarmSeverity.Critical,
+                Sequence = 20,
+            },
+            new AlarmView
+            {
+                Key = "gone-unacknowledged",
+                SlotId = "dashboard:c",
+                Name = "KG",
+                IsGoneUnacknowledged = true,
+                Sequence = 30,
+            },
+            new AlarmView
+            {
+                Key = "gone-acknowledged",
+                SlotId = "dashboard:kgq",
+                Name = "KGQ",
+                IsAcknowledged = true,
+                Sequence = 35,
+            },
+            new AlarmView
+            {
+                Key = "normal",
+                SlotId = "dashboard:d",
+                Name = "NORMAL",
+                Sequence = 40,
+            },
+            new AlarmView
+            {
+                Key = "external:active-without-dashboard-slot",
+                Name = "AKTIV OHNE FESTEN HOME-SCHLITZ",
+                IsActive = true,
+                Severity = AlarmSeverity.Warning,
+                Sequence = 50,
+            },
+        });
+        AreEqual(3, dashboard.Count);
+        AreEqual("dashboard:a", dashboard[0].SlotId);
+        IsTrue(dashboard[0].IsActive);
+        IsFalse(dashboard[0].IsAcknowledged);
+        AreEqual(AlarmSeverity.Emergency, dashboard[0].Severity);
+        AreEqual(
+            "external:active-without-dashboard-slot",
+            dashboard[1].SlotId);
+        IsTrue(dashboard[1].IsActive);
+        IsFalse(dashboard[1].IsAcknowledged);
+        AreEqual("dashboard:b", dashboard[2].SlotId);
+        IsTrue(dashboard[2].IsActive);
+        IsTrue(dashboard[2].IsAcknowledged);
+
         var legacy = new AlarmView
         {
             Key = "vanilla:99",
@@ -913,7 +990,9 @@ internal static class Program
     private static void TestConfigurationRoundTrip()
     {
         var configuration = UnmaConfiguration.CreateDefault();
-        configuration.Panels[0].Slots.Add(new PanelSlotDefinition
+        var fixedPanel = configuration.Panels.Find(panel =>
+            !panel.IsDashboard);
+        fixedPanel.Slots.Add(new PanelSlotDefinition
         {
             AlarmId = "vanilla:LowFoodSupply",
             DisplayName = "GERINGE LEBENSMITTELVERSORGUNG",
@@ -922,7 +1001,7 @@ internal static class Program
             Severity = AlarmSeverity.Warning,
             ActiveColor = "#ABCDEF",
         });
-        configuration.Panels[0].ExcludedAlarmIds.Add("vanilla:Hidden");
+        fixedPanel.ExcludedAlarmIds.Add("vanilla:Hidden");
         configuration.SoundOverrides.Add(new AlarmSoundOverride
         {
             AlarmId = "system:health",
@@ -943,6 +1022,7 @@ internal static class Program
         editedSystemStage.Conditions[0].Threshold = 7.5d;
         configuration.Rules.Add(new AlarmRuleDefinition
         {
+            PanelId = fixedPanel.Id,
             Name = "LAGER UND BAND LEER",
             Logic = AlarmLogic.All,
             AutoAcknowledgeOnClear = true,
@@ -1010,7 +1090,9 @@ internal static class Program
         AreEqual(1, restored.SoundOverrides.Count);
         AreEqual("siren", restored.SoundOverrides[0].SoundId);
         IsTrue(restored.SoundOverrides[0].AutoAcknowledgeOnClear);
-        AreEqual(9, restored.SchemaVersion);
+        AreEqual(10, restored.SchemaVersion);
+        IsTrue(restored.Panels[0].IsDashboard);
+        IsFalse(restored.Panels[1].IsDashboard);
         AreEqual(
             ConditionValueMode.PercentOfReference,
             restored.Rules[0].Conditions[1].ValueMode);
@@ -1045,19 +1127,20 @@ internal static class Program
         AreEqual(73L, restoredMemory.Sequence);
         AreEqual("vanilla:test:entity:17", restoredMemory.SlotId);
         IsTrue(restoredMemory.AutoAcknowledgeOnClear);
-        AreEqual(5, restored.Panels[0].Slots.Count);
-        AreEqual("system:health", restored.Panels[0].Slots[0].AlarmId);
-        AreEqual("system:food", restored.Panels[0].Slots[1].AlarmId);
-        AreEqual("system:workers", restored.Panels[0].Slots[2].AlarmId);
+        AreEqual(0, restored.Panels[0].Slots.Count);
+        AreEqual(5, restored.Panels[1].Slots.Count);
+        AreEqual("system:health", restored.Panels[1].Slots[0].AlarmId);
+        AreEqual("system:food", restored.Panels[1].Slots[1].AlarmId);
+        AreEqual("system:workers", restored.Panels[1].Slots[2].AlarmId);
         AreEqual(
             "vanilla:LowFoodSupply",
-            restored.Panels[0].Slots[3].AlarmId);
+            restored.Panels[1].Slots[3].AlarmId);
         AreEqual(
             "rule:" + restored.Rules[0].Id,
-            restored.Panels[0].Slots[4].AlarmId);
+            restored.Panels[1].Slots[4].AlarmId);
         AreEqual(
             "vanilla:Hidden",
-            restored.Panels[0].ExcludedAlarmIds[0]);
+            restored.Panels[1].ExcludedAlarmIds[0]);
     }
 
     private static void TestAlarmHistoryState()
@@ -1114,7 +1197,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(9, restored.SchemaVersion);
+        AreEqual(10, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -1141,7 +1224,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(9, oldConfiguration.SchemaVersion);
+        AreEqual(10, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
@@ -1156,16 +1239,41 @@ internal static class Program
         AreEqual(7d, warning.Conditions[0].Threshold);
         IsTrue(health.Stages.Exists(stage => stage.Id == "critical"));
 
+        var schemaNine = UnmaConfiguration.CreateDefault();
+        schemaNine.SchemaVersion = 9;
+        schemaNine.Panels[0].Slots.Add(new PanelSlotDefinition
+        {
+            AlarmId = "legacy:dashboard-slot",
+            DisplayName = "ALTE HOME-POSITION",
+        });
+        schemaNine.Normalize();
+        AreEqual(1, schemaNine.Panels.Count(panel => panel.IsDashboard));
+        IsTrue(schemaNine.Panels[0].IsDashboard);
+        IsTrue(schemaNine.Panels[0].Slots.Exists(slot =>
+            slot.AlarmId == "legacy:dashboard-slot"));
+
+        schemaNine.Panels[1].IsDashboard = true;
+        schemaNine.Normalize();
+        AreEqual(1, schemaNine.Panels.Count(panel => panel.IsDashboard));
+        IsTrue(schemaNine.Panels[0].IsDashboard);
+        IsFalse(schemaNine.Panels[1].IsDashboard);
+
         var schemaSeven = UnmaConfiguration.CreateDefault();
         schemaSeven.SchemaVersion = 7;
         foreach (var panel in schemaSeven.Panels)
         {
             panel.Slots.Clear();
         }
+        schemaSeven.Panels.Add(new PanelDefinition
+        {
+            Id = "secondary",
+            Name = "ZWEITE FACHTAFEL",
+            Columns = 3,
+        });
         schemaSeven.Rules.Add(new AlarmRuleDefinition
         {
             Id = "fixed-rule",
-            PanelId = "main",
+            PanelId = "supply",
             Name = "FESTE EIGENE MELDUNG",
         });
         schemaSeven.AlarmMemories.Add(new AlarmMemoryDefinition
@@ -1202,65 +1310,72 @@ internal static class Program
             IsAcknowledged = true,
         });
         schemaSeven.Normalize();
-        AreEqual(9, schemaSeven.SchemaVersion);
-        AreEqual(7, schemaSeven.Panels[0].Slots.Count);
-        AreEqual("system:health", schemaSeven.Panels[0].Slots[0].AlarmId);
-        AreEqual("system:food", schemaSeven.Panels[0].Slots[1].AlarmId);
-        AreEqual("system:workers", schemaSeven.Panels[0].Slots[2].AlarmId);
-        AreEqual("rule:fixed-rule", schemaSeven.Panels[0].Slots[3].AlarmId);
+        var migratedDashboard = schemaSeven.Panels.Find(panel =>
+            panel.IsDashboard);
+        var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
+            panel.Id == "supply");
+        AreEqual(10, schemaSeven.SchemaVersion);
+        AreEqual(0, migratedDashboard.Slots.Count);
+        AreEqual(7, migratedFixedPanel.Slots.Count);
+        AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
+        AreEqual("system:food", migratedFixedPanel.Slots[1].AlarmId);
+        AreEqual("system:workers", migratedFixedPanel.Slots[2].AlarmId);
+        AreEqual("rule:fixed-rule", migratedFixedPanel.Slots[3].AlarmId);
         IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
-            schemaSeven.Panels[0].Slots[4].AlarmId,
+            migratedFixedPanel.Slots[4].AlarmId,
             "vanilla:NotEnoughWorkers"));
         IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
-            schemaSeven.Panels[0].Slots[5].AlarmId,
+            migratedFixedPanel.Slots[5].AlarmId,
             "vanilla:NotEnoughWorkers"));
         IsTrue(PanelSlotProjection.IsLegacyVanillaSlotId(
-            schemaSeven.Panels[0].Slots[6].AlarmId,
+            migratedFixedPanel.Slots[6].AlarmId,
             "vanilla:NotEnoughWorkers"));
         IsFalse(string.Equals(
             schemaSeven.AlarmMemories[0].SlotId,
             schemaSeven.AlarmMemories[1].SlotId,
             StringComparison.Ordinal));
-        schemaSeven.Panels[0].Slots.Add(new PanelSlotDefinition
+        migratedFixedPanel.Slots.Add(new PanelSlotDefinition
         {
             AlarmId = "system:food",
             DisplayName = "DUPLIKAT",
         });
         schemaSeven.Normalize();
-        AreEqual(7, schemaSeven.Panels[0].Slots.Count);
-        AreEqual("system:food", schemaSeven.Panels[0].Slots[1].AlarmId);
-        var fixedLastSlot = schemaSeven.Panels[0].Slots[6];
-        schemaSeven.Panels[0].Slots.RemoveAt(6);
-        schemaSeven.Panels[0].Slots.Insert(0, fixedLastSlot);
+        AreEqual(7, migratedFixedPanel.Slots.Count);
+        AreEqual("system:food", migratedFixedPanel.Slots[1].AlarmId);
+        var fixedLastSlot = migratedFixedPanel.Slots[6];
+        migratedFixedPanel.Slots.RemoveAt(6);
+        migratedFixedPanel.Slots.Insert(0, fixedLastSlot);
         schemaSeven.Normalize();
-        AreEqual(fixedLastSlot.AlarmId, schemaSeven.Panels[0].Slots[0].AlarmId);
-        schemaSeven.Panels[0].ExcludedAlarmIds.Add("system:health");
-        schemaSeven.Panels[0].Slots.RemoveAll(slot =>
+        AreEqual(fixedLastSlot.AlarmId, migratedFixedPanel.Slots[0].AlarmId);
+        migratedFixedPanel.ExcludedAlarmIds.Add("system:health");
+        migratedFixedPanel.Slots.RemoveAll(slot =>
             slot.AlarmId == "system:health");
         schemaSeven.Normalize();
-        IsFalse(schemaSeven.Panels[0].Slots.Exists(slot =>
+        IsFalse(migratedFixedPanel.Slots.Exists(slot =>
             slot.AlarmId == "system:health"));
-        schemaSeven.Panels[0].ExcludedAlarmIds.Clear();
+        migratedFixedPanel.ExcludedAlarmIds.Clear();
         schemaSeven.Normalize();
         AreEqual(
             "system:health",
-            schemaSeven.Panels[0].Slots[^1].AlarmId);
+            migratedFixedPanel.Slots[^1].AlarmId);
         var movingRule = schemaSeven.Rules.Find(rule =>
             rule.Id == "fixed-rule");
-        movingRule.PanelId = "supply";
+        movingRule.PanelId = "secondary";
         movingRule.Name = "VERSCHOBENE EIGENE MELDUNG";
         movingRule.Conditions.Add(new ConditionDefinition());
         schemaSeven.Normalize();
-        IsFalse(schemaSeven.Panels[0].Slots.Exists(slot =>
+        IsFalse(migratedFixedPanel.Slots.Exists(slot =>
             slot.AlarmId == "rule:fixed-rule"));
-        var movedSlot = schemaSeven.Panels[1].Slots.Find(slot =>
+        var secondaryPanel = schemaSeven.Panels.Find(panel =>
+            panel.Id == "secondary");
+        var movedSlot = secondaryPanel.Slots.Find(slot =>
             slot.AlarmId == "rule:fixed-rule");
         IsTrue(movedSlot != null);
         AreEqual("VERSCHOBENE EIGENE MELDUNG", movedSlot.DisplayName);
         AreEqual("1 Bedingung(en)", movedSlot.Detail);
         schemaSeven.Rules.Remove(movingRule);
         schemaSeven.Normalize();
-        IsFalse(schemaSeven.Panels[1].Slots.Exists(slot =>
+        IsFalse(secondaryPanel.Slots.Exists(slot =>
             slot.AlarmId == "rule:fixed-rule"));
 
         var legacyJson =
@@ -1277,7 +1392,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(9, legacy.SchemaVersion);
+        AreEqual(10, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -1291,8 +1406,8 @@ internal static class Program
         AreEqual(0, legacy.AlarmMemories.Count);
         IsTrue(legacy.Panels[0].Slots != null);
         IsTrue(legacy.Panels[0].ExcludedAlarmIds != null);
-        AreEqual(1, legacy.Panels[0].Slots.Count);
-        AreEqual("rule:legacy", legacy.Panels[0].Slots[0].AlarmId);
+        IsTrue(legacy.Panels[0].IsDashboard);
+        AreEqual(0, legacy.Panels[0].Slots.Count);
 
         var versionFive = UnmaConfiguration.CreateDefault();
         versionFive.SchemaVersion = 5;
@@ -1321,7 +1436,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(9, versionFive.SchemaVersion);
+        AreEqual(10, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -1398,7 +1513,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(9, schemaEight.SchemaVersion);
+        AreEqual(10, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

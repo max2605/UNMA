@@ -234,6 +234,33 @@ public static class PanelSlotProjection
         return result;
     }
 
+    public static IReadOnlyList<AlarmView> ProjectActive(
+        IEnumerable<AlarmView> candidates)
+    {
+        return (candidates ?? Enumerable.Empty<AlarmView>())
+            .Where(candidate => candidate != null && candidate.IsActive)
+            .Select(candidate => new
+            {
+                Candidate = candidate,
+                AlarmId = StableAlarmId(candidate),
+            })
+            .Where(item => !string.IsNullOrWhiteSpace(item.AlarmId))
+            .GroupBy(item => item.AlarmId, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var view = CreateAggregatedView(
+                    group.Select(item => item.Candidate).ToArray());
+                view.SlotId = group.Key;
+                return view;
+            })
+            .Where(view => view.IsActive)
+            .OrderByDescending(view => !view.IsAcknowledged)
+            .ThenByDescending(view => view.Severity)
+            .ThenByDescending(view => view.Sequence)
+            .ThenBy(view => view.Name ?? "", StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public static AlarmView SelectRepresentative(
         IEnumerable<AlarmView> candidates)
     {

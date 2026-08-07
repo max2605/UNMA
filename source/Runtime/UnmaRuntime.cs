@@ -569,6 +569,19 @@ public sealed class UnmaRuntime : IDisposable
             return Array.Empty<AlarmView>();
         }
 
+        if (panel.IsDashboard)
+        {
+            AlarmView[] activeCandidates;
+            lock (m_gate)
+            {
+                activeCandidates = m_alarms.Values
+                    .Where(state => state.View.IsActive)
+                    .Select(state => Clone(state.View, state.Sequence))
+                    .ToArray();
+            }
+            return PanelSlotProjection.ProjectActive(activeCandidates);
+        }
+
         PanelSlotDefinition[] slots;
         lock (m_configurationGate)
         {
@@ -898,6 +911,19 @@ public sealed class UnmaRuntime : IDisposable
         }
         lock (m_configurationGate)
         {
+            PanelDefinition preferredPanel = null;
+            if (preferredSlotIndex >= 0)
+            {
+                preferredPanel = Configuration.Panels.FirstOrDefault(
+                    candidate => string.Equals(
+                        candidate.Id,
+                        rule.PanelId,
+                        StringComparison.Ordinal));
+                if (preferredPanel == null || preferredPanel.IsDashboard)
+                {
+                    return false;
+                }
+            }
             if (Configuration.Rules.Any(existing =>
                     string.Equals(
                         existing?.Id,
@@ -909,13 +935,8 @@ public sealed class UnmaRuntime : IDisposable
             Configuration.Rules.Add(rule);
             if (preferredSlotIndex >= 0)
             {
-                var panel = Configuration.Panels.FirstOrDefault(candidate =>
-                    string.Equals(
-                        candidate.Id,
-                        rule.PanelId,
-                        StringComparison.Ordinal));
                 PanelSlotProjection.InsertRuleSlot(
-                    panel,
+                    preferredPanel,
                     rule,
                     preferredSlotIndex);
             }
@@ -1188,6 +1209,10 @@ public sealed class UnmaRuntime : IDisposable
             }
 
             panel = Configuration.Panels[panelIndex];
+            if (panel.IsDashboard)
+            {
+                return false;
+            }
             removedRules = Configuration.Rules
                 .Where(rule => string.Equals(
                     rule.PanelId,
@@ -2838,6 +2863,8 @@ public sealed class UnmaRuntime : IDisposable
                     requestedPanelId,
                     StringComparison.Ordinal));
             return requested?.Id ??
+                   Configuration.Panels.FirstOrDefault(panel =>
+                       panel.IsDashboard)?.Id ??
                    Configuration.Panels.FirstOrDefault()?.Id ?? "";
         }
     }
@@ -3561,6 +3588,10 @@ public sealed class UnmaRuntime : IDisposable
         {
             foreach (var panel in Configuration.Panels)
             {
+                if (panel.IsDashboard)
+                {
+                    continue;
+                }
                 if (!IsVisibleOnPanel(
                         view,
                         panel,

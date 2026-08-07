@@ -13,7 +13,10 @@ Zielversion: Captain of Industry **0.8.6c**.
 
 - Spiegelung aller aktiven Vanilla-Benachrichtigungen über den
   `INotificationsManager`.
-- Dauerhaft feste Meldeschlitze je Panel: Eine stabile Alarm-ID behält ihren
+- Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
+  `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
+  vollständig ausgeblendet.
+- Dauerhaft feste Meldeschlitze je Fachpanel: Eine stabile Alarm-ID behält ihren
   Platz auch zwischen `NORMAL`, `KOMMT`, `STEHT` und `GEGANGEN`. Wiederholte
   Vanilla-Ereignisse derselben Meldungsart und Entität erscheinen genau einmal;
   einzelne K/G/Q-Ereignisse bleiben im Verlauf vollständig erhalten.
@@ -47,9 +50,10 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Goldene UNMA-Alarmglocke direkt im Inspector jeder unterstützten Entität;
   ein Klick fügt das Objekt hinzu und öffnet die Meldetafel im sichtbaren
   Zuweisungsmodus.
-- Auf der Meldetafel verknüpft ein Klick auf eine vorhandene eigene Meldung das
+- Auf einem Fachpanel verknüpft ein Klick auf eine vorhandene eigene Meldung das
   Objekt mit deren Bedingungen. Das hervorgehobene `+ NEUE MELDUNG`-Karree
   startet stattdessen einen neuen Alarm an genau diesem festen Panelplatz.
+  HOME dient nur als aktive Übersicht und nimmt keine festen Zuordnungen auf.
 - AWL-artige Bedingungstabelle mit sichtbarem Ist-Wert, verständlicher Kennung,
   allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
@@ -95,7 +99,8 @@ Zielversion: Captain of Industry **0.8.6c**.
    Die Schaltfläche erscheint nur bei geschlossener Zentrale und lässt sich am
    `↕`-Griff aus anderen HUD-Bereichen herausziehen; ihre Position wird
    gespeichert.
-3. In **MELDETAFEL** ein Panel wählen und aktuelle Meldungen beobachten.
+3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Für die dauerhaft
+   definierte Schlitztafel ein Fachpanel wählen.
 4. `MASTER QUIT · QUITTIEREN` quittiert alle kommenden und bereits gegangenen
    Meldungen und stoppt deren Ton. Bei einer weiterhin anstehenden Meldung
    bleibt die Aktivfarbe sichtbar, bis die Ursache verschwindet.

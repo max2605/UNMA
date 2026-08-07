@@ -485,11 +485,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         DrawEntityAssignmentBanner(panel);
+        var alarms = GetPanelViews(panel);
+        var activeCount = panel.IsDashboard
+            ? alarms.Count
+            : m_runtime.ActiveCount;
+        var unacknowledgedCount = panel.IsDashboard
+            ? alarms.Count(alarm => !alarm.IsAcknowledged)
+            : m_runtime.UnacknowledgedCount;
         GUILayout.Space(6f);
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "AKTIVE EREIGNISSE " + m_runtime.ActiveCount +
-            "   ·   UNQUITTIERT " + m_runtime.UnacknowledgedCount,
+            "AKTIVE EREIGNISSE " + activeCount +
+            "   ·   UNQUITTIERT " + unacknowledgedCount,
             m_sectionStyle,
             GUILayout.Height(34f));
         if (GUILayout.Button(
@@ -514,7 +521,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         DrawStatusMessage();
-        var alarms = GetPanelViews(panel);
         m_boardScroll = GUILayout.BeginScrollView(m_boardScroll);
         DrawAlarmGrid(
             alarms,
@@ -522,8 +528,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_windowRect.width - 54f,
             m_boardScroll.y,
             Math.Max(220f, m_windowRect.height - 190f),
-            panel,
-            m_entityAssignmentPending);
+            panel.IsDashboard ? null : panel,
+            m_entityAssignmentPending && !panel.IsDashboard,
+            panel.IsDashboard
+                ? "Keine aktiven Meldungen."
+                : "Keine Meldeschlitze in diesem Panel.",
+            !panel.IsDashboard);
         GUILayout.EndScrollView();
     }
 
@@ -558,7 +568,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Label(
             m_assignmentEntity == null
                 ? "Nach dem Laden kann ein Ziel gewählt werden."
-                : "Auf " + panel.Name +
+                : panel.IsDashboard
+                    ? "HOME zeigt nur aktive Meldungen. Für einen festen " +
+                      "Meldeschlitz zuerst ein Fachpanel wählen."
+                    : "Auf " + panel.Name +
                   ": eigene Meldung anklicken = verknüpfen; " +
                   "+ NEUE MELDUNG anklicken = neuer fester Schlitz.",
             m_smallLabelStyle);
@@ -883,14 +896,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 panel.Columns = Math.Min(8, panel.Columns + 1);
             }
-            panel.IncludeVanilla = GUILayout.Toggle(
-                panel.IncludeVanilla,
-                " Vanilla auto",
-                GUILayout.Width(100f));
-            panel.IncludeSystem = GUILayout.Toggle(
-                panel.IncludeSystem,
-                " System auto",
-                GUILayout.Width(100f));
+            if (!panel.IsDashboard)
+            {
+                panel.IncludeVanilla = GUILayout.Toggle(
+                    panel.IncludeVanilla,
+                    " Vanilla auto",
+                    GUILayout.Width(100f));
+                panel.IncludeSystem = GUILayout.Toggle(
+                    panel.IncludeSystem,
+                    " System auto",
+                    GUILayout.Width(100f));
+            }
+            else
+            {
+                GUILayout.Label(
+                    "HOME / DASHBOARD",
+                    m_smallLabelStyle,
+                    GUILayout.Width(205f));
+            }
             if (GUILayout.Button(
                     "ÄNDERUNGEN SPEICHERN",
                     m_primaryButtonStyle,
@@ -900,35 +923,50 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             GUILayout.EndHorizontal();
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Auto-Filter", m_labelStyle, GUILayout.Width(90f));
-            panel.NotificationFilter = GUILayout.TextField(
-                panel.NotificationFilter ?? "",
-                240,
-                m_textFieldStyle);
-            GUI.enabled = panels.Count > 1;
-            var pendingDelete = string.Equals(
-                m_pendingPanelDeleteId,
-                panel.Id,
-                StringComparison.Ordinal);
-            var affectedRules = m_runtime.Configuration.Rules.Count(rule =>
-                string.Equals(
-                    rule.PanelId,
-                    panel.Id,
-                    StringComparison.Ordinal));
-            if (GUILayout.Button(
-                    pendingDelete
-                        ? "SICHER? " + affectedRules + " MELDUNG(EN)"
-                        : "AKTUELLES PANEL LÖSCHEN",
-                    m_dangerButtonStyle,
-                    GUILayout.Width(220f)))
+            if (panel.IsDashboard)
             {
-                RemoveCurrentPanel();
+                GUILayout.Label(
+                    "HOME zeigt automatisch nur aktuell anstehende " +
+                    "Meldungen: K und KQ. Gegangene, normale und leere " +
+                    "Schlitze werden hier nicht angezeigt. HOME ist nicht " +
+                    "löschbar.",
+                    m_smallLabelStyle);
             }
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
+            else
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(
+                    "Auto-Filter",
+                    m_labelStyle,
+                    GUILayout.Width(90f));
+                panel.NotificationFilter = GUILayout.TextField(
+                    panel.NotificationFilter ?? "",
+                    240,
+                    m_textFieldStyle);
+                GUI.enabled = panels.Count > 1;
+                var pendingDelete = string.Equals(
+                    m_pendingPanelDeleteId,
+                    panel.Id,
+                    StringComparison.Ordinal);
+                var affectedRules = m_runtime.Configuration.Rules.Count(rule =>
+                    string.Equals(
+                        rule.PanelId,
+                        panel.Id,
+                        StringComparison.Ordinal));
+                if (GUILayout.Button(
+                        pendingDelete
+                            ? "SICHER? " + affectedRules + " MELDUNG(EN)"
+                            : "AKTUELLES PANEL LÖSCHEN",
+                        m_dangerButtonStyle,
+                        GUILayout.Width(220f)))
+                {
+                    RemoveCurrentPanel();
+                }
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
 
-            DrawPanelSlots(panel);
+                DrawPanelSlots(panel);
+            }
         }
 
         GUILayout.Space(6f);
@@ -1273,11 +1311,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawTargetPanelSelector(bool allowCreate)
     {
-        var panels = m_runtime.Configuration.Panels;
+        var panels = m_runtime.Configuration.Panels
+            .Where(panel => !panel.IsDashboard)
+            .ToList();
         GUILayout.Label("ZIEL-MELDETAFEL", m_sectionStyle);
         if (panels.Count == 0)
         {
-            GUILayout.Label("Keine Meldetafel vorhanden.", m_labelStyle);
+            GUILayout.Label(
+                "Kein Fachpanel vorhanden. Für feste Meldeschlitze jetzt " +
+                "eine dauerhafte Meldetafel anlegen.",
+                m_labelStyle);
+            if (allowCreate)
+            {
+                DrawCreateTargetPanelRow(false);
+            }
             return;
         }
 
@@ -1287,9 +1334,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             StringComparison.Ordinal));
         if (targetIndex < 0)
         {
-            targetIndex = Math.Max(
-                0,
-                Math.Min(m_currentPanelIndex, panels.Count - 1));
+            targetIndex = CurrentPanel == null
+                ? -1
+                : panels.FindIndex(panel => string.Equals(
+                    panel.Id,
+                    CurrentPanel.Id,
+                    StringComparison.Ordinal));
+            targetIndex = Math.Max(0, targetIndex);
             m_draftTargetPanelId = panels[targetIndex].Id;
             m_draftPreferredSlotIndex = -1;
         }
@@ -1327,32 +1378,38 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         if (allowCreate)
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(
-                "Neue Meldetafel",
-                m_labelStyle,
-                GUILayout.Width(205f));
-            GUI.enabled = guiWasEnabled && !slotPositionLocked;
-            m_newPanelName = GUILayout.TextField(
-                m_newPanelName,
-                40,
-                m_textFieldStyle,
-                GUILayout.Width(310f));
-            if (GUILayout.Button(
-                    "+ MELDETAFEL ANLEGEN",
-                    m_buttonStyle,
-                    GUILayout.Width(205f)))
-            {
-                AddPanel();
-            }
-            GUI.enabled = guiWasEnabled;
-            GUILayout.Label(
-                slotPositionLocked
-                    ? "Für ein anderes Ziel zuerst ENTWURF LEEREN."
-                    : "Das neue Panel wird sofort als Ziel gewählt.",
-                m_smallLabelStyle);
-            GUILayout.EndHorizontal();
+            DrawCreateTargetPanelRow(slotPositionLocked);
         }
+    }
+
+    private void DrawCreateTargetPanelRow(bool slotPositionLocked)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            "Neue Meldetafel",
+            m_labelStyle,
+            GUILayout.Width(205f));
+        var guiWasEnabled = GUI.enabled;
+        GUI.enabled = guiWasEnabled && !slotPositionLocked;
+        m_newPanelName = GUILayout.TextField(
+            m_newPanelName,
+            40,
+            m_textFieldStyle,
+            GUILayout.Width(310f));
+        if (GUILayout.Button(
+                "+ MELDETAFEL ANLEGEN",
+                m_buttonStyle,
+                GUILayout.Width(205f)))
+        {
+            AddPanel();
+        }
+        GUI.enabled = guiWasEnabled;
+        GUILayout.Label(
+            slotPositionLocked
+                ? "Für ein anderes Ziel zuerst ENTWURF LEEREN."
+                : "Das neue Panel wird sofort als Ziel gewählt.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
     }
 
     private void DrawEntitySourceSelector(bool inEntityWindow)
@@ -2612,6 +2669,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var alarms = GetPanelViews(panel);
+        var activeCount = panel.IsDashboard
+            ? alarms.Count
+            : m_runtime.ActiveCount;
+        var unacknowledgedCount = panel.IsDashboard
+            ? alarms.Count(alarm => !alarm.IsAcknowledged)
+            : m_runtime.UnacknowledgedCount;
         DrawWindowHeader("UNMA · " + panel.Name);
         GUILayout.BeginArea(new Rect(
             10f,
@@ -2620,8 +2684,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             detached.Rect.height - 50f));
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "AKTIVE EREIGNISSE " + m_runtime.ActiveCount +
-            " · UNQUITTIERT " + m_runtime.UnacknowledgedCount,
+            "AKTIVE EREIGNISSE " + activeCount +
+            " · UNQUITTIERT " + unacknowledgedCount,
             m_smallLabelStyle);
         if (GUILayout.Button(
                 "MASTER QUIT",
@@ -2655,13 +2719,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         detached.Scroll = GUILayout.BeginScrollView(detached.Scroll);
         DrawAlarmGrid(
-            GetPanelViews(panel),
+            alarms,
             Math.Max(1, Math.Min(panel.Columns, 5)),
             detached.Rect.width - 38f,
             detached.Scroll.y,
             Math.Max(180f, detached.Rect.height - 100f),
             null,
-            false);
+            false,
+            panel.IsDashboard
+                ? "Keine aktiven Meldungen."
+                : "Keine Meldeschlitze in diesem Panel.",
+            !panel.IsDashboard);
         GUILayout.EndScrollView();
         GUILayout.EndArea();
         GUI.DragWindow(new Rect(0f, 0f, detached.Rect.width - 38f, 36f));
@@ -2674,7 +2742,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         float scrollY,
         float viewportHeight,
         PanelDefinition interactionPanel,
-        bool assignmentPending)
+        bool assignmentPending,
+        string emptyMessage,
+        bool drawEmptyCells)
     {
         columns = Math.Max(1, Math.Min(8, columns));
         var showCreationTarget = assignmentPending &&
@@ -2684,7 +2754,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             GUILayout.Space(20f);
             GUILayout.Label(
-                "Keine Meldeschlitze in diesem Panel.",
+                emptyMessage,
                 m_labelStyle);
             return;
         }
@@ -2708,7 +2778,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             var rowStart = row * columns;
             GUILayout.BeginHorizontal();
-            for (var column = 0; column < columns; column++)
+            var columnsInRow = drawEmptyCells
+                ? columns
+                : Math.Min(columns, itemCount - rowStart);
+            for (var column = 0; column < columnsInRow; column++)
             {
                 var index = rowStart + column;
                 var rect = GUILayoutUtility.GetRect(
@@ -2734,11 +2807,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         interactionPanel,
                         index);
                 }
-                else
+                else if (drawEmptyCells)
                 {
                     DrawEmptyTile(rect);
                 }
-                if (column < columns - 1)
+                if (column < columnsInRow - 1)
                 {
                     GUILayout.Space(6f);
                 }
@@ -3424,10 +3497,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
         m_conditionReferencePickerIndex = -1;
-        if (CurrentPanel != null)
-        {
-            m_draftTargetPanelId = CurrentPanel.Id;
-        }
+        var targetPanel = CurrentPanel != null && !CurrentPanel.IsDashboard
+            ? CurrentPanel
+            : m_runtime.Configuration.Panels.FirstOrDefault(panel =>
+                !panel.IsDashboard);
+        m_draftTargetPanelId = targetPanel?.Id ?? "";
     }
 
     private void AddPanel()
@@ -3441,6 +3515,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Columns = 3,
             IncludeVanilla = false,
             IncludeSystem = false,
+            IsDashboard = false,
         };
         if (!m_runtime.AddPanel(panel))
         {
@@ -3460,6 +3535,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (m_runtime.Configuration.Panels.Count <= 1 ||
             CurrentPanel == null)
         {
+            return;
+        }
+        if (CurrentPanel.IsDashboard)
+        {
+            SetStatus(
+                "HOME / DASHBOARD ist die aktive Übersicht und kann nicht " +
+                "gelöscht werden.");
             return;
         }
 
@@ -3571,6 +3653,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private PanelDefinition GetDraftTargetPanel()
     {
         return m_runtime.Configuration.Panels.FirstOrDefault(panel =>
+            !panel.IsDashboard &&
             string.Equals(
                 panel.Id,
                 m_draftTargetPanelId,
