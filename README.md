@@ -53,12 +53,14 @@ Zielversion: Captain of Industry **0.8.6c**.
   Vanilla- und Systemmeldung; eigene Regeln wählen Ton, Alarmstufe,
   Aktivfarbe und Quittierverhalten direkt im Editor.
 - Goldene UNMA-Alarmglocke direkt im Inspector jeder unterstützten Entität;
-  ein Klick fügt das Objekt hinzu und öffnet die Meldetafel im sichtbaren
-  Zuweisungsmodus.
-- Auf einem Fachpanel verknüpft ein Klick auf eine vorhandene eigene Meldung das
-  Objekt mit deren Bedingungen. Das hervorgehobene `+ NEUE MELDUNG`-Karree
-  startet stattdessen einen neuen Alarm an genau diesem festen Panelplatz.
-  HOME dient nur als aktive Übersicht und nimmt keine festen Zuordnungen auf.
+  ein Klick öffnet die eigene, dauerhaft gespeicherte Gebäudetafel.
+- `+ NEUE MELDUNG` im jeweiligen Fach- oder Gebäudepanel öffnet den getrennten
+  Meldungseditor. Gebäudemeldungen können dort über
+  **ZU GLOBALEM PANEL HINZUFÜGEN** in globale Fachtafeln gespiegelt werden,
+  ohne einen zweiten Alarmzustand zu erzeugen. HOME bleibt eine reine aktive
+  Übersicht und nimmt keine festen Zuordnungen auf.
+- Ein Pfeil unten rechts in objektbezogenen Schlitzen zentriert die Kamera auf
+  das zugehörige Gebäude/Fahrzeug und öffnet dessen Inspector.
 - AWL-artige Bedingungstabelle mit sichtbarem Ist-Wert, verständlicher Kennung,
   allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
@@ -90,6 +92,9 @@ Zielversion: Captain of Industry **0.8.6c**.
   bekannter Meldungen sowie Vanilla-/System-Automatik und kommagetrennten
   Suchfiltern. Neu entdeckte passende Meldungsarten werden einmalig hinten
   angehängt und verschieben vorhandene Plätze nicht.
+- Persistente UI-Skalierung von 75 bis 200 Prozent für 1080p- und 4K-Monitore.
+  Klicks, Drags und Mausradbewegungen innerhalb sämtlicher UNMA-Fenster werden
+  nicht an Welt-Auswahl oder Kamera im Hintergrund weitergereicht.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
@@ -123,24 +128,26 @@ Zielversion: Captain of Industry **0.8.6c**.
 5. In **VERLAUF** zeigt eine eigene Zeile je Alarmereignis den Zustand `K`,
    `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
    gespeichert, bis sie dort ausdrücklich gelöscht werden.
-6. Für eine eigene Meldung die Entität anklicken und im geöffneten Inspector
-   die goldene UNMA-Glocke drücken. UNMA merkt Name, ID und Messwerte und zeigt
-   auf der **MELDETAFEL** dauerhaft den Zuweisungsmodus mit Abbruchknopf.
-7. Eine vorhandene **eigene** Meldung anklicken, um das Objekt als weitere
-   Bedingung zu verknüpfen. Für eine neue Meldung das hervorgehobene
-   `+ NEUE MELDUNG`-Karree anklicken; nach dem Speichern wird daraus an dieser
-   Stelle ein fester Schlitz.
-8. Im geöffneten Objekt-Alarmfenster Kennung und eines der sechs
+6. Für eine eigene Gebäudemeldung die Entität anklicken und im geöffneten
+   Inspector die goldene UNMA-Glocke drücken. UNMA öffnet die dauerhaft zu
+   dieser Entity-ID gehörende Gebäudetafel.
+7. In dieser Tafel `+ NEUE MELDUNG` drücken. Im getrennten Meldungseditor kann
+   die Regel zusätzlich mit einem oder mehreren globalen Fachpanels verknüpft
+   werden. Ein Doppelklick auf den späteren Schlitz öffnet dieselbe Regel erneut.
+8. Im Meldungseditor Kennung und eines der sechs
    Steuerzeichen wählen, Soll-Wert eingeben und die AWL-Zeile hinzufügen. Für
    relative Bedingungen `% VON` und anschließend den Bezugs-Messwert wählen.
-   Die Meldung zunächst speichern, danach für Sammelmeldungen weitere Entitäten
-   ebenso hinzufügen und global UND oder ODER festlegen. Der **EDITOR** bietet
-   denselben Ablauf sowie die Panelpflege.
+   Für eine Sammelmeldung danach außerhalb des Fensters die nächste Entität
+   anklicken, **AKTUELLE SPIEL-AUSWAHL ÜBERNEHMEN** drücken und die nächste
+   Zeile hinzufügen; anschließend global UND oder ODER festlegen und speichern.
 9. Unter **TÖNE** können Ton und Verhalten beim Gehen für jede bereits
    bekannte Vanilla-Meldung separat festgelegt werden.
 10. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
    ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
    oder auf die Werkvorgabe zurückgesetzt werden.
+11. Unter **OPTIONEN** lässt sich die gesamte UNMA-Oberfläche von 75 bis
+    200 Prozent skalieren. `+ PANEL` legt eine globale Tafel an; das Zahnrad
+    daneben öffnet deren getrennte Einstellungen.
 
 Die Gesundheitsanzeige des Spiels ist keine klassische 0–100-%-Skala:
 `10` ist der neutrale Basiswert und erst unter `0` entsteht ein

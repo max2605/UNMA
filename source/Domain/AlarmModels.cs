@@ -99,6 +99,7 @@ public sealed class AlarmRuleDefinition
     [DataMember(Order = 8)] public string SoundId = "auto";
     [DataMember(Order = 9)] public bool Enabled = true;
     [DataMember(Order = 10)] public bool AutoAcknowledgeOnClear;
+    [DataMember(Order = 11)] public List<string> LinkedPanelIds = new();
 }
 
 [DataContract]
@@ -125,6 +126,10 @@ public sealed class PanelDefinition
     [DataMember(Order = 7)] public List<PanelSlotDefinition> Slots = new();
     [DataMember(Order = 8)] public List<string> ExcludedAlarmIds = new();
     [DataMember(Order = 9)] public bool IsDashboard;
+    [DataMember(Order = 10)] public int OwnerEntityId = -1;
+    [DataMember(Order = 11)] public string OwnerEntityTitle = "";
+    [DataMember(Order = 12)] public string OwnerEntityPrototypeId = "";
+    [DataMember(Order = 13)] public string OwnerEntityType = "";
 }
 
 [DataContract]
@@ -193,7 +198,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 11;
+    [DataMember(Order = 1)] public int SchemaVersion = 12;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -215,6 +220,11 @@ public sealed class UnmaConfiguration
         new();
     [DataMember(Order = 17)]
     public bool LegacySustainedAlarmReconciliationPending;
+    [DataMember(Order = 18)] public int UiScalePercent = 100;
+    [DataMember(Order = 19)] public float EditorWindowX = 180f;
+    [DataMember(Order = 20)] public float EditorWindowY = 110f;
+    [DataMember(Order = 21)] public float EditorWindowWidth = 1080f;
+    [DataMember(Order = 22)] public float EditorWindowHeight = 720f;
 
     public static UnmaConfiguration CreateDefault()
     {
@@ -382,6 +392,25 @@ public sealed class UnmaConfiguration
             LauncherX = -1f;
             LauncherY = -1f;
         }
+        if (loadedSchemaVersion < 12)
+        {
+            UiScalePercent = 100;
+            EditorWindowX = 180f;
+            EditorWindowY = 110f;
+            EditorWindowWidth = 1080f;
+            EditorWindowHeight = 720f;
+        }
+        UiScalePercent = UiScalePercent <= 0
+            ? 100
+            : Math.Max(75, Math.Min(200, UiScalePercent));
+        EditorWindowX = NormalizeFinite(EditorWindowX, 180f);
+        EditorWindowY = NormalizeFinite(EditorWindowY, 110f);
+        EditorWindowWidth = Math.Max(
+            700f,
+            NormalizeFinite(EditorWindowWidth, 1080f));
+        EditorWindowHeight = Math.Max(
+            520f,
+            NormalizeFinite(EditorWindowHeight, 720f));
         Panels ??= new List<PanelDefinition>();
         Rules ??= new List<AlarmRuleDefinition>();
         SoundOverrides ??= new List<AlarmSoundOverride>();
@@ -397,7 +426,7 @@ public sealed class UnmaConfiguration
         {
             panel.Id = string.IsNullOrWhiteSpace(panel.Id)
                 ? Guid.NewGuid().ToString("N")
-                : panel.Id;
+                : panel.Id.Trim();
             panel.Name = string.IsNullOrWhiteSpace(panel.Name)
                 ? "MELDETAFEL"
                 : panel.Name.Trim();
@@ -410,6 +439,21 @@ public sealed class UnmaConfiguration
                 .Select(alarmId => alarmId.Trim())
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
+            if (loadedSchemaVersion < 12 || panel.OwnerEntityId <= 0)
+            {
+                panel.OwnerEntityId = -1;
+                panel.OwnerEntityTitle = "";
+                panel.OwnerEntityPrototypeId = "";
+                panel.OwnerEntityType = "";
+            }
+            else
+            {
+                panel.OwnerEntityTitle =
+                    panel.OwnerEntityTitle?.Trim() ?? "";
+                panel.OwnerEntityPrototypeId =
+                    panel.OwnerEntityPrototypeId?.Trim() ?? "";
+                panel.OwnerEntityType = panel.OwnerEntityType?.Trim() ?? "";
+            }
             NormalizePanelSlots(panel.Slots);
         }
 
@@ -433,7 +477,14 @@ public sealed class UnmaConfiguration
             rule.Id = string.IsNullOrWhiteSpace(rule.Id)
                 ? Guid.NewGuid().ToString("N")
                 : rule.Id.Trim();
-            rule.PanelId ??= Panels[0].Id;
+            rule.PanelId = string.IsNullOrWhiteSpace(rule.PanelId)
+                ? Panels[0].Id
+                : rule.PanelId.Trim();
+            rule.LinkedPanelIds =
+                PanelTopologyPolicy.NormalizeLinkedPanelIds(
+                    rule.PanelId,
+                    rule.LinkedPanelIds,
+                    Panels);
             rule.Name = string.IsNullOrWhiteSpace(rule.Name)
                 ? "MELDUNG"
                 : rule.Name.Trim();
@@ -547,7 +598,14 @@ public sealed class UnmaConfiguration
             SeedPanelSlots(includeMemories: true);
         }
         SynchronizeRuleSlots();
-        SchemaVersion = Math.Max(SchemaVersion, 11);
+        SchemaVersion = Math.Max(SchemaVersion, 12);
+    }
+
+    private static float NormalizeFinite(float value, float fallback)
+    {
+        return float.IsNaN(value) || float.IsInfinity(value)
+            ? fallback
+            : value;
     }
 
     private void MigrateSustainedVanillaAlarmMemories()
@@ -648,10 +706,11 @@ public sealed class UnmaConfiguration
                 }
             }
 
-            foreach (var rule in Rules.Where(rule => string.Equals(
-                         rule.PanelId,
-                         panel.Id,
-                         StringComparison.Ordinal)))
+            foreach (var rule in Rules.Where(rule =>
+                         PanelTopologyPolicy.IsRuleAssignedToPanel(
+                             rule,
+                             panel,
+                             Panels)))
             {
                 AddPanelSlotIfMissing(panel, CreateRulePanelSlot(rule));
             }
@@ -758,55 +817,58 @@ public sealed class UnmaConfiguration
                     "custom",
                     StringComparison.Ordinal) &&
                 (!rulesById.TryGetValue(slot.AlarmId, out var rule) ||
-                 !string.Equals(
-                     rule.PanelId,
-                     panel.Id,
-                     StringComparison.Ordinal)));
+                 !PanelTopologyPolicy.IsRuleAssignedToPanel(
+                     rule,
+                     panel,
+                     Panels)));
         }
         foreach (var rule in Rules)
         {
-            var panel = Panels.Find(candidate => string.Equals(
-                candidate.Id,
-                rule.PanelId,
-                StringComparison.Ordinal));
-            if (panel == null)
+            foreach (var panelId in PanelTopologyPolicy.GetRulePanelIds(
+                         rule,
+                         Panels))
             {
-                continue;
-            }
-            if (panel.IsDashboard)
-            {
-                continue;
-            }
-            var alarmId = "rule:" + rule.Id;
-            var existing = panel.Slots.Find(slot => string.Equals(
-                slot.AlarmId,
-                alarmId,
-                StringComparison.Ordinal));
-            if (existing == null)
-            {
-                panel.Slots.Add(CreateRulePanelSlot(rule));
-            }
-            else
-            {
-                existing.DisplayName = rule.Name;
-                existing.Detail = rule.Conditions.Count + " Bedingung(en)";
-                existing.Source = "custom";
-                existing.Severity = rule.Severity;
-                existing.ActiveColor = rule.ActiveColor;
+                var panel = Panels.Find(candidate => string.Equals(
+                    candidate.Id,
+                    panelId,
+                    StringComparison.Ordinal));
+                if (panel == null)
+                {
+                    continue;
+                }
+                var alarmId = "rule:" + rule.Id;
+                var existing = panel.Slots.Find(slot => string.Equals(
+                    slot.AlarmId,
+                    alarmId,
+                    StringComparison.Ordinal));
+                if (existing == null)
+                {
+                    panel.Slots.Add(CreateRulePanelSlot(rule));
+                }
+                else
+                {
+                    existing.DisplayName = rule.Name;
+                    existing.Detail =
+                        rule.Conditions.Count + " Bedingung(en)";
+                    existing.Source = "custom";
+                    existing.Severity = rule.Severity;
+                    existing.ActiveColor = rule.ActiveColor;
+                }
             }
         }
     }
 
-    private static bool IsMemoryEligibleForPanel(
+    private bool IsMemoryEligibleForPanel(
         AlarmMemoryDefinition memory,
         PanelDefinition panel)
     {
         if (string.Equals(memory.Source, "custom", StringComparison.Ordinal))
         {
-            return string.Equals(
-                memory.PanelId,
-                panel.Id,
-                StringComparison.Ordinal);
+            return PanelTopologyPolicy.IsCustomMemoryEligibleForPanel(
+                memory,
+                panel,
+                Rules,
+                Panels);
         }
         if (string.Equals(memory.Source, "vanilla", StringComparison.Ordinal) &&
             !panel.IncludeVanilla)

@@ -26,6 +26,7 @@ internal static class Program
         TestSystemAlarmSelection();
         TestSystemMetricMath();
         TestWindowResizeMath();
+        TestPanelTopologyPolicy();
         TestCustomRuleLifecyclePolicy();
         TestPanelSlotProjection();
         TestConfigurationRoundTrip();
@@ -213,6 +214,198 @@ internal static class Program
             980f, 100f, 700f, 600f));
     }
 
+    private static void TestPanelTopologyPolicy()
+    {
+        var dashboard = new PanelDefinition
+        {
+            Id = "dashboard",
+            Name = "HOME",
+            IsDashboard = true,
+        };
+        var globalOne = new PanelDefinition
+        {
+            Id = "global-one",
+            Name = "VERSORGUNG",
+        };
+        var globalTwo = new PanelDefinition
+        {
+            Id = "global-two",
+            Name = "PRODUKTION",
+        };
+        var entityPanel = new PanelDefinition
+        {
+            Id = "entity-42",
+            Name = "LAGERHAUS #42",
+            OwnerEntityId = 42,
+            OwnerEntityTitle = " Lagerhaus III ",
+            OwnerEntityPrototypeId = " AirStorageT3 ",
+            OwnerEntityType = " Mafi.Core.Buildings.Storage ",
+        };
+        var foreignEntityPanel = new PanelDefinition
+        {
+            Id = "entity-43",
+            Name = "LAGERHAUS #43",
+            OwnerEntityId = 43,
+            OwnerEntityTitle = "Lagerhaus II",
+            OwnerEntityPrototypeId = "AirStorageT2",
+        };
+        var panels = new[]
+        {
+            dashboard,
+            globalOne,
+            globalTwo,
+            entityPanel,
+            foreignEntityPanel,
+        };
+        var rule = new AlarmRuleDefinition
+        {
+            Id = "linked-storage",
+            PanelId = "entity-42",
+            Name = "KARTOFFELN NIEDRIG",
+            LinkedPanelIds = new List<string>
+            {
+                " global-one ",
+                "global-one",
+                "entity-42",
+                "entity-43",
+                "dashboard",
+                "missing",
+                "global-two",
+                " ",
+            },
+        };
+
+        rule.LinkedPanelIds = PanelTopologyPolicy.NormalizeLinkedPanelIds(
+            rule.PanelId,
+            rule.LinkedPanelIds,
+            panels);
+        AreEqual(2, rule.LinkedPanelIds.Count);
+        AreEqual("global-one", rule.LinkedPanelIds[0]);
+        AreEqual("global-two", rule.LinkedPanelIds[1]);
+        rule.LinkedPanelIds.Add("entity-43");
+        var assignedPanelIds = PanelTopologyPolicy.GetRulePanelIds(
+            rule,
+            panels);
+        AreEqual(3, assignedPanelIds.Count);
+        AreEqual("entity-42", assignedPanelIds[0]);
+        AreEqual("global-one", assignedPanelIds[1]);
+        AreEqual("global-two", assignedPanelIds[2]);
+        IsTrue(PanelTopologyPolicy.IsEntityPanel(entityPanel));
+        IsFalse(PanelTopologyPolicy.IsEntityPanel(globalOne));
+        IsTrue(PanelTopologyPolicy.IsRuleAssignedToPanel(
+            rule,
+            globalOne,
+            panels));
+        IsFalse(PanelTopologyPolicy.IsRuleAssignedToPanel(
+            rule,
+            dashboard,
+            panels));
+        IsTrue(PanelTopologyPolicy.TryGetRuleId(
+            " rule:linked-storage ",
+            out var ruleId));
+        AreEqual("linked-storage", ruleId);
+        IsFalse(PanelTopologyPolicy.TryGetRuleId("rule:   ", out _));
+
+        var memory = new AlarmMemoryDefinition
+        {
+            Key = "rule:linked-storage",
+            SlotId = "rule:linked-storage",
+            Source = "custom",
+            PanelId = "entity-42",
+        };
+        IsTrue(PanelTopologyPolicy.IsCustomMemoryEligibleForPanel(
+            memory,
+            entityPanel,
+            new[] { rule },
+            panels));
+        IsTrue(PanelTopologyPolicy.IsCustomMemoryEligibleForPanel(
+            memory,
+            globalOne,
+            new[] { rule },
+            panels));
+        IsFalse(PanelTopologyPolicy.IsCustomMemoryEligibleForPanel(
+            memory,
+            dashboard,
+            new[] { rule },
+            panels));
+        var legacyMemory = new AlarmMemoryDefinition
+        {
+            Source = "custom",
+            PanelId = "global-two",
+        };
+        IsTrue(PanelTopologyPolicy.IsCustomMemoryEligibleForPanel(
+            legacyMemory,
+            globalTwo,
+            Array.Empty<AlarmRuleDefinition>(),
+            panels));
+
+        var configuration = new UnmaConfiguration
+        {
+            Panels = panels.ToList(),
+            Rules = new List<AlarmRuleDefinition> { rule },
+            UiScalePercent = 175,
+            EditorWindowX = 210f,
+            EditorWindowY = 125f,
+            EditorWindowWidth = 1200f,
+            EditorWindowHeight = 780f,
+        };
+        configuration.Normalize();
+        AreEqual(12, configuration.SchemaVersion);
+        AreEqual("Lagerhaus III", entityPanel.OwnerEntityTitle);
+        AreEqual("AirStorageT3", entityPanel.OwnerEntityPrototypeId);
+        AreEqual(
+            "Mafi.Core.Buildings.Storage",
+            entityPanel.OwnerEntityType);
+        foreach (var panel in new[] { entityPanel, globalOne, globalTwo })
+        {
+            IsTrue(panel.Slots.Exists(slot =>
+                slot.AlarmId == "rule:linked-storage"));
+        }
+        IsFalse(dashboard.Slots.Exists(slot =>
+            slot.AlarmId == "rule:linked-storage"));
+        IsFalse(foreignEntityPanel.Slots.Exists(slot =>
+            slot.AlarmId == "rule:linked-storage"));
+
+        rule.LinkedPanelIds = new List<string> { "global-two" };
+        rule.Name = "KARTOFFELN SEHR NIEDRIG";
+        rule.Conditions.Add(new ConditionDefinition());
+        configuration.Normalize();
+        IsTrue(entityPanel.Slots.Exists(slot =>
+            slot.AlarmId == "rule:linked-storage"));
+        IsFalse(globalOne.Slots.Exists(slot =>
+            slot.AlarmId == "rule:linked-storage"));
+        var linkedSlot = globalTwo.Slots.Find(slot =>
+            slot.AlarmId == "rule:linked-storage");
+        IsTrue(linkedSlot != null);
+        AreEqual("KARTOFFELN SEHR NIEDRIG", linkedSlot.DisplayName);
+        AreEqual("1 Bedingung(en)", linkedSlot.Detail);
+
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        using var stream = new MemoryStream();
+        serializer.WriteObject(stream, configuration);
+        stream.Position = 0;
+        var restored = (UnmaConfiguration)serializer.ReadObject(stream);
+        restored.Normalize();
+        AreEqual(175, restored.UiScalePercent);
+        AreEqual(210f, restored.EditorWindowX);
+        AreEqual(125f, restored.EditorWindowY);
+        AreEqual(1200f, restored.EditorWindowWidth);
+        AreEqual(780f, restored.EditorWindowHeight);
+        var restoredEntityPanel = restored.Panels.Find(panel =>
+            panel.Id == "entity-42");
+        AreEqual(42, restoredEntityPanel.OwnerEntityId);
+        AreEqual("Lagerhaus III", restoredEntityPanel.OwnerEntityTitle);
+        AreEqual(
+            "AirStorageT3",
+            restoredEntityPanel.OwnerEntityPrototypeId);
+        AreEqual(
+            "Mafi.Core.Buildings.Storage",
+            restoredEntityPanel.OwnerEntityType);
+        AreEqual(1, restored.Rules[0].LinkedPanelIds.Count);
+        AreEqual("global-two", restored.Rules[0].LinkedPanelIds[0]);
+    }
+
     private static void TestCustomRuleLifecyclePolicy()
     {
         IsTrue(CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
@@ -227,10 +420,58 @@ internal static class Program
         IsFalse(CustomRuleLifecyclePolicy.ShouldDeleteForRemovedEntity(
             removedEntityIsDestroyed: false,
             hasLiveReplacement: true));
-        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(0));
-        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(1));
-        IsTrue(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(2));
-        IsTrue(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(3));
+        AreEqual(
+            10d,
+            CustomRuleLifecyclePolicy.StaticEntityMissingGracePeriod
+                .TotalSeconds);
+        const long timestampFrequency = 1000;
+        var graceTicks = (long)
+            (CustomRuleLifecyclePolicy.StaticEntityMissingGracePeriod
+                .TotalSeconds * timestampFrequency);
+        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(
+            firstMissingTimestamp: 1000,
+            currentTimestamp: 1000 + graceTicks - 1,
+            timestampFrequency));
+        IsTrue(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(
+            firstMissingTimestamp: 1000,
+            currentTimestamp: 1000 + graceTicks,
+            timestampFrequency));
+        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(
+            firstMissingTimestamp: 1000,
+            currentTimestamp: 999,
+            timestampFrequency));
+        IsFalse(CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(
+            firstMissingTimestamp: 1000,
+            currentTimestamp: 1000 + graceTicks,
+            timestampFrequency: 0));
+
+        var missingTracker = new StaticEntityMissingGraceTracker();
+        IsFalse(missingTracker.ObserveMissing(
+            entityId: 42,
+            currentTimestamp: 5000,
+            timestampFrequency));
+        IsFalse(missingTracker.ObserveMissing(
+            entityId: 42,
+            currentTimestamp: 5000 + graceTicks - 1,
+            timestampFrequency));
+        missingTracker.ObserveLive(42);
+        IsFalse(missingTracker.ObserveMissing(
+            entityId: 42,
+            currentTimestamp: 5000 + graceTicks + 1,
+            timestampFrequency));
+        IsFalse(missingTracker.ObserveMissing(
+            entityId: 42,
+            currentTimestamp: 5000 + graceTicks * 2,
+            timestampFrequency));
+        IsTrue(missingTracker.ObserveMissing(
+            entityId: 42,
+            currentTimestamp: 5000 + graceTicks * 2 + 1,
+            timestampFrequency));
+        missingTracker.RetainOnly(Array.Empty<int>());
+        IsFalse(missingTracker.ObserveMissing(
+            entityId: 42,
+            currentTimestamp: 5000 + graceTicks * 4,
+            timestampFrequency));
 
         var allRule = new AlarmRuleDefinition
         {
@@ -1368,7 +1609,7 @@ internal static class Program
         IsFalse(restoredSystemOverride.IsGloballyDisabled);
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
-        AreEqual(11, restored.SchemaVersion);
+        AreEqual(12, restored.SchemaVersion);
         IsTrue(restored.Panels[0].IsDashboard);
         IsFalse(restored.Panels[1].IsDashboard);
         AreEqual(
@@ -1482,7 +1723,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(11, restored.SchemaVersion);
+        AreEqual(12, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -1502,6 +1743,15 @@ internal static class Program
         oldConfiguration.SchemaVersion = 1;
         oldConfiguration.LauncherX = 0f;
         oldConfiguration.LauncherY = 0f;
+        oldConfiguration.UiScalePercent = 175;
+        oldConfiguration.EditorWindowX = 999f;
+        oldConfiguration.EditorWindowY = 888f;
+        oldConfiguration.EditorWindowWidth = 777f;
+        oldConfiguration.EditorWindowHeight = 666f;
+        oldConfiguration.Panels[1].OwnerEntityId = 44;
+        oldConfiguration.Panels[1].OwnerEntityTitle = "ALT";
+        oldConfiguration.Panels[1].OwnerEntityPrototypeId = "Legacy.Storage";
+        oldConfiguration.Panels[1].OwnerEntityType = "Legacy.Type";
         oldConfiguration.SoundOverrides.Add(new AlarmSoundOverride
         {
             AlarmId = "system:health",
@@ -1509,10 +1759,35 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(11, oldConfiguration.SchemaVersion);
+        AreEqual(12, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
+        AreEqual(100, oldConfiguration.UiScalePercent);
+        AreEqual(180f, oldConfiguration.EditorWindowX);
+        AreEqual(110f, oldConfiguration.EditorWindowY);
+        AreEqual(1080f, oldConfiguration.EditorWindowWidth);
+        AreEqual(720f, oldConfiguration.EditorWindowHeight);
+        AreEqual(-1, oldConfiguration.Panels[1].OwnerEntityId);
+        AreEqual("", oldConfiguration.Panels[1].OwnerEntityTitle);
+        AreEqual("", oldConfiguration.Panels[1].OwnerEntityPrototypeId);
+        AreEqual("", oldConfiguration.Panels[1].OwnerEntityType);
         AreEqual(3, oldConfiguration.SystemAlarms.Count);
+
+        var malformedCurrent = UnmaConfiguration.CreateDefault();
+        malformedCurrent.UiScalePercent = 250;
+        malformedCurrent.EditorWindowX = float.NaN;
+        malformedCurrent.EditorWindowY = float.PositiveInfinity;
+        malformedCurrent.EditorWindowWidth = 100f;
+        malformedCurrent.EditorWindowHeight = 200f;
+        malformedCurrent.Normalize();
+        AreEqual(200, malformedCurrent.UiScalePercent);
+        AreEqual(180f, malformedCurrent.EditorWindowX);
+        AreEqual(110f, malformedCurrent.EditorWindowY);
+        AreEqual(700f, malformedCurrent.EditorWindowWidth);
+        AreEqual(520f, malformedCurrent.EditorWindowHeight);
+        malformedCurrent.UiScalePercent = 50;
+        malformedCurrent.Normalize();
+        AreEqual(75, malformedCurrent.UiScalePercent);
 
         var health = oldConfiguration.SystemAlarms.Find(
             alarm => alarm.Id == "system:health");
@@ -1599,7 +1874,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(11, schemaSeven.SchemaVersion);
+        AreEqual(12, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -1677,7 +1952,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(11, legacy.SchemaVersion);
+        AreEqual(12, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -1685,6 +1960,7 @@ internal static class Program
         AreEqual("", legacy.Rules[0].Conditions[0].ReferenceMetricPath);
         AreEqual("", legacy.Rules[0].Conditions[0].ReferenceMetricLabel);
         IsFalse(legacy.Rules[0].AutoAcknowledgeOnClear);
+        AreEqual(0, legacy.Rules[0].LinkedPanelIds.Count);
         IsFalse(legacy.SoundOverrides[0].AutoAcknowledgeOnClear);
         IsFalse(legacy.SoundOverrides[0].IsGloballyDisabled);
         IsTrue(legacy.SystemAlarms.TrueForAll(alarm =>
@@ -1693,6 +1969,12 @@ internal static class Program
         IsTrue(legacy.Panels[0].Slots != null);
         IsTrue(legacy.Panels[0].ExcludedAlarmIds != null);
         IsTrue(legacy.Panels[0].IsDashboard);
+        AreEqual(-1, legacy.Panels[0].OwnerEntityId);
+        AreEqual(100, legacy.UiScalePercent);
+        AreEqual(180f, legacy.EditorWindowX);
+        AreEqual(110f, legacy.EditorWindowY);
+        AreEqual(1080f, legacy.EditorWindowWidth);
+        AreEqual(720f, legacy.EditorWindowHeight);
         AreEqual(0, legacy.Panels[0].Slots.Count);
 
         var versionFive = UnmaConfiguration.CreateDefault();
@@ -1722,7 +2004,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(11, versionFive.SchemaVersion);
+        AreEqual(12, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -1799,7 +2081,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(11, schemaEight.SchemaVersion);
+        AreEqual(12, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

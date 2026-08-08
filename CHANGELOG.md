@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0 – 2026-08-08
+
+- Der Meldungseditor ist jetzt ein eigenes verschiebbares und skalierbares
+  Fenster. Das Hauptfenster bleibt auf Meldetafel, Verlauf, System, Töne und
+  Optionen konzentriert; `+ PANEL`, Panel-Einstellungen und
+  `+ NEUE MELDUNG` öffnen jeweils den passenden getrennten Arbeitsbereich.
+- Jeder über die UNMA-Glocke geöffnete Gebäude-/Entity-Inspector erhält eine
+  eigene dauerhafte Tafel. Dieselbe Entity-ID öffnet stets dieselbe Tafel.
+- Gebäuderegeln lassen sich mit beliebig vielen globalen Fachpanels
+  verknüpfen. Alle Schlitze verwenden dieselbe Regel-ID und damit exakt
+  denselben K/G/Q-, Quittier-, Ton- und Verlaufszustand.
+- Ein kleiner Pfeil unten rechts in objektbezogenen Meldeschlitzen zentriert
+  die Kamera auf das zugehörige Objekt und öffnet dessen Inspector.
+- `AKTUELLE SPIEL-AUSWAHL ÜBERNEHMEN` ist gegen Durchklicken abgesichert.
+  Damit können nacheinander beispielsweise `Stückgutlager · Menge = 0` und
+  ein Farm-Messwert als gemeinsame UND-/ODER-Regel hinzugefügt werden.
+- Klick, Drag, Rechtsklick und Mausrad über Hauptfenster, Meldungseditor,
+  Launcher und abgekoppelten Tafeln werden gegenüber Welt-Auswahl und Kamera
+  blockiert.
+- Neue persistente UI-Skalierung von 75 bis 200 Prozent; Haupt- und
+  Editorfenster bleiben in logischen Koordinaten gespeichert und damit auf
+  1080p- sowie 4K-Monitoren verwendbar.
+- Beim endgültigen Abriss werden jetzt auch die eigene Entity-Tafel, ihre
+  Primärregeln und sämtliche global verknüpften Schlitze atomar entfernt.
+  Der Load-Fallback speichert zusätzlich den Entity-Typ, um verwaiste
+  Gebäudetafeln sicher von temporär despawnten Fahrzeugen zu unterscheiden.
+- Konfigurationsschema 12 migriert bestehende Tafeln und Regeln ohne
+  versehentliche Entity-Zuordnung; UI-Skalierung startet bei Altständen mit
+  100 Prozent.
+
 ## 0.8.0 – 2026-08-07
 
 - Bekannte Vanilla-Meldungstypen lassen sich im TÖNE-Tab global für UNMA

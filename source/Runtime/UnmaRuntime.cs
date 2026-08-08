@@ -151,8 +151,8 @@ public sealed class UnmaRuntime : IDisposable
     private volatile HashSet<string> m_disabledVanillaOverrideIds =
         new(StringComparer.Ordinal);
     private readonly Dictionary<int, IEntity> m_removedEntityCandidates = new();
-    private readonly Dictionary<int, int>
-        m_missingStaticEntityObservations = new();
+    private readonly StaticEntityMissingGraceTracker
+        m_missingStaticEntityTracker = new();
     private readonly Dictionary<string, bool> m_staticEntityTypeCache =
         new(StringComparer.Ordinal);
 
@@ -599,6 +599,400 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public PanelDefinition GetOrCreateEntityPanel(
+        EntityInspectionSnapshot inspection)
+    {
+        if (inspection == null ||
+            inspection.EntityId <= 0 ||
+            !string.IsNullOrWhiteSpace(inspection.Error))
+        {
+            return null;
+        }
+        return GetOrCreateEntityPanel(
+            inspection.EntityId,
+            inspection.Title,
+            inspection.EntityType,
+            inspection.PrototypeId);
+    }
+
+    public PanelDefinition GetEntityPanel(int entityId)
+    {
+        if (entityId <= 0)
+        {
+            return null;
+        }
+        lock (m_configurationGate)
+        {
+            return Configuration.Panels.FirstOrDefault(panel =>
+                PanelTopologyPolicy.IsEntityPanel(panel) &&
+                panel.OwnerEntityId == entityId);
+        }
+    }
+
+    public PanelDefinition GetOrCreateEntityPanel(
+        int entityId,
+        string entityTitle,
+        string entityType,
+        string entityPrototypeId)
+    {
+        if (entityId <= 0)
+        {
+            return null;
+        }
+
+        lock (m_persistenceGate)
+        {
+            PanelDefinition panel;
+            var wasCreated = false;
+            string previousName = null;
+            string previousOwnerTitle = null;
+            string previousOwnerPrototypeId = null;
+            string previousOwnerEntityType = null;
+            var previousOwnerEntityId = -1;
+            var previousIncludeVanilla = false;
+            var previousIncludeSystem = false;
+            var previousIsDashboard = false;
+            lock (m_configurationGate)
+            {
+                panel = Configuration.Panels.FirstOrDefault(candidate =>
+                    candidate != null &&
+                    PanelTopologyPolicy.IsEntityPanel(candidate) &&
+                    candidate.OwnerEntityId == entityId);
+                if (panel == null)
+                {
+                    panel = new PanelDefinition
+                    {
+                        Id = CreateEntityPanelIdLocked(entityId),
+                        Name = EntityPanelDisplayName(entityId, entityTitle),
+                        Columns = 3,
+                        IncludeVanilla = false,
+                        IncludeSystem = false,
+                        NotificationFilter = "",
+                        IsDashboard = false,
+                        OwnerEntityId = entityId,
+                        OwnerEntityTitle = entityTitle?.Trim() ?? "",
+                        OwnerEntityPrototypeId =
+                            entityPrototypeId?.Trim() ?? "",
+                        OwnerEntityType = entityType?.Trim() ?? "",
+                    };
+                    Configuration.Panels.Add(panel);
+                    wasCreated = true;
+                }
+                else
+                {
+                    previousName = panel.Name;
+                    previousOwnerTitle = panel.OwnerEntityTitle;
+                    previousOwnerPrototypeId = panel.OwnerEntityPrototypeId;
+                    previousOwnerEntityType = panel.OwnerEntityType;
+                    previousOwnerEntityId = panel.OwnerEntityId;
+                    previousIncludeVanilla = panel.IncludeVanilla;
+                    previousIncludeSystem = panel.IncludeSystem;
+                    previousIsDashboard = panel.IsDashboard;
+                    panel.Name = EntityPanelDisplayName(entityId, entityTitle);
+                    panel.OwnerEntityTitle = entityTitle?.Trim() ?? "";
+                    panel.OwnerEntityPrototypeId =
+                        entityPrototypeId?.Trim() ?? "";
+                    panel.OwnerEntityType = entityType?.Trim() ?? "";
+                    panel.IncludeVanilla = false;
+                    panel.IncludeSystem = false;
+                    panel.IsDashboard = false;
+                    panel.OwnerEntityId = entityId;
+                }
+            }
+
+            if (SaveConfiguration())
+            {
+                return panel;
+            }
+
+            lock (m_configurationGate)
+            {
+                if (wasCreated)
+                {
+                    Configuration.Panels.Remove(panel);
+                }
+                else
+                {
+                    panel.Name = previousName;
+                    panel.OwnerEntityTitle = previousOwnerTitle;
+                    panel.OwnerEntityPrototypeId = previousOwnerPrototypeId;
+                    panel.OwnerEntityType = previousOwnerEntityType;
+                    panel.OwnerEntityId = previousOwnerEntityId;
+                    panel.IncludeVanilla = previousIncludeVanilla;
+                    panel.IncludeSystem = previousIncludeSystem;
+                    panel.IsDashboard = previousIsDashboard;
+                }
+            }
+            return null;
+        }
+    }
+
+    public bool LinkRuleToPanel(
+        string ruleId,
+        string panelId,
+        int preferredSlotIndex = -1)
+    {
+        ruleId = ruleId?.Trim() ?? "";
+        panelId = panelId?.Trim() ?? "";
+        if (ruleId.Length == 0 || panelId.Length == 0)
+        {
+            return false;
+        }
+
+        lock (m_persistenceGate)
+        {
+            AlarmRuleDefinition rule;
+            PanelDefinition panel;
+            List<string> previousLinks;
+            List<PanelSlotDefinition> previousSlots;
+            lock (m_configurationGate)
+            {
+                rule = Configuration.Rules.FirstOrDefault(candidate =>
+                    string.Equals(candidate?.Id, ruleId,
+                        StringComparison.Ordinal));
+                panel = Configuration.Panels.FirstOrDefault(candidate =>
+                    string.Equals(candidate?.Id, panelId,
+                        StringComparison.Ordinal));
+                if (rule == null ||
+                    panel == null ||
+                    panel.IsDashboard ||
+                    PanelTopologyPolicy.IsEntityPanel(panel))
+                {
+                    return false;
+                }
+                if (string.Equals(rule.PanelId, panel.Id,
+                        StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                rule.LinkedPanelIds ??= new List<string>();
+                if (rule.LinkedPanelIds.Contains(
+                        panel.Id,
+                        StringComparer.Ordinal))
+                {
+                    return true;
+                }
+                previousLinks = rule.LinkedPanelIds.ToList();
+                previousSlots = (panel.Slots ??
+                        new List<PanelSlotDefinition>())
+                    .Select(PanelSlotProjection.CloneSlot)
+                    .ToList();
+                rule.LinkedPanelIds.Add(panel.Id);
+                panel.Slots ??= new List<PanelSlotDefinition>();
+                if (preferredSlotIndex >= 0)
+                {
+                    PanelSlotProjection.InsertRuleSlot(
+                        panel,
+                        rule,
+                        preferredSlotIndex);
+                }
+                else if (!panel.Slots.Any(slot => string.Equals(
+                             slot?.AlarmId,
+                             "rule:" + rule.Id,
+                             StringComparison.Ordinal)))
+                {
+                    panel.Slots.Add(PanelSlotProjection.CreateRuleSlot(rule));
+                }
+            }
+
+            if (SaveConfiguration())
+            {
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                rule.LinkedPanelIds = previousLinks;
+                panel.Slots = previousSlots;
+            }
+            return false;
+        }
+    }
+
+    public bool UnlinkRuleFromPanel(string ruleId, string panelId)
+    {
+        ruleId = ruleId?.Trim() ?? "";
+        panelId = panelId?.Trim() ?? "";
+        if (ruleId.Length == 0 || panelId.Length == 0)
+        {
+            return false;
+        }
+
+        lock (m_persistenceGate)
+        {
+            AlarmRuleDefinition rule;
+            PanelDefinition panel;
+            List<string> previousLinks;
+            List<PanelSlotDefinition> previousSlots;
+            lock (m_configurationGate)
+            {
+                rule = Configuration.Rules.FirstOrDefault(candidate =>
+                    string.Equals(candidate?.Id, ruleId,
+                        StringComparison.Ordinal));
+                panel = Configuration.Panels.FirstOrDefault(candidate =>
+                    string.Equals(candidate?.Id, panelId,
+                        StringComparison.Ordinal));
+                if (rule == null ||
+                    panel == null ||
+                    string.Equals(rule.PanelId, panel.Id,
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                rule.LinkedPanelIds ??= new List<string>();
+                if (!rule.LinkedPanelIds.Contains(
+                        panel.Id,
+                        StringComparer.Ordinal))
+                {
+                    return true;
+                }
+                previousLinks = rule.LinkedPanelIds.ToList();
+                previousSlots = (panel.Slots ??
+                        new List<PanelSlotDefinition>())
+                    .Select(PanelSlotProjection.CloneSlot)
+                    .ToList();
+                rule.LinkedPanelIds.RemoveAll(linkedPanelId => string.Equals(
+                    linkedPanelId,
+                    panel.Id,
+                    StringComparison.Ordinal));
+                panel.Slots?.RemoveAll(slot => string.Equals(
+                    slot?.AlarmId,
+                    "rule:" + rule.Id,
+                    StringComparison.Ordinal));
+            }
+
+            if (SaveConfiguration())
+            {
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                rule.LinkedPanelIds = previousLinks;
+                panel.Slots = previousSlots;
+            }
+            return false;
+        }
+    }
+
+    public bool TryGetLiveEntity(int entityId, out IEntity entity)
+    {
+        entity = null;
+        if (entityId < 0)
+        {
+            return false;
+        }
+        try
+        {
+            var option = m_entitiesManager.GetEntity(new EntityId(entityId));
+            if (option.IsNone || option.Value.IsDestroyed)
+            {
+                return false;
+            }
+            entity = option.Value;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryResolveNavigationEntity(
+        PanelDefinition panel,
+        AlarmView alarm,
+        out IEntity entity)
+    {
+        var entityId = -1;
+        lock (m_configurationGate)
+        {
+            if (PanelTopologyPolicy.IsEntityPanel(panel))
+            {
+                entityId = panel.OwnerEntityId;
+            }
+
+            if (entityId < 0 &&
+                PanelSlotProjection.TryGetCustomRuleId(
+                    alarm,
+                    out var ruleId))
+            {
+                var rule = Configuration.Rules.FirstOrDefault(candidate =>
+                    string.Equals(candidate?.Id, ruleId,
+                        StringComparison.Ordinal));
+                var ownerPanel = rule == null
+                    ? null
+                    : Configuration.Panels.FirstOrDefault(candidate =>
+                        string.Equals(candidate?.Id, rule.PanelId,
+                            StringComparison.Ordinal));
+                if (PanelTopologyPolicy.IsEntityPanel(ownerPanel))
+                {
+                    entityId = ownerPanel.OwnerEntityId;
+                }
+                else
+                {
+                    entityId = rule?.Conditions?
+                        .FirstOrDefault(condition => condition != null)?
+                        .EntityId ?? -1;
+                }
+            }
+        }
+
+        if (entityId < 0)
+        {
+            TryParseEntityId(
+                PanelSlotProjection.StableAlarmId(alarm),
+                out entityId);
+        }
+        return TryGetLiveEntity(entityId, out entity);
+    }
+
+    public bool TryResolveNavigationEntity(
+        AlarmView alarm,
+        out IEntity entity)
+    {
+        return TryResolveNavigationEntity(null, alarm, out entity);
+    }
+
+    private string CreateEntityPanelIdLocked(int entityId)
+    {
+        var preferredId = "entity:" + entityId.ToString(
+            CultureInfo.InvariantCulture);
+        if (!Configuration.Panels.Any(panel => string.Equals(
+                panel?.Id,
+                preferredId,
+                StringComparison.Ordinal)))
+        {
+            return preferredId;
+        }
+        return "entity:" + entityId.ToString(CultureInfo.InvariantCulture) +
+               ":" + Guid.NewGuid().ToString("N");
+    }
+
+    private static string EntityPanelDisplayName(
+        int entityId,
+        string entityTitle)
+    {
+        return string.IsNullOrWhiteSpace(entityTitle)
+            ? "OBJEKT #" + entityId.ToString(CultureInfo.InvariantCulture)
+            : entityTitle.Trim();
+    }
+
+    private static bool TryParseEntityId(string value, out int entityId)
+    {
+        entityId = -1;
+        const string token = ":entity:";
+        var index = value?.LastIndexOf(token, StringComparison.Ordinal) ?? -1;
+        return index >= 0 &&
+               int.TryParse(
+                   value.Substring(index + token.Length),
+                   NumberStyles.Integer,
+                   CultureInfo.InvariantCulture,
+                   out entityId) &&
+               entityId >= 0;
+    }
+
     private void Evaluate()
     {
         var settings = m_settings;
@@ -644,6 +1038,7 @@ public sealed class UnmaRuntime : IDisposable
                 .Select(PanelSlotProjection.CloneSlot)
                 .Where(slot =>
                     slot != null &&
+                    IsPersistedSlotAllowedOnPanelLocked(panel, slot) &&
                     !VanillaNotificationSuppressionPolicy
                         .IsSlotSuppressed(
                             slot,
@@ -802,6 +1197,7 @@ public sealed class UnmaRuntime : IDisposable
             string error;
             lock (m_configurationGate)
             {
+                SanitizeEntityPanelSlotsLocked();
                 Configuration.AlarmMemories = alarmMemories;
                 Configuration.AlarmHistory = alarmHistory;
                 saved = m_store.Save(Configuration, out error);
@@ -1003,6 +1399,16 @@ public sealed class UnmaRuntime : IDisposable
             return false;
         }
 
+        lock (m_persistenceGate)
+        {
+            return AddRuleWithPersistenceLock(rule, preferredSlotIndex);
+        }
+    }
+
+    private bool AddRuleWithPersistenceLock(
+        AlarmRuleDefinition rule,
+        int preferredSlotIndex)
+    {
         if (string.IsNullOrWhiteSpace(rule.Id))
         {
             rule.Id = Guid.NewGuid().ToString("N");
@@ -1072,7 +1478,19 @@ public sealed class UnmaRuntime : IDisposable
             return false;
         }
 
+        lock (m_persistenceGate)
+        {
+            return UpdateRuleWithPersistenceLock(updatedRule);
+        }
+    }
+
+    private bool UpdateRuleWithPersistenceLock(
+        AlarmRuleDefinition updatedRule)
+    {
         AlarmRuleDefinition previousRule;
+        Dictionary<PanelDefinition, List<PanelSlotDefinition>>
+            previousPanelSlots;
+        Dictionary<PanelDefinition, List<string>> previousExcludedAlarmIds;
         var ruleIndex = -1;
         lock (m_configurationGate)
         {
@@ -1086,6 +1504,15 @@ public sealed class UnmaRuntime : IDisposable
                 return false;
             }
             previousRule = Configuration.Rules[ruleIndex];
+            previousPanelSlots = Configuration.Panels.ToDictionary(
+                panel => panel,
+                panel => (panel.Slots ?? new List<PanelSlotDefinition>())
+                    .Select(PanelSlotProjection.CloneSlot)
+                    .ToList());
+            previousExcludedAlarmIds = Configuration.Panels.ToDictionary(
+                panel => panel,
+                panel => (panel.ExcludedAlarmIds ?? new List<string>())
+                    .ToList());
             Configuration.Rules[ruleIndex] = updatedRule;
         }
 
@@ -1094,6 +1521,14 @@ public sealed class UnmaRuntime : IDisposable
             lock (m_configurationGate)
             {
                 Configuration.Rules[ruleIndex] = previousRule;
+                foreach (var pair in previousPanelSlots)
+                {
+                    pair.Key.Slots = pair.Value;
+                }
+                foreach (var pair in previousExcludedAlarmIds)
+                {
+                    pair.Key.ExcludedAlarmIds = pair.Value;
+                }
             }
             return false;
         }
@@ -1350,51 +1785,133 @@ public sealed class UnmaRuntime : IDisposable
 
     private bool RemovePanelWithPersistenceLock(string panelId)
     {
-        PanelDefinition panel;
-        AlarmRuleDefinition[] removedRules;
-        var panelIndex = -1;
+        string[] additionalRuleIds;
         lock (m_configurationGate)
         {
             if (Configuration.Panels.Count <= 1)
             {
                 return false;
             }
-            panelIndex = Configuration.Panels.FindIndex(
-                candidate => string.Equals(
-                    candidate.Id,
-                    panelId,
+            var panel = Configuration.Panels.FirstOrDefault(candidate =>
+                string.Equals(candidate?.Id, panelId,
                     StringComparison.Ordinal));
-            if (panelIndex < 0)
+            if (panel == null || panel.IsDashboard)
+            {
+                return false;
+            }
+            additionalRuleIds = PanelTopologyPolicy.IsEntityPanel(panel) &&
+                                panel.OwnerEntityId >= 0
+                ? CustomRuleLifecyclePolicy.FindRulesReferencingEntities(
+                        Configuration.Rules,
+                        new[] { panel.OwnerEntityId })
+                    .ToArray()
+                : Array.Empty<string>();
+        }
+        return RemovePanelsAndRulesWithPersistenceLock(
+            new[] { panelId },
+            additionalRuleIds,
+            out _);
+    }
+
+    private bool RemovePanelsAndRulesWithPersistenceLock(
+        IEnumerable<string> panelIds,
+        IEnumerable<string> additionalRuleIds,
+        out int removedRuleCount)
+    {
+        removedRuleCount = 0;
+        var requestedPanelIds = new HashSet<string>(
+            (panelIds ?? Enumerable.Empty<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim()),
+            StringComparer.Ordinal);
+        var requestedRuleIds = new HashSet<string>(
+            (additionalRuleIds ?? Enumerable.Empty<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim()),
+            StringComparer.Ordinal);
+        if (requestedPanelIds.Count == 0 && requestedRuleIds.Count == 0)
+        {
+            return false;
+        }
+
+        List<PanelDefinition> previousPanels;
+        List<AlarmRuleDefinition> previousRules;
+        Dictionary<PanelDefinition, List<PanelSlotDefinition>>
+            previousPanelSlots;
+        Dictionary<PanelDefinition, List<string>> previousExcludedAlarmIds;
+        Dictionary<AlarmRuleDefinition, List<string>> previousRuleLinks;
+        AlarmRuleDefinition[] removedRules;
+        PanelDefinition[] removedPanels;
+        lock (m_configurationGate)
+        {
+            removedPanels = Configuration.Panels
+                .Where(panel =>
+                    panel != null && requestedPanelIds.Contains(panel.Id))
+                .ToArray();
+            if (removedPanels.Any(panel => panel.IsDashboard))
+            {
+                return false;
+            }
+            foreach (var rule in Configuration.Rules.Where(rule =>
+                         rule != null &&
+                         requestedPanelIds.Contains(rule.PanelId)))
+            {
+                requestedRuleIds.Add(rule.Id);
+            }
+            removedRules = Configuration.Rules
+                .Where(rule =>
+                    rule != null && requestedRuleIds.Contains(rule.Id))
+                .ToArray();
+            if (removedPanels.Length == 0 && removedRules.Length == 0)
             {
                 return false;
             }
 
-            panel = Configuration.Panels[panelIndex];
-            if (panel.IsDashboard)
+            previousPanels = Configuration.Panels.ToList();
+            previousRules = Configuration.Rules.ToList();
+            previousPanelSlots = Configuration.Panels.ToDictionary(
+                panel => panel,
+                panel => (panel.Slots ?? new List<PanelSlotDefinition>())
+                    .Select(PanelSlotProjection.CloneSlot)
+                    .ToList());
+            previousExcludedAlarmIds = Configuration.Panels.ToDictionary(
+                panel => panel,
+                panel => (panel.ExcludedAlarmIds ?? new List<string>())
+                    .ToList());
+            previousRuleLinks = Configuration.Rules.ToDictionary(
+                rule => rule,
+                rule => (rule.LinkedPanelIds ?? new List<string>()).ToList());
+
+            Configuration.Panels.RemoveAll(panel =>
+                panel != null && requestedPanelIds.Contains(panel.Id));
+            Configuration.Rules.RemoveAll(rule =>
+                rule != null && requestedRuleIds.Contains(rule.Id));
+
+            foreach (var rule in Configuration.Rules)
             {
-                return false;
+                rule.LinkedPanelIds?.RemoveAll(requestedPanelIds.Contains);
             }
-            removedRules = Configuration.Rules
-                .Where(rule => string.Equals(
-                    rule.PanelId,
-                    panelId,
-                    StringComparison.Ordinal))
-                .ToArray();
-            Configuration.Panels.RemoveAt(panelIndex);
-            Configuration.Rules.RemoveAll(rule => string.Equals(
-                rule.PanelId,
-                panelId,
-                StringComparison.Ordinal));
+            var removedAlarmIds = new HashSet<string>(
+                removedRules.Select(rule => "rule:" + rule.Id),
+                StringComparer.Ordinal);
+            foreach (var panel in Configuration.Panels)
+            {
+                panel.Slots?.RemoveAll(slot =>
+                    slot != null && removedAlarmIds.Contains(slot.AlarmId));
+                panel.ExcludedAlarmIds?.RemoveAll(removedAlarmIds.Contains);
+            }
         }
 
         var removedAlarmStates = new Dictionary<string, AlarmState>(
             StringComparer.Ordinal);
         List<AlarmHistoryDefinition> previousHistory;
+        long previousHistoryRevision;
         lock (m_gate)
         {
             previousHistory = m_alarmHistory
                 .Select(CloneHistory)
                 .ToList();
+            previousHistoryRevision = m_alarmHistoryRevision;
             var historyChanged = false;
             foreach (var rule in removedRules)
             {
@@ -1418,8 +1935,22 @@ public sealed class UnmaRuntime : IDisposable
         {
             lock (m_configurationGate)
             {
-                Configuration.Panels.Insert(panelIndex, panel);
-                Configuration.Rules.AddRange(removedRules);
+                Configuration.Panels.Clear();
+                Configuration.Panels.AddRange(previousPanels);
+                Configuration.Rules.Clear();
+                Configuration.Rules.AddRange(previousRules);
+                foreach (var pair in previousPanelSlots)
+                {
+                    pair.Key.Slots = pair.Value;
+                }
+                foreach (var pair in previousExcludedAlarmIds)
+                {
+                    pair.Key.ExcludedAlarmIds = pair.Value;
+                }
+                foreach (var pair in previousRuleLinks)
+                {
+                    pair.Key.LinkedPanelIds = pair.Value;
+                }
             }
             lock (m_gate)
             {
@@ -1429,10 +1960,19 @@ public sealed class UnmaRuntime : IDisposable
                 }
                 m_alarmHistory.Clear();
                 m_alarmHistory.AddRange(previousHistory);
-                m_alarmHistoryRevision++;
+                m_alarmHistoryRevision = previousHistoryRevision;
+            }
+            CapturePersistentAlarmState(
+                out var restoredMemories,
+                out var restoredHistory);
+            lock (m_configurationGate)
+            {
+                Configuration.AlarmMemories = restoredMemories;
+                Configuration.AlarmHistory = restoredHistory;
             }
             return false;
         }
+        removedRuleCount = removedRules.Length;
         return true;
     }
 
@@ -1443,20 +1983,104 @@ public sealed class UnmaRuntime : IDisposable
             return false;
         }
 
-        lock (m_configurationGate)
+        lock (m_persistenceGate)
         {
-            Configuration.Panels.Add(panel);
+            lock (m_configurationGate)
+            {
+                Configuration.Panels.Add(panel);
+            }
+            if (SaveConfiguration())
+            {
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                Configuration.Panels.Remove(panel);
+            }
+            return false;
         }
-        if (SaveConfiguration())
+    }
+
+    public bool UpdatePanelSettings(
+        string panelId,
+        string name,
+        int columns,
+        bool includeVanilla,
+        bool includeSystem,
+        string notificationFilter)
+    {
+        panelId = panelId?.Trim() ?? "";
+        if (panelId.Length == 0)
         {
-            return true;
+            return false;
         }
 
-        lock (m_configurationGate)
+        lock (m_persistenceGate)
         {
-            Configuration.Panels.Remove(panel);
+            PanelDefinition panel;
+            string previousName;
+            int previousColumns;
+            bool previousIncludeVanilla;
+            bool previousIncludeSystem;
+            string previousFilter;
+            Dictionary<PanelDefinition, List<PanelSlotDefinition>>
+                previousPanelSlots;
+            lock (m_configurationGate)
+            {
+                panel = Configuration.Panels.FirstOrDefault(candidate =>
+                    string.Equals(
+                        candidate?.Id,
+                        panelId,
+                        StringComparison.Ordinal));
+                if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+                {
+                    return false;
+                }
+
+                previousName = panel.Name;
+                previousColumns = panel.Columns;
+                previousIncludeVanilla = panel.IncludeVanilla;
+                previousIncludeSystem = panel.IncludeSystem;
+                previousFilter = panel.NotificationFilter;
+                previousPanelSlots = Configuration.Panels.ToDictionary(
+                    candidate => candidate,
+                    candidate => (candidate.Slots ??
+                            new List<PanelSlotDefinition>())
+                        .Select(PanelSlotProjection.CloneSlot)
+                        .ToList());
+
+                panel.Name = string.IsNullOrWhiteSpace(name)
+                    ? "MELDETAFEL"
+                    : name.Trim();
+                panel.Columns = Math.Max(1, Math.Min(8, columns));
+                if (!panel.IsDashboard)
+                {
+                    panel.IncludeVanilla = includeVanilla;
+                    panel.IncludeSystem = includeSystem;
+                    panel.NotificationFilter = notificationFilter ?? "";
+                }
+            }
+
+            if (SaveConfiguration())
+            {
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                panel.Name = previousName;
+                panel.Columns = previousColumns;
+                panel.IncludeVanilla = previousIncludeVanilla;
+                panel.IncludeSystem = previousIncludeSystem;
+                panel.NotificationFilter = previousFilter;
+                foreach (var slotSnapshot in previousPanelSlots)
+                {
+                    slotSnapshot.Key.Slots = slotSnapshot.Value;
+                }
+            }
+            return false;
         }
-        return false;
     }
 
     public IReadOnlyList<PanelSlotDefinition> GetPanelSlotCandidates()
@@ -2130,21 +2754,34 @@ public sealed class UnmaRuntime : IDisposable
         }
 
         string[] ruleIds;
+        string[] entityPanelIds;
         lock (m_persistenceGate)
         {
             lock (m_configurationGate)
             {
+                entityPanelIds = Configuration.Panels
+                    .Where(panel =>
+                        panel != null &&
+                        PanelTopologyPolicy.IsEntityPanel(panel) &&
+                        removedEntityIds.Contains(panel.OwnerEntityId))
+                    .Select(panel => panel.Id)
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
                 ruleIds = CustomRuleLifecyclePolicy
                     .FindRulesReferencingEntities(
                         Configuration.Rules,
                         removedEntityIds)
                     .ToArray();
             }
-            if (ruleIds.Length == 0)
+            if (ruleIds.Length == 0 && entityPanelIds.Length == 0)
             {
                 return true;
             }
-            if (!RemoveRulesWithPersistenceLock(ruleIds, out removedCount))
+            if (!RemovePanelsAndRulesWithPersistenceLock(
+                    entityPanelIds,
+                    ruleIds,
+                    out removedCount))
             {
                 return false;
             }
@@ -2155,7 +2792,7 @@ public sealed class UnmaRuntime : IDisposable
             " Meldung(en) entfernter Entitäten automatisch gelöscht.");
         foreach (var entityId in removedEntityIds)
         {
-            m_missingStaticEntityObservations.Remove(entityId);
+            m_missingStaticEntityTracker.Forget(entityId);
         }
         return true;
     }
@@ -2170,35 +2807,34 @@ public sealed class UnmaRuntime : IDisposable
             .Where(condition =>
                 condition != null && IsStaticEntityType(condition.EntityType))
             .Select(condition => condition.EntityId));
-        foreach (var staleId in m_missingStaticEntityObservations.Keys
-                     .Where(id => !staticEntityIds.Contains(id))
-                     .ToArray())
+        lock (m_configurationGate)
         {
-            m_missingStaticEntityObservations.Remove(staleId);
+            foreach (var panel in Configuration.Panels.Where(panel =>
+                         PanelTopologyPolicy.IsEntityPanel(panel) &&
+                         IsStaticEntityType(panel.OwnerEntityType)))
+            {
+                staticEntityIds.Add(panel.OwnerEntityId);
+            }
         }
+        m_missingStaticEntityTracker.RetainOnly(staticEntityIds);
 
         var confirmed = new List<int>();
+        var currentTimestamp = Stopwatch.GetTimestamp();
         foreach (var entityId in staticEntityIds)
         {
             var entity = m_entitiesManager.GetEntity(new EntityId(entityId));
             if (!entity.IsNone && !entity.Value.IsDestroyed)
             {
-                m_missingStaticEntityObservations.Remove(entityId);
+                m_missingStaticEntityTracker.ObserveLive(entityId);
                 continue;
             }
-            if (!entity.IsNone)
-            {
-                confirmed.Add(entityId);
-                continue;
-            }
-
-            m_missingStaticEntityObservations.TryGetValue(
-                entityId,
-                out var observations);
-            observations++;
-            m_missingStaticEntityObservations[entityId] = observations;
-            if (CustomRuleLifecyclePolicy.IsConfirmedMissingStaticEntity(
-                    observations))
+            // EntityRemoved is the immediate, authoritative path. Polling can
+            // be transient during load or replacement and therefore always
+            // has to survive the full grace period before deleting data.
+            if (m_missingStaticEntityTracker.ObserveMissing(
+                    entityId,
+                    currentTimestamp,
+                    Stopwatch.Frequency))
             {
                 confirmed.Add(entityId);
             }
@@ -4360,6 +4996,7 @@ public sealed class UnmaRuntime : IDisposable
         var changed = false;
         lock (m_configurationGate)
         {
+            changed |= SanitizeEntityPanelSlotsLocked();
             foreach (var panel in Configuration.Panels)
             {
                 if (panel.IsDashboard)
@@ -4531,12 +5168,44 @@ public sealed class UnmaRuntime : IDisposable
         return changed;
     }
 
-    private static bool IsVisibleOnPanel(
+    private bool IsVisibleOnPanel(
         AlarmView view,
         PanelDefinition panel,
         IReadOnlyList<string> filters)
     {
-        if (view.Source == "custom" || view.Source == "external")
+        if (view == null || panel == null)
+        {
+            return false;
+        }
+        if (PanelTopologyPolicy.IsEntityPanel(panel) &&
+            !string.Equals(view.Source, "custom", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        if (string.Equals(view.Source, "custom", StringComparison.Ordinal))
+        {
+            var stableAlarmId = PanelSlotProjection.StableAlarmId(view);
+            if (PanelTopologyPolicy.TryGetRuleId(
+                    stableAlarmId,
+                    out var ruleId))
+            {
+                var rule = Configuration.Rules.FirstOrDefault(candidate =>
+                    string.Equals(candidate?.Id, ruleId,
+                        StringComparison.Ordinal));
+                if (rule != null)
+                {
+                    return PanelTopologyPolicy.IsRuleAssignedToPanel(
+                        rule,
+                        panel,
+                        Configuration.Panels);
+                }
+            }
+            return string.Equals(
+                view.PanelId,
+                panel.Id,
+                StringComparison.Ordinal);
+        }
+        if (string.Equals(view.Source, "external", StringComparison.Ordinal))
         {
             return string.Equals(
                 view.PanelId,
@@ -4560,6 +5229,57 @@ public sealed class UnmaRuntime : IDisposable
         return filters.Any(filter => haystack.IndexOf(
             filter,
             StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
+    private bool SanitizeEntityPanelSlotsLocked()
+    {
+        var changed = false;
+        foreach (var panel in Configuration.Panels.Where(
+                     PanelTopologyPolicy.IsEntityPanel))
+        {
+            if (panel.IncludeVanilla)
+            {
+                panel.IncludeVanilla = false;
+                changed = true;
+            }
+            if (panel.IncludeSystem)
+            {
+                panel.IncludeSystem = false;
+                changed = true;
+            }
+            if (panel.Slots == null)
+            {
+                panel.Slots = new List<PanelSlotDefinition>();
+                changed = true;
+                continue;
+            }
+            changed |= panel.Slots.RemoveAll(slot =>
+                !IsPersistedSlotAllowedOnPanelLocked(panel, slot)) > 0;
+        }
+        return changed;
+    }
+
+    private bool IsPersistedSlotAllowedOnPanelLocked(
+        PanelDefinition panel,
+        PanelSlotDefinition slot)
+    {
+        if (!PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return true;
+        }
+        if (slot == null ||
+            !string.Equals(slot.Source, "custom", StringComparison.Ordinal) ||
+            !PanelTopologyPolicy.TryGetRuleId(slot.AlarmId, out var ruleId))
+        {
+            return false;
+        }
+        var rule = Configuration.Rules.FirstOrDefault(candidate =>
+            string.Equals(candidate?.Id, ruleId, StringComparison.Ordinal));
+        return rule != null &&
+               PanelTopologyPolicy.IsRuleAssignedToPanel(
+                   rule,
+                   panel,
+                   Configuration.Panels);
     }
 
     private static AlarmView Clone(AlarmView source, long sequence = 0)
@@ -4594,6 +5314,8 @@ public sealed class UnmaRuntime : IDisposable
         {
             Id = source.Id,
             PanelId = source.PanelId,
+            LinkedPanelIds = (source.LinkedPanelIds ?? new List<string>())
+                .ToList(),
             Name = source.Name,
             Severity = source.Severity,
             Logic = source.Logic,

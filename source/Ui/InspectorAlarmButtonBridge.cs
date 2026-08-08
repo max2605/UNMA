@@ -177,7 +177,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
                     BellIconPath,
                     () => m_onButtonClicked(capturedInspector))
                 .Tooltip(new LocStrFormatted(
-                    "UNMA: Objekt hinzufügen und Meldeschlitz auswählen"));
+                    "UNMA: Gebäudetafel öffnen"));
             var headerPanelField = inspector.GetType().GetField(
                 "HeaderPanel",
                 BindingFlags.Instance | BindingFlags.Public);

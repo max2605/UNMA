@@ -12,6 +12,8 @@
              Link="Domain\AlarmModels.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
              Link="Domain\PanelSlotProjection.cs" />
+    <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
+             Link="Domain\PanelTopologyPolicy.cs" />
     <Compile Include="..\..\source\Domain\CustomRuleLifecyclePolicy.cs"
              Link="Domain\CustomRuleLifecyclePolicy.cs" />
     <Compile Include="..\..\source\Domain\SustainedVanillaAlarmPolicy.cs"

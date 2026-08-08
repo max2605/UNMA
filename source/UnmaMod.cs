@@ -12,7 +12,9 @@ using Mafi.Core.Population;
 using Mafi.Core.Prototypes;
 using Mafi.Core.Simulation;
 using Mafi.Logging;
+using Mafi.Unity;
 using Mafi.Unity.Audio;
+using Mafi.Unity.Camera;
 using Mafi.Unity.Ui;
 using UnityEngine;
 using UNMA.Localization;
@@ -81,6 +83,8 @@ public sealed class UnmaMod : IMod
         m_overlay = UnmaOverlayController.Create(
             m_runtime,
             resolver.Resolve<InspectorsManager>(),
+            resolver.Resolve<CameraController>(),
+            resolver.Resolve<IUnityInputMgr>(),
             resolver.Resolve<AudioDb>(),
             Manifest.RootDirectoryPath);
         JsonConfig.OnValueChanged += OnConfigValueChanged;

@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using Mafi.Core.Entities;
 using Mafi;
 using Mafi.Unity;
 using Mafi.Unity.Audio;
+using Mafi.Unity.Camera;
 using Mafi.Unity.Ui;
 using UnityEngine;
 using UNMA.Audio;
@@ -36,12 +38,25 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private const int MainWindowId = 0x554E4D41;
     private const int EntityAlarmWindowId = 0x4D4E5541;
     private const int MainResizeControlHint = 0x554E5253;
+    private const int EditorResizeControlHint = 0x554E4552;
+    private const int TabBoard = 0;
+    private const int TabHistory = 1;
+    private const int TabSystem = 2;
+    private const int TabSounds = 3;
+    private const int TabOptions = 4;
     private const float MainResizeHandleSize = 30f;
     private const float MainResizeHandleInset = 4f;
     private const float MainWindowContentBottomInset =
         MainResizeHandleSize + MainResizeHandleInset + 4f;
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
+
+    private enum EditorWindowMode
+    {
+        Rule,
+        PanelCreation,
+        PanelSettings,
+    }
 
     private static readonly FieldInfo s_menuDepthField =
         typeof(GlobalGfxSettings).GetField(
@@ -60,15 +75,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private readonly List<string> m_draftConditionThresholdTexts = new();
     private readonly Dictionary<string, PanelViewCacheEntry> m_panelViewCache =
         new(StringComparer.Ordinal);
+    private readonly List<Rect> m_inputShieldRects = new();
 
     private UnmaRuntime m_runtime;
     private InspectorsManager m_inspectorsManager;
+    private CameraController m_cameraController;
+    private UnmaInputBlocker m_inputBlocker;
+    private UnmaPointerRaycastShield m_pointerRaycastShield;
     private UnmaAudioController m_audio;
     private InspectorAlarmButtonBridge m_inspectorAlarmButtons;
     private Rect m_windowRect;
+    private Rect m_lastPersistedWindowRect;
     private Rect m_launcherRect;
     private Rect m_entityAlarmWindowRect = new(180f, 110f, 1080f, 720f);
+    private Rect m_lastPersistedEditorWindowRect;
     private Vector2 m_boardScroll;
+    private Vector2 m_panelTabsScroll;
     private Vector2 m_historyScroll;
     private Vector2 m_editorScroll;
     private Vector2 m_entityAlarmScroll;
@@ -81,6 +103,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private float m_nextPanelSlotCandidateRefresh;
     private bool m_isOpen;
     private bool m_entityAlarmWindowOpen;
+    private EditorWindowMode m_editorWindowMode;
+    private string m_panelSettingsPanelId = "";
+    private string m_panelSettingsName = "";
+    private int m_panelSettingsColumns = 3;
+    private bool m_panelSettingsIncludeVanilla;
+    private bool m_panelSettingsIncludeSystem;
+    private string m_panelSettingsFilter = "";
+    private string m_activeEntityPanelId = "";
+    private int m_openEntityPanelAfterInspectionId = -1;
     private bool m_openEntityAlarmAfterInspection;
     private int m_pendingInspectionEntityId = -1;
     private bool m_entityAssignmentPending;
@@ -102,6 +133,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_resizeStartSize;
     private Vector2 m_launcherDragOffset;
     private Vector2? m_pendingMainWindowSize;
+    private bool m_isEditorResizing;
+    private int m_editorResizeControlId;
+    private Vector2 m_editorResizeStartMouse;
+    private Vector2 m_editorResizeStartSize;
+    private Vector2? m_pendingEditorWindowSize;
+    private readonly HashSet<string> m_draftLinkedPanelIds =
+        new(StringComparer.Ordinal);
 
     private EntityInspectionSnapshot m_selectedEntity;
     private IReadOnlyList<MetricDescriptor> m_selectedMetrics =
@@ -170,6 +208,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     public static UnmaOverlayController Create(
         UnmaRuntime runtime,
         InspectorsManager inspectorsManager,
+        CameraController cameraController,
+        IUnityInputMgr inputManager,
         AudioDb audioDb,
         string modRoot)
     {
@@ -179,18 +219,30 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var overlay = gameObject.AddComponent<UnmaOverlayController>();
         var audio = gameObject.AddComponent<UnmaAudioController>();
         audio.Configure(modRoot, audioDb);
-        overlay.Configure(runtime, inspectorsManager, audio);
+        overlay.Configure(
+            runtime,
+            inspectorsManager,
+            cameraController,
+            inputManager,
+            audio);
         return overlay;
     }
 
     public void Configure(
         UnmaRuntime runtime,
         InspectorsManager inspectorsManager,
+        CameraController cameraController,
+        IUnityInputMgr inputManager,
         UnmaAudioController audio)
     {
         m_runtime = runtime;
         m_inspectorsManager = inspectorsManager;
+        m_cameraController = cameraController;
         m_audio = audio;
+        m_inputBlocker = new UnmaInputBlocker(
+            inputManager,
+            IsPointerOverAnyUnmaSurface);
+        m_pointerRaycastShield = new UnmaPointerRaycastShield(transform);
         m_inspectorAlarmButtons = new InspectorAlarmButtonBridge(
             inspectorsManager,
             BeginEntityAlarmFromInspector);
@@ -202,6 +254,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             config.WindowY,
             Mathf.Max(700f, config.WindowWidth),
             Mathf.Max(520f, config.WindowHeight));
+        m_entityAlarmWindowRect = new Rect(
+            config.EditorWindowX,
+            config.EditorWindowY,
+            Mathf.Max(700f, config.EditorWindowWidth),
+            Mathf.Max(520f, config.EditorWindowHeight));
+        m_lastPersistedWindowRect = m_windowRect;
+        m_lastPersistedEditorWindowRect = m_entityAlarmWindowRect;
         m_launcherRect = new Rect(
             config.LauncherX < 0f
                 ? 8f
@@ -226,6 +285,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 m_runtime.SetGameplayActive(false);
                 m_audio.StopAlarm();
+                UpdatePointerRaycastShield(false);
                 return;
             }
             m_gameplayWasActive = true;
@@ -234,10 +294,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         m_isUiSuppressedByMenu = !IsGameplayActive();
+        var pointerOverUnma = !m_isUiSuppressedByMenu &&
+                              IsPointerOverAnyUnmaSurface();
+        m_inputBlocker?.SetBlockingEnabled(!m_isUiSuppressedByMenu);
+        m_inputBlocker?.SetPointerState(pointerOverUnma);
+        UpdatePointerRaycastShield(!m_isUiSuppressedByMenu);
+        if (pointerOverUnma && m_cameraController != null)
+        {
+            m_cameraController.DisableZoomNextFrame = true;
+        }
 
         if (!m_isUiSuppressedByMenu)
         {
             m_inspectorAlarmButtons?.Update();
+            m_inputBlocker?.EnsureActive();
         }
 
         if (m_runtime.TryTakeCompletedInspection(out var inspection))
@@ -258,8 +328,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "überwachte Entity nicht mehr existiert.");
         }
 
-        var alarmEditorVisible = m_entityAlarmWindowOpen ||
-                                 m_isOpen && m_tab == 2;
+        var alarmEditorVisible = m_entityAlarmWindowOpen &&
+                                 m_editorWindowMode == EditorWindowMode.Rule;
         if (alarmEditorVisible &&
             !m_entityAssignmentPending &&
             m_selectedEntity != null &&
@@ -297,10 +367,31 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (!m_gameplayWasActive || m_isUiSuppressedByMenu)
         {
             CancelResizeCapture();
+            CancelEditorResizeCapture();
+            m_inputBlocker?.SetKeyboardCaptured(false);
             return;
         }
 
         EnsureStyles();
+        var previousMatrix = GUI.matrix;
+        try
+        {
+            GUI.matrix = Matrix4x4.Scale(new Vector3(
+                UiScale,
+                UiScale,
+                1f)) * previousMatrix;
+            DrawGuiSurfaces();
+            UpdateKeyboardInputCapture();
+            ConsumePointerEventOverUi();
+        }
+        finally
+        {
+            GUI.matrix = previousMatrix;
+        }
+    }
+
+    private void DrawGuiSurfaces()
+    {
         DrawLauncher();
 
         if (m_isOpen)
@@ -322,6 +413,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_pendingMainWindowSize = null;
             }
             m_windowRect = ClampToScreen(nextWindowRect);
+            if (UnityEngine.Event.current.rawType == EventType.MouseUp)
+            {
+                PersistWindowRect();
+            }
         }
         else
         {
@@ -330,12 +425,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         if (m_entityAlarmWindowOpen)
         {
-            m_entityAlarmWindowRect = ClampToScreen(GUI.Window(
+            var nextEditorRect = GUI.Window(
                 EntityAlarmWindowId,
                 ClampToScreen(m_entityAlarmWindowRect),
                 DrawEntityAlarmWindow,
                 GUIContent.none,
-                m_windowStyle));
+                m_windowStyle);
+            if (m_pendingEditorWindowSize.HasValue)
+            {
+                nextEditorRect.width = m_pendingEditorWindowSize.Value.x;
+                nextEditorRect.height = m_pendingEditorWindowSize.Value.y;
+                m_pendingEditorWindowSize = null;
+            }
+            m_entityAlarmWindowRect = ClampToScreen(nextEditorRect);
+            if (UnityEngine.Event.current.rawType == EventType.MouseUp)
+            {
+                PersistEditorWindowRect();
+            }
+        }
+        else
+        {
+            CancelEditorResizeCapture();
         }
 
         for (var index = m_detachedPanels.Count - 1; index >= 0; index--)
@@ -362,6 +472,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             captured.Rect = ClampToScreen(nextDetachedRect);
         }
+
+        // Keep the EventSystem representation in sync with window moves and
+        // resizes performed during this IMGUI pass. It will be available to
+        // the camera's early input pass on the following frame.
+        UpdatePointerRaycastShield(true);
     }
 
     private void DrawLauncher()
@@ -374,11 +489,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_launcherRect.x = Mathf.Clamp(
             m_launcherRect.x,
             4f,
-            Math.Max(4f, Screen.width - m_launcherRect.width - 4f));
+            Math.Max(4f, LogicalScreenWidth - m_launcherRect.width - 4f));
         m_launcherRect.y = Mathf.Clamp(
             m_launcherRect.y,
             72f,
-            Math.Max(72f, Screen.height - m_launcherRect.height - 4f));
+            Math.Max(72f, LogicalScreenHeight - m_launcherRect.height - 4f));
         DrawPanelRect(m_launcherRect, new Color(0.08f, 0.09f, 0.09f, 0.96f));
 
         var buttonRect = new Rect(
@@ -437,7 +552,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         HandleResizeInput();
         DrawWindowHeader(UnmaText.Get(
             "window.title",
-            "UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE"));
+            "UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE"),
+            m_windowRect.width);
 
         GUILayout.BeginArea(new Rect(
             12f,
@@ -446,35 +562,32 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_windowRect.height - 42f - MainWindowContentBottomInset));
 
         GUILayout.BeginHorizontal();
-        DrawTabButton(0, UnmaText.Get("tab.board", "MELDETAFEL"));
-        DrawTabButton(1, UnmaText.Get("tab.history", "VERLAUF"));
-        DrawTabButton(2, UnmaText.Get("tab.editor", "EDITOR"));
-        DrawTabButton(3, UnmaText.Get("tab.system", "SYSTEM"));
-        DrawTabButton(4, UnmaText.Get("tab.sounds", "TÖNE"));
-        DrawTabButton(5, UnmaText.Get("tab.options", "OPTIONEN"));
+        DrawTabButton(TabBoard, UnmaText.Get("tab.board", "MELDETAFEL"));
+        DrawTabButton(TabHistory, UnmaText.Get("tab.history", "VERLAUF"));
+        DrawTabButton(TabSystem, UnmaText.Get("tab.system", "SYSTEM"));
+        DrawTabButton(TabSounds, UnmaText.Get("tab.sounds", "TÖNE"));
+        DrawTabButton(TabOptions, UnmaText.Get("tab.options", "OPTIONEN"));
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
         {
             m_isOpen = false;
+            GUI.FocusControl(null);
         }
         GUILayout.EndHorizontal();
 
         GUILayout.Space(8f);
         switch (m_tab)
         {
-            case 1:
+            case TabHistory:
                 DrawHistory();
                 break;
-            case 2:
-                DrawEditor();
-                break;
-            case 3:
+            case TabSystem:
                 DrawSystemAlarms();
                 break;
-            case 4:
+            case TabSounds:
                 DrawSoundOverrides();
                 break;
-            case 5:
+            case TabOptions:
                 DrawOptions();
                 break;
             default:
@@ -485,7 +598,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndArea();
         DrawResizeHandle();
         GUI.DragWindow(new Rect(0f, 0f, m_windowRect.width - 44f, 38f));
-        PersistWindowRectOnMouseUp();
     }
 
     private void DrawBoard()
@@ -498,20 +610,69 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.BeginHorizontal();
-        for (var index = 0;
-             index < m_runtime.Configuration.Panels.Count;
-             index++)
+        if (PanelTopologyPolicy.IsEntityPanel(panel))
         {
-            var candidate = m_runtime.Configuration.Panels[index];
             if (GUILayout.Button(
-                    candidate.Name,
-                    index == m_currentPanelIndex
-                        ? m_primaryButtonStyle
-                        : m_buttonStyle,
+                    "← GLOBALE PANEL",
+                    m_buttonStyle,
+                    GUILayout.Width(170f),
                     GUILayout.Height(30f)))
             {
-                m_currentPanelIndex = index;
+                m_activeEntityPanelId = "";
                 m_boardScroll = Vector2.zero;
+            }
+            GUILayout.Label(
+                "GEBÄUDETAFEL · " + panel.Name,
+                m_primaryButtonStyle,
+                GUILayout.Height(30f));
+        }
+        else
+        {
+            var globalPanels = GlobalPanels;
+            m_panelTabsScroll = GUILayout.BeginScrollView(
+                m_panelTabsScroll,
+                false,
+                false,
+                GUILayout.Height(52f),
+                GUILayout.ExpandWidth(true));
+            GUILayout.BeginHorizontal();
+            for (var index = 0; index < globalPanels.Count; index++)
+            {
+                var candidate = globalPanels[index];
+                var tabWidth = Mathf.Clamp(
+                    m_buttonStyle.CalcSize(
+                        new GUIContent(candidate.Name)).x + 24f,
+                    110f,
+                    230f);
+                if (GUILayout.Button(
+                        candidate.Name,
+                        index == m_currentPanelIndex
+                            ? m_primaryButtonStyle
+                            : m_buttonStyle,
+                        GUILayout.Width(tabWidth),
+                        GUILayout.Height(30f)))
+                {
+                    m_currentPanelIndex = index;
+                    m_boardScroll = Vector2.zero;
+                }
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.EndScrollView();
+            if (GUILayout.Button(
+                    "+ PANEL",
+                    m_buttonStyle,
+                    GUILayout.Width(88f),
+                    GUILayout.Height(30f)))
+            {
+                OpenPanelCreationEditor();
+            }
+            if (GUILayout.Button(
+                    "⚙",
+                    m_buttonStyle,
+                    GUILayout.Width(42f),
+                    GUILayout.Height(30f)))
+            {
+                OpenPanelSettingsEditor(panel);
             }
         }
         GUILayout.EndHorizontal();
@@ -549,6 +710,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Height(34f)))
         {
             DetachPanel(panel.Id);
+        }
+        if (!panel.IsDashboard && GUILayout.Button(
+                "+ NEUE MELDUNG",
+                m_primaryButtonStyle,
+                GUILayout.Width(175f),
+                GUILayout.Height(34f)))
+        {
+            OpenNewRuleEditor(panel);
         }
         GUILayout.EndHorizontal();
 
@@ -1297,11 +1466,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawEntityAlarmWindow(int _)
     {
-        var title = m_selectedEntity == null
-            ? "UNMA · OBJEKT-ALARM WIRD GELADEN"
-            : "UNMA · ALARM FÜR " + m_selectedEntity.Title.ToUpperInvariant() +
-              " · OBJEKT #" + m_selectedEntity.EntityId;
-        DrawWindowHeader(title);
+        HandleEditorResizeInput();
+        var targetPanel = GetDraftTargetPanel();
+        var title = m_editorWindowMode switch
+        {
+            EditorWindowMode.PanelCreation =>
+                "UNMA · NEUES GLOBALES PANEL",
+            EditorWindowMode.PanelSettings =>
+                "UNMA · PANEL-EINSTELLUNGEN",
+            _ => "UNMA · MELDUNGS-EDITOR" +
+                 (targetPanel == null ? "" : " · " + targetPanel.Name),
+        };
+        DrawWindowHeader(title, m_entityAlarmWindowRect.width);
 
         if (GUI.Button(
                 new Rect(m_entityAlarmWindowRect.width - 52f, 8f, 40f, 28f),
@@ -1310,24 +1486,211 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_entityAlarmWindowOpen = false;
             m_openEntityAlarmAfterInspection = false;
+            CancelEditorResizeCapture();
+            GUI.FocusControl(null);
         }
 
         GUILayout.BeginArea(new Rect(
             12f,
             42f,
             m_entityAlarmWindowRect.width - 24f,
-            m_entityAlarmWindowRect.height - 56f));
+            m_entityAlarmWindowRect.height - 42f -
+            MainWindowContentBottomInset));
         DrawStatusMessage();
         m_entityAlarmScroll = GUILayout.BeginScrollView(m_entityAlarmScroll);
-        DrawAlarmRuleEditor(true);
+        if (m_editorWindowMode == EditorWindowMode.PanelCreation)
+        {
+            DrawNewPanelWindowContent();
+        }
+        else if (m_editorWindowMode == EditorWindowMode.PanelSettings)
+        {
+            DrawPanelSettingsWindowContent();
+        }
+        else
+        {
+            DrawAlarmRuleEditor(true);
+        }
         GUILayout.EndScrollView();
         GUILayout.EndArea();
 
+        DrawEditorResizeHandle();
         GUI.DragWindow(new Rect(
             0f,
             0f,
             m_entityAlarmWindowRect.width - 58f,
             38f));
+    }
+
+    private void DrawNewPanelWindowContent()
+    {
+        GUILayout.Label("NEUES PANEL ANLEGEN", m_sectionStyle);
+        GUILayout.Label(
+            "Globale Panels sind dauerhafte Meldetafeln. " +
+            "Gebäudetafeln werden über die UNMA-Glocke im Inspector geöffnet.",
+            m_smallLabelStyle);
+        GUILayout.Space(8f);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Name", m_labelStyle, GUILayout.Width(120f));
+        m_newPanelName = GUILayout.TextField(
+            m_newPanelName,
+            40,
+            m_textFieldStyle,
+            GUILayout.Width(360f));
+        if (GUILayout.Button(
+                "PANEL ANLEGEN",
+                m_primaryButtonStyle,
+                GUILayout.Width(180f),
+                GUILayout.Height(32f)))
+        {
+            if (AddPanel())
+            {
+                m_entityAlarmWindowOpen = false;
+            }
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawPanelSettingsWindowContent()
+    {
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.Id,
+                m_panelSettingsPanelId,
+                StringComparison.Ordinal));
+        if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            GUILayout.Label(
+                "Das globale Panel existiert nicht mehr.",
+                m_labelStyle);
+            return;
+        }
+
+        GUILayout.Label("PANEL BEARBEITEN", m_sectionStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Name", m_labelStyle, GUILayout.Width(90f));
+        m_panelSettingsName = GUILayout.TextField(
+            m_panelSettingsName,
+            40,
+            m_textFieldStyle,
+            GUILayout.Width(300f));
+        GUILayout.Label(
+            "Spalten " + m_panelSettingsColumns,
+            m_labelStyle,
+            GUILayout.Width(90f));
+        if (GUILayout.Button("−", m_buttonStyle, GUILayout.Width(36f)))
+        {
+            m_panelSettingsColumns = Math.Max(
+                1,
+                m_panelSettingsColumns - 1);
+        }
+        if (GUILayout.Button("+", m_buttonStyle, GUILayout.Width(36f)))
+        {
+            m_panelSettingsColumns = Math.Min(
+                8,
+                m_panelSettingsColumns + 1);
+        }
+        if (GUILayout.Button(
+                "SPEICHERN",
+                m_primaryButtonStyle,
+                GUILayout.Width(150f)))
+        {
+            SavePanelSettings(panel);
+        }
+        GUILayout.EndHorizontal();
+
+        if (panel.IsDashboard)
+        {
+            GUILayout.Label(
+                "Das Dashboard zeigt automatisch nur aktive Ereignisse " +
+                "und kann nicht gelöscht werden.",
+                m_smallLabelStyle);
+            return;
+        }
+
+        GUILayout.BeginHorizontal();
+        m_panelSettingsIncludeVanilla = GUILayout.Toggle(
+            m_panelSettingsIncludeVanilla,
+            "Vanilla automatisch",
+            GUILayout.Width(170f));
+        m_panelSettingsIncludeSystem = GUILayout.Toggle(
+            m_panelSettingsIncludeSystem,
+            "System automatisch",
+            GUILayout.Width(170f));
+        GUILayout.Label("Auto-Filter", m_labelStyle, GUILayout.Width(90f));
+        m_panelSettingsFilter = GUILayout.TextField(
+            m_panelSettingsFilter,
+            240,
+            m_textFieldStyle);
+        GUILayout.EndHorizontal();
+
+        GUILayout.Label(
+            "Schlitz-Aktionen werden jeweils sofort gespeichert.",
+            m_smallLabelStyle);
+        DrawPanelSlots(panel);
+
+        GUILayout.Space(12f);
+        var confirmingDelete = string.Equals(
+                                   m_pendingPanelDeleteId,
+                                   panel.Id,
+                                   StringComparison.Ordinal) &&
+                               Time.realtimeSinceStartup <=
+                               m_pendingPanelDeleteUntil;
+        if (GUILayout.Button(
+                confirmingDelete
+                    ? "NOCHMAL: PANEL LÖSCHEN"
+                    : "PANEL LÖSCHEN",
+                confirmingDelete ? m_dangerButtonStyle : m_buttonStyle,
+                GUILayout.Width(220f)))
+        {
+            if (!confirmingDelete)
+            {
+                m_pendingPanelDeleteId = panel.Id;
+                m_pendingPanelDeleteUntil =
+                    Time.realtimeSinceStartup + 6f;
+                SetStatus(
+                    "Panel-Löschung innerhalb von 6 Sekunden bestätigen.");
+            }
+            else if (m_runtime.RemovePanel(panel.Id))
+            {
+                m_detachedPanels.RemoveAll(item => item.PanelId == panel.Id);
+                m_entityAlarmWindowOpen = false;
+                m_pendingPanelDeleteId = "";
+                m_currentPanelIndex = Math.Max(
+                    0,
+                    Math.Min(m_currentPanelIndex, GlobalPanels.Count - 1));
+                SetStatus("Globales Panel gelöscht.");
+            }
+            else
+            {
+                SetStatus(
+                    "Panel konnte nicht gelöscht werden: " +
+                    m_runtime.LastPersistenceError);
+            }
+        }
+    }
+
+    private void SavePanelSettings(PanelDefinition panel)
+    {
+        if (m_runtime.UpdatePanelSettings(
+                panel.Id,
+                m_panelSettingsName,
+                m_panelSettingsColumns,
+                m_panelSettingsIncludeVanilla,
+                m_panelSettingsIncludeSystem,
+                m_panelSettingsFilter))
+        {
+            m_panelSettingsName = panel.Name;
+            m_panelSettingsColumns = panel.Columns;
+            m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
+            m_panelSettingsIncludeSystem = panel.IncludeSystem;
+            m_panelSettingsFilter = panel.NotificationFilter ?? "";
+            SetStatus("Panel gespeichert.");
+            return;
+        }
+
+        SetStatus(
+            "Panel konnte nicht gespeichert werden: " +
+            m_runtime.LastPersistenceError);
     }
 
     private void DrawAlarmRuleEditor(bool inEntityWindow)
@@ -1349,74 +1712,81 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawTargetPanelSelector(bool allowCreate)
     {
-        var panels = m_runtime.Configuration.Panels
-            .Where(panel => !panel.IsDashboard)
-            .ToList();
         GUILayout.Label("ZIEL-MELDETAFEL", m_sectionStyle);
-        if (panels.Count == 0)
+        var panel = GetDraftTargetPanel();
+        if (panel == null)
         {
             GUILayout.Label(
-                "Kein Fachpanel vorhanden. Für feste Meldeschlitze jetzt " +
-                "eine dauerhafte Meldetafel anlegen.",
+                "Kein gültiges Zielpanel gewählt. Editor schließen und " +
+                "die Meldung über + NEUE MELDUNG im gewünschten Panel anlegen.",
                 m_labelStyle);
-            if (allowCreate)
-            {
-                DrawCreateTargetPanelRow(false);
-            }
             return;
         }
 
-        var targetIndex = panels.FindIndex(panel => string.Equals(
-            panel.Id,
-            m_draftTargetPanelId,
-            StringComparison.Ordinal));
-        if (targetIndex < 0)
-        {
-            targetIndex = CurrentPanel == null
-                ? -1
-                : panels.FindIndex(panel => string.Equals(
-                    panel.Id,
-                    CurrentPanel.Id,
-                    StringComparison.Ordinal));
-            targetIndex = Math.Max(0, targetIndex);
-            m_draftTargetPanelId = panels[targetIndex].Id;
-            m_draftPreferredSlotIndex = -1;
-        }
-
-        var slotPositionLocked = m_draftPreferredSlotIndex >= 0;
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "Hier erscheint die Meldung:",
+            PanelTopologyPolicy.IsEntityPanel(panel)
+                ? "GEBÄUDETAFEL"
+                : "GLOBALES PANEL",
             m_labelStyle,
-            GUILayout.Width(205f));
-        var guiWasEnabled = GUI.enabled;
-        GUI.enabled = guiWasEnabled && !slotPositionLocked;
-        if (GUILayout.Button("<", m_buttonStyle, GUILayout.Width(38f)))
-        {
-            targetIndex = Wrap(targetIndex - 1, panels.Count);
-            m_draftTargetPanelId = panels[targetIndex].Id;
-        }
+            GUILayout.Width(160f));
         GUILayout.Label(
-            panels[targetIndex].Name,
+            panel.Name,
             m_headerStyle,
-            GUILayout.Width(310f),
             GUILayout.Height(30f));
-        if (GUILayout.Button(">", m_buttonStyle, GUILayout.Width(38f)))
-        {
-            targetIndex = Wrap(targetIndex + 1, panels.Count);
-            m_draftTargetPanelId = panels[targetIndex].Id;
-        }
-        GUI.enabled = guiWasEnabled;
-        GUILayout.Label(
-            slotPositionLocked
-                ? "Fester Schlitz auf dieser Tafel gewählt."
-                : "Ziel mit < / > wechseln.",
-            m_smallLabelStyle);
         GUILayout.EndHorizontal();
 
-        if (allowCreate)
+        if (PanelTopologyPolicy.IsEntityPanel(panel))
         {
-            DrawCreateTargetPanelRow(slotPositionLocked);
+            DrawGlobalPanelLinks();
+        }
+    }
+
+    private void DrawGlobalPanelLinks()
+    {
+        GUILayout.Space(6f);
+        GUILayout.Label(
+            "ZU GLOBALEM PANEL HINZUFÜGEN",
+            m_sectionStyle);
+        GUILayout.Label(
+            "Die Gebäudemeldung bleibt einmalig. Verknüpfte globale " +
+            "Meldeschlitze zeigen denselben K/G/Q- und Quittierzustand.",
+            m_smallLabelStyle);
+
+        var globalTargets = GlobalPanels
+            .Where(panel => !panel.IsDashboard)
+            .ToArray();
+        if (globalTargets.Length == 0)
+        {
+            GUILayout.Label(
+                "Noch kein globales Fachpanel vorhanden.",
+                m_smallLabelStyle);
+            return;
+        }
+
+        foreach (var globalPanel in globalTargets)
+        {
+            GUILayout.BeginHorizontal();
+            var linked = m_draftLinkedPanelIds.Contains(globalPanel.Id);
+            if (GUILayout.Button(
+                    linked
+                        ? "✓ " + globalPanel.Name
+                        : "+ " + globalPanel.Name,
+                    linked ? m_primaryButtonStyle : m_buttonStyle,
+                    GUILayout.Width(420f),
+                    GUILayout.Height(30f)))
+            {
+                if (linked)
+                {
+                    m_draftLinkedPanelIds.Remove(globalPanel.Id);
+                }
+                else
+                {
+                    m_draftLinkedPanelIds.Add(globalPanel.Id);
+                }
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
         }
     }
 
@@ -2693,6 +3063,51 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_labelStyle);
 
         GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            "UI-Skalierung",
+            m_labelStyle,
+            GUILayout.Width(120f));
+        var scaleChanged = false;
+        if (GUILayout.Button("−", m_buttonStyle, GUILayout.Width(38f)))
+        {
+            m_runtime.Configuration.UiScalePercent = Math.Max(
+                75,
+                m_runtime.Configuration.UiScalePercent - 25);
+            scaleChanged = true;
+        }
+        GUILayout.Label(
+            m_runtime.Configuration.UiScalePercent + " %",
+            m_headerStyle,
+            GUILayout.Width(90f));
+        if (GUILayout.Button("+", m_buttonStyle, GUILayout.Width(38f)))
+        {
+            m_runtime.Configuration.UiScalePercent = Math.Min(
+                200,
+                m_runtime.Configuration.UiScalePercent + 25);
+            scaleChanged = true;
+        }
+        if (GUILayout.Button(
+                "100 %",
+                m_buttonStyle,
+                GUILayout.Width(80f)))
+        {
+            m_runtime.Configuration.UiScalePercent = 100;
+            scaleChanged = true;
+        }
+        GUILayout.Label(
+            "75–200 % · 100 % passt für 1080p, 150–200 % für 4K.",
+            m_smallLabelStyle);
+        GUILayout.EndHorizontal();
+        if (scaleChanged)
+        {
+            CancelResizeCapture();
+            CancelEditorResizeCapture();
+            SaveConfiguration(
+                "UI-Skalierung gespeichert: " +
+                m_runtime.Configuration.UiScalePercent + " %.");
+        }
+
+        GUILayout.BeginHorizontal();
         GUILayout.Label("Warnfarbe", m_labelStyle, GUILayout.Width(95f));
         m_runtime.Configuration.WarningColor = GUILayout.TextField(
             m_runtime.Configuration.WarningColor,
@@ -2831,7 +3246,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var unacknowledgedCount = panel.IsDashboard
             ? alarms.Count(alarm => !alarm.IsAcknowledged)
             : m_runtime.UnacknowledgedCount;
-        DrawWindowHeader("UNMA · " + panel.Name);
+        DrawWindowHeader("UNMA · " + panel.Name, detached.Rect.width);
         GUILayout.BeginArea(new Rect(
             10f,
             40f,
@@ -2850,6 +3265,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_runtime.AcknowledgeAll();
             m_audio.StopAlarm();
         }
+        if (!panel.IsDashboard && GUILayout.Button(
+                "+ MELDUNG",
+                m_primaryButtonStyle,
+                GUILayout.Width(120f)))
+        {
+            OpenNewRuleEditor(panel);
+        }
         if (GUILayout.Button("−", m_buttonStyle, GUILayout.Width(30f)))
         {
             detached.PendingSize = new Vector2(
@@ -2860,10 +3282,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             detached.PendingSize = new Vector2(
                 Mathf.Min(
-                    Screen.width - 20f,
+                    LogicalScreenWidth - 20f,
                     detached.Rect.width + 120f),
                 Mathf.Min(
-                    Screen.height - 20f,
+                    LogicalScreenHeight - 20f,
                     detached.Rect.height + 80f));
         }
         if (GUILayout.Button("X", m_dangerButtonStyle, GUILayout.Width(30f)))
@@ -2954,13 +3376,26 @@ public sealed class UnmaOverlayController : MonoBehaviour
                             interactionPanel,
                             alarms[index]);
                     }
-                    else if (!m_entityAssignmentPending &&
-                             GUI.Button(
-                                 rect,
-                                 GUIContent.none,
-                                 GUIStyle.none))
+                    else if (!m_entityAssignmentPending)
                     {
-                        HandleAlarmTileClick(alarms[index]);
+                        var tileClickRect =
+                            TryGetNavigationEntityId(
+                                alarms[index],
+                                out _)
+                                ? new Rect(
+                                    rect.x,
+                                    rect.y,
+                                    rect.width - 35f,
+                                    rect.height)
+                                : rect;
+                        if (GUI.Button(
+                                tileClickRect,
+                                GUIContent.none,
+                                GUIStyle.none))
+                        {
+                            HandleAlarmTileClick(alarms[index]);
+                        }
+                        DrawAlarmNavigationButton(rect, alarms[index]);
                     }
                 }
                 else if (showCreationTarget && index == alarms.Count)
@@ -3039,9 +3474,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             string.Equals(candidate.Id, ruleId, StringComparison.Ordinal));
         if (rule == null)
         {
-            m_entityAlarmWindowOpen = false;
             m_isOpen = true;
-            m_tab = 2;
             SetStatus(
                 "Die eigene Meldung in diesem Schlitz existiert nicht mehr.");
             return true;
@@ -3055,9 +3488,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             if (HasDraftRuleWork())
             {
-                m_entityAlarmWindowOpen = false;
-                m_isOpen = true;
-                m_tab = 2;
+                OpenRuleEditorWindow();
                 SetStatus(
                     "Im Editor liegt bereits eine andere oder ungespeicherte " +
                     "Meldung. Erst speichern oder ENTWURF LEEREN.");
@@ -3066,16 +3497,29 @@ public sealed class UnmaOverlayController : MonoBehaviour
             BeginEditingRule(rule, m_audio.GetSoundOptions());
         }
 
-        var panelIndex = m_runtime.Configuration.Panels.FindIndex(panel =>
-            string.Equals(panel.Id, rule.PanelId, StringComparison.Ordinal));
-        if (panelIndex >= 0)
+        var primaryPanel = m_runtime.Configuration.Panels.FirstOrDefault(
+            panel => string.Equals(
+                panel.Id,
+                rule.PanelId,
+                StringComparison.Ordinal));
+        if (PanelTopologyPolicy.IsEntityPanel(primaryPanel))
         {
-            m_currentPanelIndex = panelIndex;
+            m_activeEntityPanelId = primaryPanel.Id;
         }
-        m_entityAlarmWindowOpen = false;
-        m_openEntityAlarmAfterInspection = false;
+        else
+        {
+            var panelIndex = GlobalPanels.FindIndex(panel => string.Equals(
+                panel.Id,
+                rule.PanelId,
+                StringComparison.Ordinal));
+            if (panelIndex >= 0)
+            {
+                m_currentPanelIndex = panelIndex;
+            }
+        }
         m_isOpen = true;
-        m_tab = 2;
+        m_tab = TabBoard;
+        OpenRuleEditorWindow();
 
         var firstCondition = rule.Conditions.FirstOrDefault();
         if (alreadyEditing)
@@ -3084,7 +3528,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else if (firstCondition != null)
         {
-            RequestEntityInspection(firstCondition.EntityId, false);
+            RequestEntityInspection(firstCondition.EntityId, true);
         }
         else
         {
@@ -3141,6 +3585,88 @@ public sealed class UnmaOverlayController : MonoBehaviour
             new Rect(inner.x + 7f, inner.y + 75f, inner.width - 14f, 25f),
             alarm.Detail ?? "",
             m_tileDetailStyle);
+    }
+
+    private void DrawAlarmNavigationButton(Rect tileRect, AlarmView alarm)
+    {
+        if (!TryGetNavigationEntityId(alarm, out var entityId))
+        {
+            return;
+        }
+
+        var buttonRect = new Rect(
+            tileRect.xMax - 31f,
+            tileRect.yMax - 31f,
+            27f,
+            27f);
+        if (GUI.Button(
+                buttonRect,
+                "↗",
+                m_primaryButtonStyle))
+        {
+            NavigateToEntity(entityId);
+        }
+    }
+
+    private bool TryGetNavigationEntityId(
+        AlarmView alarm,
+        out int entityId)
+    {
+        entityId = -1;
+        if (alarm == null)
+        {
+            return false;
+        }
+
+        if (PanelSlotProjection.TryGetCustomRuleId(alarm, out var ruleId))
+        {
+            var rule = m_runtime.Configuration.Rules.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, ruleId, StringComparison.Ordinal));
+            if (rule != null)
+            {
+                var ownerPanel = m_runtime.Configuration.Panels
+                    .FirstOrDefault(panel => string.Equals(
+                        panel.Id,
+                        rule.PanelId,
+                        StringComparison.Ordinal));
+                if (PanelTopologyPolicy.IsEntityPanel(ownerPanel))
+                {
+                    entityId = ownerPanel.OwnerEntityId;
+                    return entityId > 0;
+                }
+
+                entityId = rule.Conditions.FirstOrDefault()?.EntityId ?? -1;
+                return entityId > 0;
+            }
+        }
+
+        var slotId = alarm.SlotId ?? "";
+        var marker = slotId.LastIndexOf(
+            ":entity:",
+            StringComparison.Ordinal);
+        return marker >= 0 &&
+               int.TryParse(
+                   slotId.Substring(marker + 8),
+                   NumberStyles.Integer,
+                   CultureInfo.InvariantCulture,
+                   out entityId) &&
+               entityId > 0;
+    }
+
+    private void NavigateToEntity(int entityId)
+    {
+        if (!m_runtime.TryGetLiveEntity(entityId, out var entity))
+        {
+            SetStatus("Das zugehörige Objekt existiert nicht mehr.");
+            return;
+        }
+
+        if (entity is IEntityWithPosition positioned)
+        {
+            m_cameraController?.PanTo(positioned.Position2f);
+        }
+        m_inspectorsManager?.TryActivateFor(entity);
+        SetStatus("Zum zugehörigen Objekt gesprungen.");
     }
 
     private void DrawEmptyTile(Rect rect)
@@ -3323,6 +3849,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_selectedReferenceMetricIndex = 0;
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
+        m_editorWindowMode = EditorWindowMode.Rule;
         m_entityAlarmWindowOpen = true;
         m_openEntityAlarmAfterInspection = false;
         m_entityAlarmScroll = Vector2.zero;
@@ -3349,6 +3876,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         return !string.IsNullOrWhiteSpace(m_editingRuleId) ||
                m_draftPreferredSlotIndex >= 0 ||
+               m_draftLinkedPanelIds.Count > 0 ||
                m_draftConditions.Count > 0 ||
                !string.Equals(
                    m_draftRuleName?.Trim(),
@@ -3389,18 +3917,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
-        m_entityAssignmentPending = true;
-        m_assignmentEntityId = entity.Id.Value;
-        m_assignmentEntity = null;
-        m_entityAlarmWindowOpen = false;
+        CancelEntityAssignment();
+        m_openEntityPanelAfterInspectionId = entity.Id.Value;
         m_isOpen = true;
-        m_tab = 0;
+        m_tab = TabBoard;
         RequestEntityInspection(
             entity.Id.Value,
             false,
             preserveCurrentSelection: true);
         SetStatus(
-            "Objekt wird hinzugefügt. Danach eigene Meldung oder leeres Karree anklicken.");
+            "Gebäudetafel wird geladen …");
     }
 
     private void CaptureSelectedEntity()
@@ -3456,6 +3982,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
         m_pendingInspectionEntityId = -1;
+        var entityPanelInspection =
+            inspection.EntityId == m_openEntityPanelAfterInspectionId;
         var automaticRefresh = m_isAutomaticInspectionRefresh;
         m_isAutomaticInspectionRefresh = false;
         var assignmentInspection = m_entityAssignmentPending &&
@@ -3464,6 +3992,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         if (!string.IsNullOrWhiteSpace(inspection.Error))
         {
+            if (entityPanelInspection)
+            {
+                m_openEntityPanelAfterInspectionId = -1;
+            }
             if (assignmentInspection)
             {
                 CancelEntityAssignment();
@@ -3516,6 +4048,25 @@ public sealed class UnmaOverlayController : MonoBehaviour
             : 0;
         m_nextEntityInspectionRefresh =
             Time.realtimeSinceStartup + 1f;
+        if (entityPanelInspection)
+        {
+            m_openEntityPanelAfterInspectionId = -1;
+            var entityPanel = m_runtime.GetOrCreateEntityPanel(inspection);
+            if (entityPanel == null)
+            {
+                SetStatus(
+                    "Gebäudetafel konnte nicht gespeichert werden: " +
+                    m_runtime.LastPersistenceError);
+                return;
+            }
+            m_activeEntityPanelId = entityPanel.Id;
+            m_isOpen = true;
+            m_tab = TabBoard;
+            m_boardScroll = Vector2.zero;
+            SetStatus(
+                "Gebäudetafel für " + inspection.Title + " geöffnet.");
+            return;
+        }
         if (automaticRefresh)
         {
             return;
@@ -3681,6 +4232,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Enabled = existingRule?.Enabled ?? true,
             AutoAcknowledgeOnClear = m_draftAutoAcknowledgeOnClear,
             Conditions = m_draftConditions.Select(CloneCondition).ToList(),
+            LinkedPanelIds = m_draftLinkedPanelIds.ToList(),
         };
         var saved = isEditing
             ? m_runtime.UpdateRule(rule)
@@ -3717,6 +4269,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = rule.SoundId;
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = rule.AutoAcknowledgeOnClear;
+        m_draftLinkedPanelIds.Clear();
+        foreach (var panelId in rule.LinkedPanelIds ?? new List<string>())
+        {
+            m_draftLinkedPanelIds.Add(panelId);
+        }
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
         m_draftConditions.AddRange(
@@ -3744,6 +4301,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = "auto";
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = false;
+        m_draftLinkedPanelIds.Clear();
         m_draftValueMode = ConditionValueMode.Absolute;
         m_draftComparison = ComparisonOperator.Less;
         m_draftThreshold = "0";
@@ -3753,11 +4311,88 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var targetPanel = CurrentPanel != null && !CurrentPanel.IsDashboard
             ? CurrentPanel
             : m_runtime.Configuration.Panels.FirstOrDefault(panel =>
-                !panel.IsDashboard);
+                !panel.IsDashboard &&
+                !PanelTopologyPolicy.IsEntityPanel(panel));
         m_draftTargetPanelId = targetPanel?.Id ?? "";
     }
 
-    private void AddPanel()
+    private void OpenPanelCreationEditor()
+    {
+        if (HasDraftRuleWork())
+        {
+            OpenRuleEditorWindow();
+            SetStatus(
+                "Zuerst den offenen Meldungsentwurf speichern oder leeren.");
+            return;
+        }
+        m_editorWindowMode = EditorWindowMode.PanelCreation;
+        m_entityAlarmWindowOpen = true;
+        m_entityAlarmScroll = Vector2.zero;
+        m_newPanelName = "NEUES PANEL";
+    }
+
+    private void OpenPanelSettingsEditor(PanelDefinition panel)
+    {
+        if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return;
+        }
+        if (HasDraftRuleWork())
+        {
+            OpenRuleEditorWindow();
+            SetStatus(
+                "Zuerst den offenen Meldungsentwurf speichern oder leeren.");
+            return;
+        }
+        m_panelSettingsPanelId = panel.Id;
+        m_panelSettingsName = panel.Name ?? "";
+        m_panelSettingsColumns = panel.Columns;
+        m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
+        m_panelSettingsIncludeSystem = panel.IncludeSystem;
+        m_panelSettingsFilter = panel.NotificationFilter ?? "";
+        m_editorWindowMode = EditorWindowMode.PanelSettings;
+        m_entityAlarmWindowOpen = true;
+        m_entityAlarmScroll = Vector2.zero;
+    }
+
+    private void OpenNewRuleEditor(PanelDefinition panel)
+    {
+        if (panel == null || panel.IsDashboard)
+        {
+            SetStatus("Neue Meldungen brauchen ein festes Zielpanel.");
+            return;
+        }
+        if (HasDraftRuleWork())
+        {
+            OpenRuleEditorWindow();
+            SetStatus(
+                "Im Meldungs-Editor liegt bereits ein Entwurf. Erst " +
+                "speichern oder ENTWURF LEEREN.");
+            return;
+        }
+
+        ResetDraftRule();
+        m_draftTargetPanelId = panel.Id;
+        m_draftPreferredSlotIndex = panel.Slots?.Count ?? 0;
+        OpenRuleEditorWindow();
+
+        if (PanelTopologyPolicy.IsEntityPanel(panel) &&
+            (m_selectedEntity == null ||
+             m_selectedEntity.EntityId != panel.OwnerEntityId))
+        {
+            RequestEntityInspection(panel.OwnerEntityId, true);
+        }
+    }
+
+    private void OpenRuleEditorWindow()
+    {
+        m_editorWindowMode = EditorWindowMode.Rule;
+        m_entityAlarmWindowOpen = true;
+        m_openEntityAlarmAfterInspection = false;
+        m_entityAlarmScroll = Vector2.zero;
+    }
+
+    private bool AddPanel()
     {
         var panel = new PanelDefinition
         {
@@ -3775,12 +4410,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SetStatus(
                 "Panel konnte nicht gespeichert werden: " +
                 m_runtime.LastPersistenceError);
-            return;
+            return false;
         }
-        m_currentPanelIndex = m_runtime.Configuration.Panels.Count - 1;
-        m_draftTargetPanelId = panel.Id;
+        m_activeEntityPanelId = "";
+        m_currentPanelIndex = GlobalPanels.FindIndex(candidate =>
+            string.Equals(candidate.Id, panel.Id, StringComparison.Ordinal));
+        m_currentPanelIndex = Math.Max(0, m_currentPanelIndex);
+        if (!HasDraftRuleWork())
+        {
+            m_draftTargetPanelId = panel.Id;
+        }
         m_newPanelName = "NEUES PANEL";
         SetStatus("Panel angelegt.");
+        return true;
     }
 
     private void RemoveCurrentPanel()
@@ -4098,7 +4740,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawTabButton(int tab, string label)
     {
         var width = Mathf.Clamp(
-            (m_windowRect.width - 105f) / 6f,
+            (m_windowRect.width - 105f) / 5f,
             88f,
             150f);
         if (GUILayout.Button(
@@ -4108,13 +4750,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Height(30f)))
         {
             m_tab = tab;
+            GUI.FocusControl(null);
         }
     }
 
-    private void DrawWindowHeader(string title)
+    private void DrawWindowHeader(string title, float windowWidth)
     {
         GUI.Label(
-            new Rect(12f, 8f, 720f, 28f),
+            new Rect(12f, 8f, Math.Max(120f, windowWidth - 76f), 28f),
             title,
             m_headerStyle);
     }
@@ -4211,18 +4854,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
                  GUIUtility.hotControl == controlId)
         {
             var current = GUIUtility.GUIToScreenPoint(currentEvent.mousePosition);
-            var delta = current - m_resizeStartMouse;
+            var delta = (current - m_resizeStartMouse) / UiScale;
             m_pendingMainWindowSize = new Vector2(
                 WindowResizeMath.ResizeExtent(
                     m_resizeStartSize.x,
                     delta.x,
                     700f,
-                    Math.Max(700f, Screen.width - 12f)),
+                    Math.Max(700f, LogicalScreenWidth - 12f)),
                 WindowResizeMath.ResizeExtent(
                     m_resizeStartSize.y,
                     delta.y,
                     520f,
-                    Math.Max(520f, Screen.height - 12f)));
+                    Math.Max(520f, LogicalScreenHeight - 12f)));
             currentEvent.Use();
         }
         else if (eventType == EventType.MouseUp &&
@@ -4256,23 +4899,180 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_resizeControlId = 0;
     }
 
-    private void PersistWindowRectOnMouseUp()
+    private void PersistWindowRect()
     {
-        if (UnityEngine.Event.current.type != EventType.MouseUp)
+        if (RectsApproximatelyEqual(
+                m_windowRect,
+                m_lastPersistedWindowRect))
         {
             return;
         }
-        PersistWindowRect();
-    }
 
-    private void PersistWindowRect()
-    {
         var config = m_runtime.Configuration;
+        var previousX = config.WindowX;
+        var previousY = config.WindowY;
+        var previousWidth = config.WindowWidth;
+        var previousHeight = config.WindowHeight;
         config.WindowX = m_windowRect.x;
         config.WindowY = m_windowRect.y;
         config.WindowWidth = m_windowRect.width;
         config.WindowHeight = m_windowRect.height;
-        m_runtime.SaveConfiguration();
+        if (m_runtime.SaveConfiguration())
+        {
+            m_lastPersistedWindowRect = m_windowRect;
+            return;
+        }
+
+        config.WindowX = previousX;
+        config.WindowY = previousY;
+        config.WindowWidth = previousWidth;
+        config.WindowHeight = previousHeight;
+    }
+
+    private Rect GetEditorResizeHandleRect()
+    {
+        return new Rect(
+            WindowResizeMath.GetHandleOrigin(
+                m_entityAlarmWindowRect.width,
+                MainResizeHandleSize,
+                MainResizeHandleInset),
+            WindowResizeMath.GetHandleOrigin(
+                m_entityAlarmWindowRect.height,
+                MainResizeHandleSize,
+                MainResizeHandleInset),
+            MainResizeHandleSize,
+            MainResizeHandleSize);
+    }
+
+    private void HandleEditorResizeInput()
+    {
+        var currentEvent = UnityEngine.Event.current;
+        var controlId = GUIUtility.GetControlID(
+            EditorResizeControlHint,
+            FocusType.Passive);
+        m_editorResizeControlId = controlId;
+        var eventType = currentEvent.GetTypeForControl(controlId);
+
+        if (m_isEditorResizing && GUIUtility.hotControl != controlId)
+        {
+            m_isEditorResizing = false;
+        }
+        if (m_isEditorResizing &&
+            GUIUtility.hotControl == controlId &&
+            eventType == EventType.Repaint &&
+            !Input.GetMouseButton(0))
+        {
+            GUIUtility.hotControl = 0;
+            m_editorResizeControlId = 0;
+            m_isEditorResizing = false;
+            PersistEditorWindowRect();
+        }
+
+        if (eventType == EventType.MouseDown &&
+            currentEvent.button == 0 &&
+            WindowResizeMath.IsInsideHandle(
+                m_entityAlarmWindowRect.width,
+                m_entityAlarmWindowRect.height,
+                currentEvent.mousePosition.x,
+                currentEvent.mousePosition.y,
+                MainResizeHandleSize,
+                MainResizeHandleInset))
+        {
+            GUIUtility.hotControl = controlId;
+            m_isEditorResizing = true;
+            m_editorResizeStartMouse = GUIUtility.GUIToScreenPoint(
+                currentEvent.mousePosition);
+            m_editorResizeStartSize = new Vector2(
+                m_entityAlarmWindowRect.width,
+                m_entityAlarmWindowRect.height);
+            currentEvent.Use();
+        }
+        else if (eventType == EventType.MouseDrag &&
+                 m_isEditorResizing &&
+                 GUIUtility.hotControl == controlId)
+        {
+            var current = GUIUtility.GUIToScreenPoint(currentEvent.mousePosition);
+            var delta = (current - m_editorResizeStartMouse) / UiScale;
+            m_pendingEditorWindowSize = new Vector2(
+                WindowResizeMath.ResizeExtent(
+                    m_editorResizeStartSize.x,
+                    delta.x,
+                    700f,
+                    Math.Max(700f, LogicalScreenWidth - 12f)),
+                WindowResizeMath.ResizeExtent(
+                    m_editorResizeStartSize.y,
+                    delta.y,
+                    520f,
+                    Math.Max(520f, LogicalScreenHeight - 12f)));
+            currentEvent.Use();
+        }
+        else if (eventType == EventType.MouseUp &&
+                 GUIUtility.hotControl == controlId)
+        {
+            GUIUtility.hotControl = 0;
+            m_editorResizeControlId = 0;
+            m_isEditorResizing = false;
+            PersistEditorWindowRect();
+            currentEvent.Use();
+        }
+    }
+
+    private void DrawEditorResizeHandle()
+    {
+        GUI.Label(GetEditorResizeHandleRect(), "◢", m_resizeHandleStyle);
+    }
+
+    private void CancelEditorResizeCapture()
+    {
+        if (!m_isEditorResizing)
+        {
+            return;
+        }
+        m_isEditorResizing = false;
+        m_pendingEditorWindowSize = null;
+        if (GUIUtility.hotControl == m_editorResizeControlId)
+        {
+            GUIUtility.hotControl = 0;
+        }
+        m_editorResizeControlId = 0;
+    }
+
+    private void PersistEditorWindowRect()
+    {
+        if (RectsApproximatelyEqual(
+                m_entityAlarmWindowRect,
+                m_lastPersistedEditorWindowRect))
+        {
+            return;
+        }
+
+        var config = m_runtime.Configuration;
+        var previousX = config.EditorWindowX;
+        var previousY = config.EditorWindowY;
+        var previousWidth = config.EditorWindowWidth;
+        var previousHeight = config.EditorWindowHeight;
+        config.EditorWindowX = m_entityAlarmWindowRect.x;
+        config.EditorWindowY = m_entityAlarmWindowRect.y;
+        config.EditorWindowWidth = m_entityAlarmWindowRect.width;
+        config.EditorWindowHeight = m_entityAlarmWindowRect.height;
+        if (m_runtime.SaveConfiguration())
+        {
+            m_lastPersistedEditorWindowRect = m_entityAlarmWindowRect;
+            return;
+        }
+
+        config.EditorWindowX = previousX;
+        config.EditorWindowY = previousY;
+        config.EditorWindowWidth = previousWidth;
+        config.EditorWindowHeight = previousHeight;
+    }
+
+    private static bool RectsApproximatelyEqual(Rect left, Rect right)
+    {
+        return Mathf.Approximately(left.x, right.x) &&
+               Mathf.Approximately(left.y, right.y) &&
+               Mathf.Approximately(left.width, right.width) &&
+               Mathf.Approximately(left.height, right.height);
     }
 
     private void EnsureStyles()
@@ -4477,7 +5277,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         get
         {
-            if (m_runtime.Configuration.Panels.Count == 0)
+            if (!string.IsNullOrWhiteSpace(m_activeEntityPanelId))
+            {
+                var entityPanel = m_runtime.Configuration.Panels
+                    .FirstOrDefault(panel => string.Equals(
+                        panel.Id,
+                        m_activeEntityPanelId,
+                        StringComparison.Ordinal));
+                if (PanelTopologyPolicy.IsEntityPanel(entityPanel))
+                {
+                    return entityPanel;
+                }
+                m_activeEntityPanelId = "";
+            }
+
+            var panels = GlobalPanels;
+            if (panels.Count == 0)
             {
                 return null;
             }
@@ -4485,10 +5300,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 0,
                 Math.Min(
                     m_currentPanelIndex,
-                    m_runtime.Configuration.Panels.Count - 1));
-            return m_runtime.Configuration.Panels[m_currentPanelIndex];
+                    panels.Count - 1));
+            return panels[m_currentPanelIndex];
         }
     }
+
+    private List<PanelDefinition> GlobalPanels =>
+        m_runtime.Configuration.Panels
+            .Where(panel => !PanelTopologyPolicy.IsEntityPanel(panel))
+            .ToList();
 
     private static ConditionDefinition CloneCondition(
         ConditionDefinition source)
@@ -4644,24 +5464,141 @@ public sealed class UnmaOverlayController : MonoBehaviour
             : fallback;
     }
 
-    private static Rect ClampToScreen(Rect rect)
+    private float UiScale => Mathf.Clamp(
+        (m_runtime?.Configuration.UiScalePercent ?? 100) / 100f,
+        0.75f,
+        2f);
+
+    private float LogicalScreenWidth => Screen.width / UiScale;
+
+    private float LogicalScreenHeight => Screen.height / UiScale;
+
+    private bool IsPointerOverAnyUnmaSurface()
     {
-        rect.width = Mathf.Min(rect.width, Math.Max(320f, Screen.width - 8f));
-        rect.height = Mathf.Min(rect.height, Math.Max(260f, Screen.height - 8f));
+        if (!m_gameplayWasActive || m_isUiSuppressedByMenu)
+        {
+            return false;
+        }
+
+        var physicalMouse = Input.mousePosition;
+        var logicalMouse = new Vector2(
+            physicalMouse.x / UiScale,
+            (Screen.height - physicalMouse.y) / UiScale);
+        if (m_isOpen && m_windowRect.Contains(logicalMouse) ||
+            m_entityAlarmWindowOpen &&
+            m_entityAlarmWindowRect.Contains(logicalMouse) ||
+            !m_isOpen && m_launcherRect.Contains(logicalMouse))
+        {
+            return true;
+        }
+        return m_detachedPanels.Any(panel =>
+            panel.IsOpen && panel.Rect.Contains(logicalMouse));
+    }
+
+    private void UpdatePointerRaycastShield(bool enabled)
+    {
+        if (m_pointerRaycastShield == null)
+        {
+            return;
+        }
+
+        m_inputShieldRects.Clear();
+        if (enabled)
+        {
+            if (m_isOpen)
+            {
+                m_inputShieldRects.Add(m_windowRect);
+            }
+            else
+            {
+                m_inputShieldRects.Add(m_launcherRect);
+            }
+
+            if (m_entityAlarmWindowOpen)
+            {
+                m_inputShieldRects.Add(m_entityAlarmWindowRect);
+            }
+
+            foreach (var detached in m_detachedPanels)
+            {
+                if (detached.IsOpen)
+                {
+                    m_inputShieldRects.Add(detached.Rect);
+                }
+            }
+        }
+
+        m_pointerRaycastShield.UpdateSurfaces(
+            m_inputShieldRects,
+            UiScale,
+            enabled);
+    }
+
+    private void UpdateKeyboardInputCapture()
+    {
+        var currentEvent = UnityEngine.Event.current;
+        if (currentEvent != null &&
+            currentEvent.rawType == EventType.MouseDown &&
+            !IsPointerOverAnyUnmaSurface())
+        {
+            GUI.FocusControl(null);
+        }
+
+        // Only full UNMA windows contain text fields. A non-zero IMGUI
+        // keyboard control while one of them is visible therefore represents
+        // an active text edit; buttons and resize handles use hotControl.
+        var textInputFocused =
+            (m_isOpen || m_entityAlarmWindowOpen) &&
+            GUIUtility.keyboardControl != 0;
+        m_inputBlocker?.SetKeyboardCaptured(textInputFocused);
+    }
+
+    private void ConsumePointerEventOverUi()
+    {
+        var currentEvent = UnityEngine.Event.current;
+        if (!IsPointerOverAnyUnmaSurface())
+        {
+            return;
+        }
+        switch (currentEvent.type)
+        {
+            case EventType.MouseDown:
+            case EventType.MouseUp:
+            case EventType.MouseDrag:
+            case EventType.MouseMove:
+            case EventType.ScrollWheel:
+            case EventType.ContextClick:
+            case EventType.DragUpdated:
+            case EventType.DragPerform:
+                currentEvent.Use();
+                break;
+        }
+    }
+
+    private Rect ClampToScreen(Rect rect)
+    {
+        rect.width = Mathf.Min(
+            rect.width,
+            Math.Max(320f, LogicalScreenWidth - 8f));
+        rect.height = Mathf.Min(
+            rect.height,
+            Math.Max(260f, LogicalScreenHeight - 8f));
         rect.x = Mathf.Clamp(
             rect.x,
             0f,
-            Math.Max(0f, Screen.width - rect.width));
+            Math.Max(0f, LogicalScreenWidth - rect.width));
         rect.y = Mathf.Clamp(
             rect.y,
             0f,
-            Math.Max(0f, Screen.height - rect.height));
+            Math.Max(0f, LogicalScreenHeight - rect.height));
         return rect;
     }
 
     private void OnDestroy()
     {
         m_inspectorAlarmButtons?.Dispose();
+        m_inputBlocker?.Dispose();
+        m_pointerRaycastShield?.Dispose();
         m_runtime?.SetGameplayActive(false);
         if (m_audio != null)
         {
