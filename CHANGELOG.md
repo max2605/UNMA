@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.2 – 2026-08-09
+## 0.9.3 – 2026-08-09
 
 - Bestehende Vanilla-Meldungen lassen sich im TÖNE-Tab jetzt wahlweise nur für
   das betroffene Objekt oder für alle Objekte desselben Prototyps behandeln.
@@ -11,6 +11,9 @@
   Objektprototyp und Titel an aktiven Vanilla-Zuständen. Frühere globale
   Abschaltungen werden verlustfrei als ausgeblendete Meldungstyp-Regeln
   migriert.
+
+## 0.9.2 – 2026-08-09
+
 - Der Abriss-Listener verwendet jetzt ausdrücklich die nicht speicherbare
   COI-Eventregistrierung. Autosaves versuchen dadurch nicht mehr,
   `UnmaRuntime` als Callback-Besitzer zu serialisieren und brechen nicht mehr
