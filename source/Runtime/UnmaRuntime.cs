@@ -18,6 +18,7 @@ using Mafi.Core.Simulation;
 using UNMA.Api;
 using UNMA.Domain;
 using UNMA.Extensions;
+using UNMA.Integration;
 using UNMA.Localization;
 
 namespace UNMA.Runtime;
@@ -144,6 +145,8 @@ public sealed class UnmaRuntime : IDisposable
     private readonly PopsHealthManager m_healthManager;
     private readonly ISimLoopEvents m_simLoopEvents;
     private readonly UnmaStateStore m_store;
+    private readonly ExternalDisplayNotificationWriter m_externalDisplay =
+        new();
     private readonly ExternalProviderDescriptor[] m_externalProviders;
     private readonly Dictionary<string, AlarmState> m_alarms =
         new(StringComparer.Ordinal);
@@ -291,6 +294,8 @@ public sealed class UnmaRuntime : IDisposable
             EndAlarmPersistenceBatch();
         }
         PersistAlarmState();
+        PublishExternalDisplaySnapshot();
+        PublishExternalDisplayPanelState();
 
         m_simLoopEvents.UpdateEndForUi.AddNonSaveable(
             this,
@@ -1217,12 +1222,13 @@ public sealed class UnmaRuntime : IDisposable
     private void Evaluate()
     {
         var settings = m_settings;
+        var systemMetrics = CaptureSystemMetrics();
         if (settings.EnableSystemAlarms)
         {
-            EvaluateSystemAlarms(CaptureSystemMetrics());
+            EvaluateSystemAlarms(systemMetrics);
         }
         EvaluateSustainedVanillaAlarms();
-        EvaluateCustomRules();
+        EvaluateCustomRules(systemMetrics);
         EvaluateExternalAlarms();
     }
 
@@ -3121,6 +3127,7 @@ public sealed class UnmaRuntime : IDisposable
                 now + Stopwatch.Frequency * intervalMs / 1000L);
             ProcessRemovedEntities();
             Evaluate();
+            PublishExternalDisplayPanelState();
         }
         catch (Exception exception)
         {
@@ -3794,7 +3801,8 @@ public sealed class UnmaRuntime : IDisposable
         return metrics.TryGetValue(metricId, out var value) ? value : 0d;
     }
 
-    private void EvaluateCustomRules()
+    private void EvaluateCustomRules(
+        IReadOnlyDictionary<string, double> globalMetrics)
     {
         AlarmRuleDefinition[] rules;
         lock (m_configurationGate)
@@ -3822,11 +3830,13 @@ public sealed class UnmaRuntime : IDisposable
 
         foreach (var rule in rules)
         {
-            EvaluateCustomRule(rule);
+            EvaluateCustomRule(rule, globalMetrics);
         }
     }
 
-    private void EvaluateCustomRule(AlarmRuleDefinition rule)
+    private void EvaluateCustomRule(
+        AlarmRuleDefinition rule,
+        IReadOnlyDictionary<string, double> globalMetrics)
     {
         if (!rule.Enabled)
         {
@@ -3841,6 +3851,68 @@ public sealed class UnmaRuntime : IDisposable
 
         foreach (var condition in rule.Conditions)
         {
+            if (SystemMetricCatalog.TryParseRulePath(
+                    condition.MetricPath,
+                    out var globalMetricId))
+            {
+                if (!globalMetrics.TryGetValue(
+                        globalMetricId,
+                        out var globalActual))
+                {
+                    missingSource = true;
+                    values.Add(false);
+                    details.Add(condition.MetricLabel + ": Messwert fehlt");
+                    continue;
+                }
+
+                var globalReference = 0d;
+                if (condition.ValueMode ==
+                        ConditionValueMode.PercentOfReference &&
+                    (!SystemMetricCatalog.TryParseRulePath(
+                         condition.ReferenceMetricPath,
+                         out var referenceMetricId) ||
+                     !globalMetrics.TryGetValue(
+                         referenceMetricId,
+                         out globalReference)))
+                {
+                    missingSource = true;
+                    values.Add(false);
+                    details.Add(
+                        condition.MetricLabel + ": Bezugsmesswert fehlt");
+                    continue;
+                }
+
+                if (!AlarmEvaluation.TryCalculateComparable(
+                        globalActual,
+                        condition.ValueMode,
+                        globalReference,
+                        out var globalComparable))
+                {
+                    missingSource = true;
+                    values.Add(false);
+                    details.Add(
+                        condition.MetricLabel +
+                        ": Bezug nicht berechenbar");
+                    continue;
+                }
+
+                lastValue = globalComparable;
+                values.Add(AlarmEvaluation.Compare(
+                    globalComparable,
+                    condition.Comparison,
+                    condition.Threshold));
+                details.Add(
+                    "GLOBAL · " + condition.MetricLabel + " " +
+                    OperatorText(condition.Comparison) + " " +
+                    condition.Threshold.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + " (ist " +
+                    globalComparable.ToString(
+                        "0.###",
+                        CultureInfo.CurrentCulture) + ")");
+                continue;
+            }
+
             var option = m_entitiesManager.GetEntity(
                 new EntityId(condition.EntityId));
             if (option.IsNone)
@@ -4819,6 +4891,7 @@ public sealed class UnmaRuntime : IDisposable
         string entityTitle = "")
     {
         var shouldPersist = false;
+        var shouldPublishExternal = false;
         AlarmView slotCandidate;
         lock (m_gate)
         {
@@ -4908,6 +4981,7 @@ public sealed class UnmaRuntime : IDisposable
 
             if (transition.IsNewOccurrence)
             {
+                shouldPublishExternal = true;
                 if (wasActive)
                 {
                     historyChanged |= CloseHistoryLocked(
@@ -5019,6 +5093,10 @@ public sealed class UnmaRuntime : IDisposable
         {
             PersistAlarmState();
         }
+        if (shouldPublishExternal)
+        {
+            PublishExternalDisplayAlarm(slotCandidate, true);
+        }
     }
 
     private void ClearAlarm(
@@ -5027,6 +5105,7 @@ public sealed class UnmaRuntime : IDisposable
         bool persist = true)
     {
         var changed = false;
+        AlarmView clearedAlarm = null;
         lock (m_gate)
         {
             if (m_alarms.TryGetValue(key, out var state))
@@ -5063,6 +5142,10 @@ public sealed class UnmaRuntime : IDisposable
                     wasGoneUnacknowledged !=
                     state.View.IsGoneUnacknowledged ||
                     historyChanged;
+                if (wasActive && !state.View.IsActive)
+                {
+                    clearedAlarm = Clone(state.View, state.Sequence);
+                }
                 if (historyChanged)
                 {
                     m_alarmHistoryRevision++;
@@ -5072,6 +5155,90 @@ public sealed class UnmaRuntime : IDisposable
         if (changed && persist)
         {
             PersistAlarmState();
+        }
+        if (clearedAlarm != null)
+        {
+            PublishExternalDisplayAlarm(clearedAlarm, false);
+        }
+    }
+
+    private void PublishExternalDisplaySnapshot()
+    {
+        if (!m_externalDisplay.TryReset(out var resetError))
+        {
+            Log.Warning(
+                "UNMA: External display reset failed: " + resetError);
+            return;
+        }
+
+        AlarmView[] activeAlarms;
+        lock (m_gate)
+        {
+            activeAlarms = m_alarms.Values
+                .Where(state => state.View.IsActive)
+                .OrderBy(state => state.Sequence)
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+        foreach (var alarm in activeAlarms)
+        {
+            PublishExternalDisplayAlarm(alarm, true);
+        }
+        Log.Info(
+            "UNMA: External display synchronized; active=" +
+            activeAlarms.Length + ", path=" + m_externalDisplay.Path);
+    }
+
+    private void PublishExternalDisplayPanelState()
+    {
+        PanelDefinition[] panels;
+        lock (m_configurationGate)
+        {
+            panels = Configuration.Panels
+                .Where(panel => panel != null)
+                .ToArray();
+        }
+        if (!m_externalDisplay.TryPublishPanelState(
+                panels,
+                GetViews,
+                out _,
+                out var error))
+        {
+            Log.Warning(
+                "UNMA: External panel synchronization failed: " + error);
+        }
+    }
+
+    private void PublishExternalDisplayAlarm(AlarmView alarm, bool active)
+    {
+        var severity = active
+            ? alarm.Severity switch
+            {
+                AlarmSeverity.Emergency => "critical",
+                AlarmSeverity.Critical => "critical",
+                AlarmSeverity.Warning => "warning",
+                _ => "info",
+            }
+            : "success";
+        var title = active
+            ? alarm.Name
+            : "BEHOBEN: " + alarm.Name;
+        var detail = string.IsNullOrWhiteSpace(alarm.Detail)
+            ? alarm.EntityTitle
+            : alarm.Detail;
+        if (!m_externalDisplay.TryPublish(
+                alarm.Key,
+                title,
+                detail,
+                severity,
+                string.IsNullOrWhiteSpace(alarm.Source)
+                    ? "UNMA"
+                    : "UNMA · " + alarm.Source,
+                active,
+                out var error))
+        {
+            Log.Warning(
+                "UNMA: External display publish failed: " + error);
         }
     }
 

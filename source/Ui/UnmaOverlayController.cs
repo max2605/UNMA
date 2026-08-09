@@ -103,6 +103,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private float m_nextPanelSlotCandidateRefresh;
     private bool m_isOpen;
     private bool m_entityAlarmWindowOpen;
+    private bool m_editorClosePromptOpen;
     private EditorWindowMode m_editorWindowMode;
     private string m_panelSettingsPanelId = "";
     private string m_panelSettingsName = "";
@@ -178,6 +179,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_pendingPanelDeleteId = "";
     private float m_pendingPanelDeleteUntil;
     private float m_pendingHistoryDeleteUntil;
+    private string m_pendingRuleDeleteId = "";
+    private float m_pendingRuleDeleteUntil;
+    private string m_draftConflictMessage = "";
+    private float m_draftConflictMessageUntil;
     private string m_statusMessage = "";
     private float m_statusMessageUntil;
     private AlarmView m_testAlarm;
@@ -197,6 +202,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private GUIStyle m_buttonStyle;
     private GUIStyle m_primaryButtonStyle;
     private GUIStyle m_dangerButtonStyle;
+    private GUIStyle m_warningBannerStyle;
     private GUIStyle m_resizeHandleStyle;
     private GUIStyle m_textFieldStyle;
     private GUIStyle m_historyHeaderStyle;
@@ -336,9 +342,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_pendingInspectionEntityId < 0 &&
             Time.realtimeSinceStartup >= m_nextEntityInspectionRefresh)
         {
-            m_pendingInspectionEntityId = m_selectedEntity.EntityId;
-            m_isAutomaticInspectionRefresh = true;
-            m_runtime.RequestEntityInspection(m_selectedEntity.EntityId);
+            if (m_selectedEntity.EntityId < 0)
+            {
+                SelectGlobalMetricSource(true);
+            }
+            else
+            {
+                m_pendingInspectionEntityId = m_selectedEntity.EntityId;
+                m_isAutomaticInspectionRefresh = true;
+                m_runtime.RequestEntityInspection(m_selectedEntity.EntityId);
+            }
             m_nextEntityInspectionRefresh =
                 Time.realtimeSinceStartup + 1f;
         }
@@ -1437,9 +1450,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 }
                 else
                 {
-                    RequestEntityInspection(
-                        firstCondition.EntityId,
-                        true);
+                    OpenConditionSource(firstCondition, true);
                 }
             }
             if (GUILayout.Button(
@@ -1489,10 +1500,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "X",
                 m_buttonStyle))
         {
-            m_entityAlarmWindowOpen = false;
-            m_openEntityAlarmAfterInspection = false;
-            CancelEditorResizeCapture();
-            GUI.FocusControl(null);
+            RequestEditorClose();
         }
 
         GUILayout.BeginArea(new Rect(
@@ -1502,8 +1510,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_entityAlarmWindowRect.height - 42f -
             MainWindowContentBottomInset));
         DrawStatusMessage();
+        DrawDraftConflictBanner();
         m_entityAlarmScroll = GUILayout.BeginScrollView(m_entityAlarmScroll);
-        if (m_editorWindowMode == EditorWindowMode.PanelCreation)
+        if (m_editorClosePromptOpen)
+        {
+            DrawEditorClosePrompt();
+        }
+        else if (m_editorWindowMode == EditorWindowMode.PanelCreation)
         {
             DrawNewPanelWindowContent();
         }
@@ -1524,6 +1537,81 @@ public sealed class UnmaOverlayController : MonoBehaviour
             0f,
             m_entityAlarmWindowRect.width - 58f,
             38f));
+    }
+
+    private void RequestEditorClose()
+    {
+        if (m_editorWindowMode == EditorWindowMode.Rule &&
+            HasDraftRuleWork())
+        {
+            m_editorClosePromptOpen = true;
+            GUI.FocusControl(null);
+            return;
+        }
+        CloseEditorWindow();
+    }
+
+    private void DrawEditorClosePrompt()
+    {
+        GUILayout.Space(24f);
+        GUILayout.Label(
+            "MELDUNGSEDITOR SCHLIESSEN?",
+            m_warningBannerStyle,
+            GUILayout.Height(58f));
+        GUILayout.Label(
+            "Der aktuelle Entwurf ist noch geöffnet. Du kannst ihn jetzt " +
+            "speichern, minimieren und später fortsetzen oder verwerfen.",
+            m_labelStyle);
+        GUILayout.Space(18f);
+        GUILayout.BeginHorizontal();
+        GUI.enabled = m_draftConditions.Count > 0 &&
+                      GetDraftTargetPanel() != null;
+        if (GUILayout.Button(
+                "SPEICHERN & SCHLIESSEN",
+                m_primaryButtonStyle,
+                GUILayout.Height(42f)))
+        {
+            if (SaveDraftRule(m_audio.GetSoundOptions()))
+            {
+                CloseEditorWindow();
+            }
+        }
+        GUI.enabled = true;
+        if (GUILayout.Button(
+                "MINIMIEREN",
+                m_buttonStyle,
+                GUILayout.Height(42f)))
+        {
+            CloseEditorWindow();
+        }
+        if (GUILayout.Button(
+                "VERWERFEN",
+                m_dangerButtonStyle,
+                GUILayout.Height(42f)))
+        {
+            ResetDraftRule();
+            CloseEditorWindow();
+            SetStatus("Entwurf verworfen.");
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Space(12f);
+        if (GUILayout.Button(
+                "ZURÜCK ZUM EDITOR",
+                m_buttonStyle,
+                GUILayout.Width(230f),
+                GUILayout.Height(34f)))
+        {
+            m_editorClosePromptOpen = false;
+        }
+    }
+
+    private void CloseEditorWindow()
+    {
+        m_editorClosePromptOpen = false;
+        m_entityAlarmWindowOpen = false;
+        m_openEntityAlarmAfterInspection = false;
+        CancelEditorResizeCapture();
+        GUI.FocusControl(null);
     }
 
     private void DrawNewPanelWindowContent()
@@ -1827,15 +1915,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawEntitySourceSelector(bool inEntityWindow)
     {
-        GUILayout.Label("QUELLOBJEKT", m_sectionStyle);
+        GUILayout.Label("QUELLE", m_sectionStyle);
         GUILayout.BeginHorizontal();
         if (GUILayout.Button(
                 UnmaText.Get("auto.7edb47ed7ea9"),
-                m_primaryButtonStyle,
+                m_selectedEntity != null && m_selectedEntity.EntityId >= 0
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
                 GUILayout.Width(315f),
                 GUILayout.Height(30f)))
         {
             CaptureSelectedEntity(inEntityWindow);
+        }
+        if (GUILayout.Button(
+                "GLOBALE VARIABLEN",
+                m_selectedEntity?.EntityId < 0
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(220f),
+                GUILayout.Height(30f)))
+        {
+            SelectGlobalMetricSource(false);
         }
         GUILayout.Label(
             m_selectedEntity == null
@@ -2413,6 +2513,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             ResetDraftRule();
             SetStatus(UnmaText.Get("auto.8df90cb55cac"));
+        }
+        if (!string.IsNullOrWhiteSpace(m_editingRuleId))
+        {
+            var confirmingDelete = string.Equals(
+                    m_pendingRuleDeleteId,
+                    m_editingRuleId,
+                    StringComparison.Ordinal) &&
+                Time.realtimeSinceStartup <= m_pendingRuleDeleteUntil;
+            if (GUILayout.Button(
+                    confirmingDelete
+                        ? "ERNEUT: MELDUNG LÖSCHEN"
+                        : "MELDUNG LÖSCHEN",
+                    m_dangerButtonStyle,
+                    GUILayout.Width(230f),
+                    GUILayout.Height(34f)))
+            {
+                DeleteEditedRule(confirmingDelete);
+            }
         }
         GUILayout.EndHorizontal();
     }
@@ -3651,7 +3769,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             if (HasDraftRuleWork())
             {
                 OpenRuleEditorWindow();
-                SetStatus(
+                SetDraftConflictStatus(
                     UnmaText.Get("auto.67e43fb81ece") +
                     UnmaText.Get("auto.90f638ce60bc"));
                 return true;
@@ -3690,7 +3808,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else if (firstCondition != null)
         {
-            RequestEntityInspection(firstCondition.EntityId, true);
+            OpenConditionSource(firstCondition, true);
         }
         else
         {
@@ -4053,7 +4171,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             if (HasDraftRuleWork())
             {
-                SetStatus(
+                SetDraftConflictStatus(
                     UnmaText.Get("auto.4683ec5b7d62") +
                     UnmaText.Get("auto.8dd3eb1fc170") +
                     UnmaText.Get("auto.bdbb3a94176a") +
@@ -4081,7 +4199,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         if (HasDraftRuleWork())
         {
-            SetStatus(
+            SetDraftConflictStatus(
                 UnmaText.Get("auto.4683ec5b7d62") +
                 UnmaText.Get("auto.2f8c34a0d52c") +
                 UnmaText.Get("auto.3b8557a9f488") +
@@ -4222,6 +4340,72 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         RequestEntityInspection(entity.Id.Value, openEntityAlarmWindow);
+    }
+
+    private void OpenConditionSource(
+        ConditionDefinition condition,
+        bool openEntityAlarmWindow)
+    {
+        if (condition != null && SystemMetricCatalog.TryParseRulePath(
+                condition.MetricPath,
+                out _))
+        {
+            SelectGlobalMetricSource(false);
+            if (openEntityAlarmWindow)
+            {
+                OpenRuleEditorWindow();
+            }
+            return;
+        }
+        if (condition != null)
+        {
+            RequestEntityInspection(
+                condition.EntityId,
+                openEntityAlarmWindow);
+        }
+    }
+
+    private void SelectGlobalMetricSource(bool preserveSelection)
+    {
+        var selectedPath = preserveSelection &&
+                           m_selectedMetricIndex >= 0 &&
+                           m_selectedMetricIndex < m_selectedMetrics.Count
+            ? m_selectedMetrics[m_selectedMetricIndex].Path
+            : "";
+        var referencePath = preserveSelection &&
+                            m_selectedReferenceMetricIndex >= 0 &&
+                            m_selectedReferenceMetricIndex <
+                            m_selectedMetrics.Count
+            ? m_selectedMetrics[m_selectedReferenceMetricIndex].Path
+            : "";
+        var values = m_runtime.GetSystemMetricValues();
+        var metrics = SystemMetricCatalog.All
+            .Select(metric => new MetricDescriptor(
+                SystemMetricCatalog.ToRulePath(metric.Id),
+                metric.Label,
+                values.TryGetValue(metric.Id, out var value) ? value : 0d,
+                metric.Unit))
+            .ToArray();
+        m_selectedEntity = new EntityInspectionSnapshot(
+            -1,
+            "GLOBALE VARIABLEN",
+            "GLOBAL",
+            "",
+            "",
+            metrics);
+        m_selectedMetrics = metrics;
+        m_selectedMetricIndex = preserveSelection
+            ? FindMetricIndex(selectedPath)
+            : 0;
+        m_selectedReferenceMetricIndex = preserveSelection
+            ? FindMetricIndex(referencePath)
+            : 0;
+        m_metricPickerOpen = false;
+        m_referenceMetricPickerOpen = false;
+        if (!preserveSelection)
+        {
+            SetStatus("Globale Variablen als Quelle ausgewählt.");
+        }
     }
 
     private void RequestEntityInspection(
@@ -4427,12 +4611,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         SetStatus(UnmaText.Get("auto.af3edd1b9f09"));
     }
 
-    private void SaveDraftRule(IReadOnlyList<SoundOption> sounds)
+    private bool SaveDraftRule(IReadOnlyList<SoundOption> sounds)
     {
         var panel = GetDraftTargetPanel();
         if (panel == null || m_draftConditions.Count == 0)
         {
-            return;
+            return false;
         }
 
         for (var index = 0; index < m_draftConditions.Count; index++)
@@ -4445,7 +4629,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 SetStatus(
                     UnmaText.Get("auto.cb85d7309ac1") + (index + 1) +
                     UnmaText.Get("auto.ddb8c3cdbc29"));
-                return;
+                return false;
             }
             m_draftConditions[index].Threshold = threshold;
             if (m_draftConditions[index].ValueMode ==
@@ -4456,7 +4640,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 SetStatus(
                     UnmaText.Get("auto.21ca7079c12b") + (index + 1) +
                     UnmaText.Get("auto.115b04808134"));
-                return;
+                return false;
             }
             if (m_draftConditions[index].ValueMode ==
                     ConditionValueMode.PercentOfReference &&
@@ -4468,7 +4652,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 SetStatus(
                     UnmaText.Get("auto.53c26ac33af4") + (index + 1) +
                     UnmaText.Get("auto.be2c20cf5599"));
-                return;
+                return false;
             }
         }
 
@@ -4490,7 +4674,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SetStatus(
                 UnmaText.Get("auto.575fe354a165") +
                 UnmaText.Get("auto.e60fb9e527e6"));
-            return;
+            return false;
         }
         var soundId = isEditing && !m_draftSoundChanged
             ? m_originalDraftSoundId
@@ -4519,7 +4703,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SetStatus(
                 UnmaText.Get("auto.5df942eb6687") +
                 m_runtime.LastPersistenceError);
-            return;
+            return false;
         }
         var wasEditing = existingRule != null;
         var savedPanelId = panel.Id;
@@ -4529,6 +4713,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             wasEditing
                 ? UnmaText.Get("auto.961c0245ef89")
                 : UnmaText.Get("auto.fb19aab1dadd"));
+        return true;
     }
 
     private void BeginEditingRule(
@@ -4566,6 +4751,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void ResetDraftRule()
     {
+        m_draftConflictMessage = "";
+        m_draftConflictMessageUntil = 0f;
+        m_editorClosePromptOpen = false;
         m_draftPreferredSlotIndex = -1;
         m_editingRuleId = "";
         m_draftConditions.Clear();
@@ -4598,7 +4786,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (HasDraftRuleWork())
         {
             OpenRuleEditorWindow();
-            SetStatus(
+            SetDraftConflictStatus(
                 UnmaText.Get("auto.48d5f7bcd7c1"));
             return;
         }
@@ -4617,7 +4805,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (HasDraftRuleWork())
         {
             OpenRuleEditorWindow();
-            SetStatus(
+            SetDraftConflictStatus(
                 UnmaText.Get("auto.48d5f7bcd7c1"));
             return;
         }
@@ -4664,6 +4852,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void OpenRuleEditorWindow()
     {
         m_editorWindowMode = EditorWindowMode.Rule;
+        m_editorClosePromptOpen = false;
         m_entityAlarmWindowOpen = true;
         m_openEntityAlarmAfterInspection = false;
         m_entityAlarmScroll = Vector2.zero;
@@ -5046,6 +5235,53 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             GUILayout.Label(m_statusMessage, m_smallLabelStyle);
         }
+    }
+
+    private void DrawDraftConflictBanner()
+    {
+        if (!string.IsNullOrWhiteSpace(m_draftConflictMessage) &&
+            Time.realtimeSinceStartup < m_draftConflictMessageUntil)
+        {
+            GUILayout.Label(
+                m_draftConflictMessage,
+                m_warningBannerStyle,
+                GUILayout.MinHeight(54f));
+        }
+    }
+
+    private void SetDraftConflictStatus(string message)
+    {
+        m_draftConflictMessage = message;
+        m_draftConflictMessageUntil = float.PositiveInfinity;
+        SetStatus(message);
+    }
+
+    private void DeleteEditedRule(bool confirmed)
+    {
+        var ruleId = m_editingRuleId;
+        if (string.IsNullOrWhiteSpace(ruleId))
+        {
+            return;
+        }
+        if (!confirmed)
+        {
+            m_pendingRuleDeleteId = ruleId;
+            m_pendingRuleDeleteUntil = Time.realtimeSinceStartup + 6f;
+            SetStatus("Zum Löschen der Meldung erneut drücken.");
+            return;
+        }
+        if (!m_runtime.RemoveRule(ruleId))
+        {
+            SetStatus(
+                UnmaText.Get("auto.c1f0ffc84e81") +
+                m_runtime.LastPersistenceError);
+            return;
+        }
+        m_pendingRuleDeleteId = "";
+        m_pendingRuleDeleteUntil = 0f;
+        ResetDraftRule();
+        CloseEditorWindow();
+        SetStatus(UnmaText.Get("auto.61bea0138542"));
     }
 
     private void SetStatus(string message)
@@ -5436,6 +5672,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
             "danger",
             new Color(0.55f, 0.09f, 0.08f),
             new Color(0.75f, 0.13f, 0.10f));
+        m_warningBannerStyle = new GUIStyle(m_sectionStyle)
+        {
+            fontSize = 16,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter,
+            wordWrap = true,
+            normal =
+            {
+                textColor = Color.white,
+                background = SolidTexture(
+                    "draft-warning",
+                    new Color(0.72f, 0.24f, 0.04f, 1f)),
+            },
+        };
         m_resizeHandleStyle = new GUIStyle(m_buttonStyle)
         {
             fontSize = 16,

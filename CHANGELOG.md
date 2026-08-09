@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.10 – 2026-08-09
+
+- Eigene Meldungsregeln können jetzt globale Spielvariablen wie Bevölkerung,
+  Arbeitsreserve, Nahrungsvorrat und Gesundheit als Bedingungen verwenden.
+- Ein anderer ungespeicherter Entwurf wird im Meldungseditor dauerhaft durch
+  ein großes Warnbanner hervorgehoben.
+- Beim Schließen des Meldungseditors stehen Speichern, Minimieren und Verwerfen
+  zur Auswahl; bestehende eigene Meldungen lassen sich direkt dort löschen.
+- Ein fehlertoleranter JSON-Datei-Export stellt aktive Meldungen und den
+  Panelzustand für optionale externe UNMA-Anzeigen bereit.
+
 ## 0.9.9 – 2026-08-09
 
 - Verbliebene fest eingebaute deutsche Texte bei Lager-, Transport- und

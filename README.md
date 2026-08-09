@@ -70,6 +70,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
   werden für Lager, Förderer/Rohre und Fahrzeugfracht automatisch empfohlen.
+- Bedingungen können statt eines Spielobjekts auch **GLOBALE VARIABLEN** wie
+  Bevölkerung, Arbeitsreserve, Nahrungsvorrat oder Gesundheitswerte verwenden.
+- Beim Schließen bietet der Meldungseditor Speichern, Minimieren oder Verwerfen
+  an; bestehende eigene Meldungen lassen sich direkt im Editor löschen.
 - Automatische Erkennung öffentlicher numerischer und boolescher Messwerte von
   Gebäuden, Lagern, Fahrzeugen, Rohren und Förderbändern.
 - Offene Erweiterungsschnittstelle für andere Mods: aktive Provider können

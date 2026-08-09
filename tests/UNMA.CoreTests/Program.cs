@@ -25,6 +25,7 @@ internal static class Program
         TestAlarmHistoryState();
         TestSystemAlarmSelection();
         TestSystemMetricMath();
+        TestGlobalRuleMetricPaths();
         TestWindowResizeMath();
         TestPanelTopologyPolicy();
         TestEntityVanillaSlotPolicy();
@@ -41,6 +42,18 @@ internal static class Program
         TestExternalDefinitionLoader();
         Console.WriteLine(
             $"UNMA core tests passed: {s_assertions} assertions.");
+    }
+
+    private static void TestGlobalRuleMetricPaths()
+    {
+        var path = SystemMetricCatalog.ToRulePath("population.total");
+        AreEqual("$global:population.total", path);
+        IsTrue(SystemMetricCatalog.TryParseRulePath(path, out var metricId));
+        AreEqual("population.total", metricId);
+        IsFalse(SystemMetricCatalog.TryParseRulePath(
+            "$stored.quantity",
+            out _));
+        IsFalse(SystemMetricCatalog.TryParseRulePath("$global: ", out _));
     }
 
     private static void TestComparisons()

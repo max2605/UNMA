@@ -21,6 +21,8 @@ public sealed class SystemMetricDescriptor
 
 public static class SystemMetricCatalog
 {
+    public const string RulePathPrefix = "$global:";
+
     private static readonly SystemMetricDescriptor[] s_metrics =
     {
         new("health.value", UnmaText.Get("auto.52dcc85d63dc"), "Punkte"),
@@ -60,6 +62,23 @@ public static class SystemMetricCatalog
             }
         }
         return -1;
+    }
+
+    public static string ToRulePath(string metricId)
+    {
+        return RulePathPrefix + (metricId ?? "").Trim();
+    }
+
+    public static bool TryParseRulePath(string path, out string metricId)
+    {
+        metricId = "";
+        if (string.IsNullOrWhiteSpace(path) ||
+            !path.StartsWith(RulePathPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        metricId = path.Substring(RulePathPrefix.Length).Trim();
+        return metricId.Length > 0;
     }
 
     public static double CalculateWorkerReservePercent(

@@ -1,3 +1,10 @@
+v0.9.10 | 2026-08-09
+* Added global game variables such as population, worker reserve, food supply, and health to custom alarm conditions.
+* Added a persistent, prominent warning when another unsaved alarm draft is still open.
+* Added Save, Minimize, and Discard choices when closing the alarm editor.
+* Added direct deletion of custom alarms from the editor.
+* Added fault-tolerant JSON exports for optional external UNMA displays.
+
 v0.9.9 | 2026-08-09
 * Fixed untranslated metric labels and units when playing in English.
 * Localized comparison-editor labels, display settings, severity labels, missing-source details, and condition counts.
