@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "LÅG LAGERNIVÅ",
+  "alarm.storage_low.detail": "Minst ett lager är fyllt till mindre än 15 procent.",
+  "alarm.tank_pressure_high": "HÖGT TANKTRYCK",
+  "alarm.tank_pressure_high.detail": "Tanktrycket överstiger 90 procent.",
+  "alarm.tank_pressure_very_high": "NÖDLARM FÖR TANKTRYCK",
+  "alarm.tank_pressure_very_high.detail": "Tanktrycket överstiger 98 procent.",
+  "alarm.pump_trip": "SKYDDSUTLÖSNING AV ÖVERFÖRINGSPUMP",
+  "alarm.pump_trip.detail": "Överföringspumpen stoppades av sin skyddskrets.",
+  "metric.storage_fill": "Lagrets fyllnadsgrad",
+  "metric.storage_capacity": "Lagerkapacitet",
+  "metric.pressure_percent": "Tanktryck"
+}

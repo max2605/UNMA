@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "庫存量低",
+  "alarm.storage_low.detail": "至少一個儲存設施的存量低於 15%。",
+  "alarm.tank_pressure_high": "儲槽壓力高",
+  "alarm.tank_pressure_high.detail": "儲槽壓力超過百分之九十。",
+  "alarm.tank_pressure_very_high": "儲槽壓力緊急警報",
+  "alarm.tank_pressure_very_high.detail": "儲槽壓力超過百分之九十八。",
+  "alarm.pump_trip": "輸送泵跳脫",
+  "alarm.pump_trip.detail": "保護迴路已使輸送泵停機。",
+  "metric.storage_fill": "儲存設施填充率",
+  "metric.storage_capacity": "儲存容量",
+  "metric.pressure_percent": "儲槽壓力"
+}

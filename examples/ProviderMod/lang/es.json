@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "NIVEL DE ALMACENAMIENTO BAJO",
+  "alarm.storage_low.detail": "Al menos una unidad de almacenamiento está por debajo del 15 por ciento.",
+  "alarm.tank_pressure_high": "PRESIÓN DEL TANQUE ALTA",
+  "alarm.tank_pressure_high.detail": "La presión del tanque supera el 90 por ciento.",
+  "alarm.tank_pressure_very_high": "EMERGENCIA DE PRESIÓN DEL TANQUE",
+  "alarm.tank_pressure_very_high.detail": "La presión del tanque supera el 98 por ciento.",
+  "alarm.pump_trip": "DISPARO DE LA BOMBA DE TRASIEGO",
+  "alarm.pump_trip.detail": "El circuito de protección detuvo la bomba de trasiego.",
+  "metric.storage_fill": "Nivel de llenado del almacén",
+  "metric.storage_capacity": "Capacidad de almacenamiento",
+  "metric.pressure_percent": "Presión del tanque"
+}

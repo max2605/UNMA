@@ -8,7 +8,36 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="..\..\lang\de.json"
+             Link="lang\de.json"
+             CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\..\source\Domain\AlarmModels.cs"
              Link="Domain\AlarmModels.cs" />
+    <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
+             Link="Domain\PanelSlotProjection.cs" />
+    <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
+             Link="Domain\PanelTopologyPolicy.cs" />
+    <Compile Include="..\..\source\Domain\EntityVanillaSlotPolicy.cs"
+             Link="Domain\EntityVanillaSlotPolicy.cs" />
+    <Compile Include="..\..\source\Domain\CustomRuleLifecyclePolicy.cs"
+             Link="Domain\CustomRuleLifecyclePolicy.cs" />
+    <Compile Include="..\..\source\Domain\SustainedVanillaAlarmPolicy.cs"
+             Link="Domain\SustainedVanillaAlarmPolicy.cs" />
+    <Compile Include="..\..\source\Domain\VanillaNotificationSuppressionPolicy.cs"
+             Link="Domain\VanillaNotificationSuppressionPolicy.cs" />
+    <Compile Include="..\..\source\Audio\MechanicalSirenSynth.cs"
+             Link="Audio\MechanicalSirenSynth.cs" />
+    <Compile Include="..\..\source\Runtime\SystemMetricCatalog.cs"
+             Link="Runtime\SystemMetricCatalog.cs" />
+    <Compile Include="..\..\source\Ui\WindowResizeMath.cs"
+             Link="Ui\WindowResizeMath.cs" />
+    <Compile Include="..\..\source\Api\ExternalApiModels.cs"
+             Link="Api\ExternalApiModels.cs" />
+    <Compile Include="..\..\source\Api\ExternalContractValidator.cs"
+             Link="Api\ExternalContractValidator.cs" />
+    <Compile Include="..\..\source\Api\UnmaApi.cs"
+             Link="Api\UnmaApi.cs" />
+    <Compile Include="..\..\source\Extensions\ExternalDefinitionLoader.cs"
+             Link="Extensions\ExternalDefinitionLoader.cs" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "LAVT LAGERNIVÅ",
+  "alarm.storage_low.detail": "Minst én lagerenhet er under 15 prosent.",
+  "alarm.tank_pressure_high": "HØYT TANKTRYKK",
+  "alarm.tank_pressure_high.detail": "Tanktrykket er over 90 prosent.",
+  "alarm.tank_pressure_very_high": "NØDSITUASJON: TANKTRYKK",
+  "alarm.tank_pressure_very_high.detail": "Tanktrykket er over 98 prosent.",
+  "alarm.pump_trip": "OVERFØRINGSPUMPE UTLØST",
+  "alarm.pump_trip.detail": "Overføringspumpen ble stoppet av vernekretsen.",
+  "metric.storage_fill": "Fyllingsnivå i lager",
+  "metric.storage_capacity": "Lagerkapasitet",
+  "metric.pressure_percent": "Tanktrykk"
+}

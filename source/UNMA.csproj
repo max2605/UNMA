@@ -8,9 +8,10 @@
     <RootNamespace>UNMA</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>0.1.0</Version>
-    <FileVersion>0.1.0.0</FileVersion>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Version>0.9.9</Version>
+    <FileVersion>0.9.9.0</FileVersion>
+    <!-- Keep the public V1 extension ABI bindable across UNMA 0.x updates. -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 
@@ -20,6 +21,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="MultiLangLib">
+      <HintPath>$(APPDATA)\Captain of Industry\Mods\MultiLangLib\MultiLangLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Mafi">
       <HintPath>$(COI_MANAGED)\Mafi.dll</HintPath>
       <Private>false</Private>
@@ -62,6 +67,14 @@
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
       <HintPath>$(COI_MANAGED)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(COI_MANAGED)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(COI_MANAGED)\UnityEngine.UIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UnityWebRequestModule">

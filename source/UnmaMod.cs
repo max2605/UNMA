@@ -1,9 +1,11 @@
 using System;
+using System.Linq;
 using Mafi;
 using Mafi.Collections;
 using Mafi.Core;
 using Mafi.Core.Buildings.Settlements;
 using Mafi.Core.Entities;
+using Mafi.Core.Factory.Transports;
 using Mafi.Core.Game;
 using Mafi.Core.Mods;
 using Mafi.Core.Notifications;
@@ -11,9 +13,13 @@ using Mafi.Core.Population;
 using Mafi.Core.Prototypes;
 using Mafi.Core.Simulation;
 using Mafi.Logging;
+using Mafi.Unity;
 using Mafi.Unity.Audio;
+using Mafi.Unity.Camera;
 using Mafi.Unity.Ui;
 using UnityEngine;
+using UNMA.Localization;
+using UNMA.Extensions;
 using UNMA.Runtime;
 using UNMA.Ui;
 
@@ -37,6 +43,7 @@ public sealed class UnmaMod : IMod
     {
         Manifest = manifest;
         JsonConfig = new ModJsonConfig(this);
+        UnmaText.Initialize(manifest.RootDirectoryPath);
         Log.Info("UNMA: constructed");
     }
 
@@ -50,6 +57,7 @@ public sealed class UnmaMod : IMod
         bool gameWasLoaded)
     {
         EntityMetricCatalog.ConfigureProducts(protosDb);
+        EntityVanillaNotificationCatalog.Configure(protosDb);
     }
 
     public void EarlyInit(DependencyResolver resolver)
@@ -65,17 +73,21 @@ public sealed class UnmaMod : IMod
         m_runtime = new UnmaRuntime(
             resolver.Resolve<INotificationsManager>(),
             resolver.Resolve<IEntitiesManager>(),
+            resolver.Resolve<TransportsManager>(),
             resolver.Resolve<IWorkersManager>(),
             resolver.Resolve<SettlementsManager>(),
             resolver.Resolve<PopsHealthManager>(),
             resolver.Resolve<ISimLoopEvents>(),
             store,
-            ReadSettings());
+            ReadSettings(),
+            DiscoverActiveExternalProviders());
         m_runtime.Initialize();
 
         m_overlay = UnmaOverlayController.Create(
             m_runtime,
             resolver.Resolve<InspectorsManager>(),
+            resolver.Resolve<CameraController>(),
+            resolver.Resolve<IUnityInputMgr>(),
             resolver.Resolve<AudioDb>(),
             Manifest.RootDirectoryPath);
         JsonConfig.OnValueChanged += OnConfigValueChanged;
@@ -114,21 +126,6 @@ public sealed class UnmaMod : IMod
 
     private UnmaSettings ReadSettings()
     {
-        var warning = Math.Max(
-            1,
-            Math.Min(
-                100,
-                JsonConfig.GetInt("healthWarningPercent", 65)));
-        var critical = Math.Max(
-            1,
-            Math.Min(
-                warning,
-                JsonConfig.GetInt("healthCriticalPercent", 45)));
-        var emergency = Math.Max(
-            1,
-            Math.Min(
-                critical,
-                JsonConfig.GetInt("healthEmergencyPercent", 25)));
         return new UnmaSettings
         {
             ShowOnGameStart = JsonConfig.GetBool("showOnGameStart", true),
@@ -140,9 +137,36 @@ public sealed class UnmaMod : IMod
             EnableSystemAlarms = JsonConfig.GetBool(
                 "enableSystemAlarms",
                 true),
-            HealthWarningPercent = warning,
-            HealthCriticalPercent = critical,
-            HealthEmergencyPercent = emergency,
         };
+    }
+
+    private ExternalProviderDescriptor[] DiscoverActiveExternalProviders()
+    {
+        try
+        {
+            return ModsLoader.LoadedAndFailedMods
+                .AsEnumerable()
+                .Where(item => item.LoadError.IsNone)
+                .Select(item => item.Manifest)
+                .Where(manifest => manifest != null)
+                .GroupBy(manifest => manifest.Id, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .Select(manifest => new ExternalProviderDescriptor(
+                    manifest.Id,
+                    manifest.RootDirectoryPath))
+                .ToArray();
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                "UNMA: aktive Mod-Wurzeln konnten nicht vollständig " +
+                "ermittelt werden: " + exception.Message);
+            return new[]
+            {
+                new ExternalProviderDescriptor(
+                    Manifest.Id,
+                    Manifest.RootDirectoryPath),
+            };
+        }
     }
 }

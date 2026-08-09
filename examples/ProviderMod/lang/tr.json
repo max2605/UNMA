@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "DEPOLAMA SEVİYESİ DÜŞÜK",
+  "alarm.storage_low.detail": "En az bir depolama biriminin doluluk oranı yüzde 15'in altında.",
+  "alarm.tank_pressure_high": "TANK BASINCI YÜKSEK",
+  "alarm.tank_pressure_high.detail": "Tank basıncı yüzde 90'ın üzerinde.",
+  "alarm.tank_pressure_very_high": "TANK BASINCI ACİL ALARMI",
+  "alarm.tank_pressure_very_high.detail": "Tank basıncı yüzde 98'in üzerinde.",
+  "alarm.pump_trip": "TRANSFER POMPASI KORUMA AÇMASI",
+  "alarm.pump_trip.detail": "Transfer pompası koruma devresi tarafından durduruldu.",
+  "metric.storage_fill": "Depo doluluk oranı",
+  "metric.storage_capacity": "Depolama kapasitesi",
+  "metric.pressure_percent": "Tank basıncı"
+}

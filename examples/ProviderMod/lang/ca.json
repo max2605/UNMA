@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "NIVELL D'EMMAGATZEMATGE BAIX",
+  "alarm.storage_low.detail": "Com a mínim una unitat d'emmagatzematge està per sota del 15 per cent.",
+  "alarm.tank_pressure_high": "PRESSIÓ DEL TANC ALTA",
+  "alarm.tank_pressure_high.detail": "La pressió del tanc supera el 90 per cent.",
+  "alarm.tank_pressure_very_high": "EMERGÈNCIA DE PRESSIÓ DEL TANC",
+  "alarm.tank_pressure_very_high.detail": "La pressió del tanc supera el 98 per cent.",
+  "alarm.pump_trip": "DISPARADA DE LA BOMBA DE TRANSFERÈNCIA",
+  "alarm.pump_trip.detail": "El circuit de protecció ha aturat la bomba de transferència.",
+  "metric.storage_fill": "Nivell d'ompliment de l'emmagatzematge",
+  "metric.storage_capacity": "Capacitat d'emmagatzematge",
+  "metric.pressure_percent": "Pressió del tanc"
+}

@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "НИЗКИЙ УРОВЕНЬ ЗАПАСОВ",
+  "alarm.storage_low.detail": "Заполнение как минимум одного хранилища ниже 15 процентов.",
+  "alarm.tank_pressure_high": "ВЫСОКОЕ ДАВЛЕНИЕ В РЕЗЕРВУАРЕ",
+  "alarm.tank_pressure_high.detail": "Давление в резервуаре превышает 90 процентов.",
+  "alarm.tank_pressure_very_high": "АВАРИЙНОЕ ДАВЛЕНИЕ В РЕЗЕРВУАРЕ",
+  "alarm.tank_pressure_very_high.detail": "Давление в резервуаре превышает 98 процентов.",
+  "alarm.pump_trip": "ЗАЩИТНОЕ ОТКЛЮЧЕНИЕ ПЕРЕКАЧИВАЮЩЕГО НАСОСА",
+  "alarm.pump_trip.detail": "Перекачивающий насос остановлен цепью защиты.",
+  "metric.storage_fill": "Уровень заполнения хранилища",
+  "metric.storage_capacity": "Вместимость хранилища",
+  "metric.pressure_percent": "Давление в резервуаре"
+}

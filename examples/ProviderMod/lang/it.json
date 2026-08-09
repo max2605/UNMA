@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "LIVELLO DI STOCCAGGIO BASSO",
+  "alarm.storage_low.detail": "Almeno un'unità di stoccaggio è al di sotto del 15 per cento.",
+  "alarm.tank_pressure_high": "PRESSIONE SERBATOIO ALTA",
+  "alarm.tank_pressure_high.detail": "La pressione del serbatoio supera il 90 per cento.",
+  "alarm.tank_pressure_very_high": "EMERGENZA PRESSIONE SERBATOIO",
+  "alarm.tank_pressure_very_high.detail": "La pressione del serbatoio supera il 98 per cento.",
+  "alarm.pump_trip": "INTERVENTO PROTEZIONE POMPA DI TRASFERIMENTO",
+  "alarm.pump_trip.detail": "La pompa di trasferimento è stata arrestata dal circuito di protezione.",
+  "metric.storage_fill": "Livello di riempimento del deposito",
+  "metric.storage_capacity": "Capacità di stoccaggio",
+  "metric.pressure_percent": "Pressione del serbatoio"
+}

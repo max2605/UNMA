@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:unma:external-extension:v1",
+  "title": "UNMA External Extension V1",
+  "description": "Declarative automatic alarm templates supplied by another Captain of Industry mod.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "mod_id",
+    "alarms"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri-reference",
+      "maxLength": 512
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "mod_id": {
+      "$ref": "#/$defs/modId"
+    },
+    "alarms": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/alarm"
+      }
+    }
+  },
+  "$defs": {
+    "modId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "localizationNamespace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192,
+      "pattern": "^\\S+$"
+    },
+    "textKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^multilanglib\\.[A-Za-z0-9][A-Za-z0-9_-]*\\.[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "fallbackText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "metricPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192,
+      "pattern": "^\\S+$"
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "metric",
+        "operator",
+        "threshold"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/metricPath"
+        },
+        "label_key": {
+          "$ref": "#/$defs/textKey"
+        },
+        "label_fallback": {
+          "$ref": "#/$defs/fallbackText"
+        },
+        "operator": {
+          "enum": [
+            "<",
+            "<=",
+            "==",
+            "!=",
+            ">=",
+            ">"
+          ]
+        },
+        "threshold": {
+          "type": "number"
+        },
+        "value_mode": {
+          "enum": [
+            "absolute",
+            "percent_of_reference"
+          ],
+          "default": "absolute"
+        },
+        "reference_metric": {
+          "$ref": "#/$defs/metricPath"
+        },
+        "reference_label_key": {
+          "$ref": "#/$defs/textKey"
+        },
+        "reference_label_fallback": {
+          "$ref": "#/$defs/fallbackText"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "value_mode": {
+                "const": "percent_of_reference"
+              }
+            },
+            "required": [
+              "value_mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "reference_metric"
+            ]
+          }
+        }
+      ]
+    },
+    "alarm": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "prototype_ids",
+        "conditions"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "message_key"
+          ]
+        },
+        {
+          "required": [
+            "message_fallback"
+          ]
+        }
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stableId"
+        },
+        "prototype_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^\\S+$"
+          }
+        },
+        "scope": {
+          "enum": [
+            "aggregate",
+            "per_entity"
+          ],
+          "default": "aggregate"
+        },
+        "panel_id": {
+          "$ref": "#/$defs/stableId"
+        },
+        "localization_namespace": {
+          "$ref": "#/$defs/localizationNamespace"
+        },
+        "message_key": {
+          "$ref": "#/$defs/textKey"
+        },
+        "message_fallback": {
+          "$ref": "#/$defs/fallbackText"
+        },
+        "detail_key": {
+          "$ref": "#/$defs/textKey"
+        },
+        "detail_fallback": {
+          "$ref": "#/$defs/fallbackText"
+        },
+        "severity": {
+          "enum": [
+            "notice",
+            "warning",
+            "critical",
+            "emergency"
+          ],
+          "default": "warning"
+        },
+        "sound_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "default": "auto"
+        },
+        "active_color": {
+          "oneOf": [
+            {
+              "const": "auto"
+            },
+            {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$"
+            }
+          ],
+          "default": "auto"
+        },
+        "auto_acknowledge_on_clear": {
+          "type": "boolean",
+          "default": false
+        },
+        "logic": {
+          "enum": [
+            "all",
+            "any"
+          ],
+          "default": "all"
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/condition"
+          }
+        }
+      }
+    }
+  }
+}
