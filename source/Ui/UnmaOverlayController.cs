@@ -565,7 +565,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawTabButton(TabBoard, UnmaText.Get("tab.board", "MELDETAFEL"));
         DrawTabButton(TabHistory, UnmaText.Get("tab.history", "VERLAUF"));
         DrawTabButton(TabSystem, UnmaText.Get("tab.system", "SYSTEM"));
-        DrawTabButton(TabSounds, UnmaText.Get("tab.sounds", UnmaText.Get("auto.e2056083541e")));
+        DrawTabButton(
+            TabSounds,
+            UnmaText.Get(
+                "tab.notification_options",
+                "NOTIFICATION OPTIONS"));
         DrawTabButton(TabOptions, UnmaText.Get("tab.options", "OPTIONEN"));
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
@@ -736,6 +740,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_boardScroll.y,
             Math.Max(220f, m_windowRect.height - 190f),
             panel.IsDashboard ? null : panel,
+            panel,
             m_entityAssignmentPending && !panel.IsDashboard,
             panel.IsDashboard
                 ? UnmaText.Get("auto.f895fe84e658")
@@ -3086,17 +3091,34 @@ public sealed class UnmaOverlayController : MonoBehaviour
         VanillaNotificationScope scope,
         VanillaNotificationBehavior behavior)
     {
+        SaveVanillaNotificationBehavior(
+            candidate.OverrideId,
+            candidate.Name,
+            scope,
+            behavior,
+            candidate.EntityId,
+            candidate.EntityPrototypeId);
+    }
+
+    private void SaveVanillaNotificationBehavior(
+        string overrideId,
+        string alarmName,
+        VanillaNotificationScope scope,
+        VanillaNotificationBehavior behavior,
+        int entityId,
+        string entityPrototypeId)
+    {
         if (m_runtime.SetVanillaNotificationBehavior(
-                candidate.OverrideId,
+                overrideId,
                 scope,
                 behavior,
-                candidate.EntityId,
-                candidate.EntityPrototypeId))
+                entityId,
+                entityPrototypeId))
         {
             SetStatus(UnmaText.Format(
                 "sounds.override.status_behavior_saved",
                 "Regel gespeichert: {0} · {1}",
-                candidate.Name,
+                alarmName,
                 VanillaBehaviorLabel(behavior)));
         }
         else
@@ -3415,6 +3437,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             detached.Scroll.y,
             Math.Max(180f, detached.Rect.height - 100f),
             null,
+            panel,
             false,
             panel.IsDashboard
                 ? UnmaText.Get("auto.f895fe84e658")
@@ -3432,6 +3455,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         float scrollY,
         float viewportHeight,
         PanelDefinition interactionPanel,
+        PanelDefinition displayPanel,
         bool assignmentPending,
         string emptyMessage,
         bool drawEmptyCells)
@@ -3481,7 +3505,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     GUILayout.Height(TileHeight));
                 if (index < alarms.Count)
                 {
-                    DrawAlarmTile(rect, alarms[index]);
+                    DrawAlarmTile(rect, alarms[index], displayPanel);
                     if (assignmentPending && interactionPanel != null)
                     {
                         DrawExistingAssignmentTarget(
@@ -3491,6 +3515,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     }
                     else if (!m_entityAssignmentPending)
                     {
+                        var hasEntityVanillaControls =
+                            IsEntityVanillaTile(
+                                displayPanel,
+                                alarms[index]);
                         var tileClickRect =
                             TryGetNavigationEntityId(
                                 alarms[index],
@@ -3501,6 +3529,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                     rect.width - 35f,
                                     rect.height)
                                 : rect;
+                        if (hasEntityVanillaControls)
+                        {
+                            tileClickRect.height = Math.Max(
+                                0f,
+                                tileClickRect.height - 31f);
+                        }
                         if (GUI.Button(
                                 tileClickRect,
                                 GUIContent.none,
@@ -3508,7 +3542,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         {
                             HandleAlarmTileClick(alarms[index]);
                         }
-                        DrawAlarmNavigationButton(rect, alarms[index]);
+                        if (!hasEntityVanillaControls)
+                        {
+                            DrawAlarmNavigationButton(rect, alarms[index]);
+                        }
                     }
                 }
                 else if (showCreationTarget && index == alarms.Count)
@@ -3650,7 +3687,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         return true;
     }
 
-    private void DrawAlarmTile(Rect rect, AlarmView alarm)
+    private void DrawAlarmTile(
+        Rect rect,
+        AlarmView alarm,
+        PanelDefinition displayPanel)
     {
         var background = new Color(0.83f, 0.84f, 0.82f, 1f);
         if (alarm.IsActive || alarm.IsGoneUnacknowledged)
@@ -3695,9 +3735,121 @@ public sealed class UnmaOverlayController : MonoBehaviour
             (alarm.Name ?? "MELDUNG").ToUpperInvariant(),
             m_tileTitleStyle);
         GUI.Label(
-            new Rect(inner.x + 7f, inner.y + 75f, inner.width - 14f, 25f),
+            new Rect(
+                inner.x + 7f,
+                inner.y + 72f,
+                inner.width - 14f,
+                IsEntityVanillaTile(displayPanel, alarm) ? 13f : 25f),
             alarm.Detail ?? "",
             m_tileDetailStyle);
+        DrawEntityVanillaBehaviorButtons(inner, alarm, displayPanel);
+    }
+
+    private static bool IsEntityVanillaTile(
+        PanelDefinition panel,
+        AlarmView alarm)
+    {
+        return PanelTopologyPolicy.IsEntityPanel(panel) &&
+               alarm != null &&
+               string.Equals(
+                   alarm.Source,
+                   "vanilla",
+                   StringComparison.Ordinal) &&
+               VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                   VanillaNotificationSuppressionPolicy
+                       .GetOverrideIdForSlotId(
+                           PanelSlotProjection.StableAlarmId(alarm)));
+    }
+
+    private void DrawEntityVanillaBehaviorButtons(
+        Rect inner,
+        AlarmView alarm,
+        PanelDefinition panel)
+    {
+        if (!IsEntityVanillaTile(panel, alarm))
+        {
+            return;
+        }
+        var overrideId = VanillaNotificationSuppressionPolicy
+            .GetOverrideIdForSlotId(
+                PanelSlotProjection.StableAlarmId(alarm));
+        var entityBehavior = m_runtime.GetVanillaNotificationBehavior(
+            overrideId,
+            VanillaNotificationScope.Entity,
+            panel.OwnerEntityId,
+            panel.OwnerEntityPrototypeId);
+        var prototypeBehavior = m_runtime.GetVanillaNotificationBehavior(
+            overrideId,
+            VanillaNotificationScope.EntityPrototype,
+            panel.OwnerEntityId,
+            panel.OwnerEntityPrototypeId);
+        var gap = 4f;
+        var width = (inner.width - 14f - gap) / 2f;
+        var y = inner.yMax - 24f;
+        var entityRect = new Rect(inner.x + 7f, y, width, 20f);
+        var prototypeRect = new Rect(
+            entityRect.xMax + gap,
+            y,
+            width,
+            20f);
+        if (GUI.Button(
+                entityRect,
+                UnmaText.Get("alarm_tile.object", "OBJECT") + ": " +
+                CompactVanillaBehaviorLabel(entityBehavior),
+                VanillaBehaviorButtonStyle(entityBehavior)))
+        {
+            SaveVanillaNotificationBehavior(
+                overrideId,
+                alarm.Name,
+                VanillaNotificationScope.Entity,
+                NextVanillaBehavior(entityBehavior),
+                panel.OwnerEntityId,
+                panel.OwnerEntityPrototypeId);
+        }
+        if (!string.IsNullOrWhiteSpace(panel.OwnerEntityPrototypeId) &&
+            GUI.Button(
+                prototypeRect,
+                UnmaText.Get("alarm_tile.type", "TYPE") + ": " +
+                CompactVanillaBehaviorLabel(prototypeBehavior),
+                VanillaBehaviorButtonStyle(prototypeBehavior)))
+        {
+            SaveVanillaNotificationBehavior(
+                overrideId,
+                alarm.Name,
+                VanillaNotificationScope.EntityPrototype,
+                NextVanillaBehavior(prototypeBehavior),
+                panel.OwnerEntityId,
+                panel.OwnerEntityPrototypeId);
+        }
+    }
+
+    private GUIStyle VanillaBehaviorButtonStyle(
+        VanillaNotificationBehavior behavior)
+    {
+        return behavior == VanillaNotificationBehavior.Hidden ||
+               behavior == VanillaNotificationBehavior.Ignored
+            ? m_dangerButtonStyle
+            : behavior == VanillaNotificationBehavior.Normal
+                ? m_primaryButtonStyle
+                : m_buttonStyle;
+    }
+
+    private static string CompactVanillaBehaviorLabel(
+        VanillaNotificationBehavior behavior)
+    {
+        return behavior switch
+        {
+            VanillaNotificationBehavior.Silent => UnmaText.Get(
+                "alarm_tile.behavior_silent",
+                "SILENT"),
+            VanillaNotificationBehavior.Hidden => UnmaText.Get(
+                "alarm_tile.behavior_hidden",
+                "HIDDEN"),
+            VanillaNotificationBehavior.Ignored => UnmaText.Get(
+                "alarm_tile.behavior_ignored",
+                "IGNORED"),
+            _ => UnmaText.Get("alarm_tile.behavior_normal", "ON"),
+        };
     }
 
     private void DrawAlarmNavigationButton(Rect tileRect, AlarmView alarm)

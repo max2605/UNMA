@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.6 – 2026-08-09
+
+- Der bisherige Tab `TÖNE` heißt jetzt `MELDUNGSOPTIONEN` und bündelt damit
+  treffender die Behandlung, Sichtbarkeit und Audioeinstellungen vorhandener
+  Spielmeldungen.
+- Objektbezogene Tafeln zeigen bekannte Vanilla-Meldungen des jeweiligen
+  Objekttyps dauerhaft als weiße, inaktive Vorschau an. Direkt im Meldeschlitz
+  lassen sich die vier Behandlungsmodi für das einzelne Objekt oder für alle
+  Objekte desselben Typs durchschalten.
+
 ## 0.9.5 – 2026-08-09
 
 - Vanilla-Meldungen können pro Objekt oder Objektprototyp jetzt vollständig

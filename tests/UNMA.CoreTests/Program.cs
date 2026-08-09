@@ -27,6 +27,7 @@ internal static class Program
         TestSystemMetricMath();
         TestWindowResizeMath();
         TestPanelTopologyPolicy();
+        TestEntityVanillaSlotPolicy();
         TestCustomRuleLifecyclePolicy();
         TestPanelSlotProjection();
         TestConfigurationRoundTrip();
@@ -404,6 +405,47 @@ internal static class Program
             restoredEntityPanel.OwnerEntityType);
         AreEqual(1, restored.Rules[0].LinkedPanelIds.Count);
         AreEqual("global-two", restored.Rules[0].LinkedPanelIds[0]);
+    }
+
+    private static void TestEntityVanillaSlotPolicy()
+    {
+        var source = new PanelSlotDefinition
+        {
+            AlarmId = "vanilla:TruckCannotDeliver:entity:17",
+            DisplayName = "Truck cannot deliver",
+            Detail = "TruckCannotDeliver · Truck 17",
+            Source = "vanilla",
+            Severity = AlarmSeverity.Warning,
+            ActiveColor = "#AA3300",
+        };
+        var panel = new PanelDefinition
+        {
+            Id = "entity-42",
+            OwnerEntityId = 42,
+            OwnerEntityTitle = "Truck 42",
+            OwnerEntityPrototypeId = "TruckT2",
+        };
+
+        IsTrue(EntityVanillaSlotPolicy.Synchronize(
+            panel,
+            new[] { source, source }));
+        AreEqual(1, panel.Slots.Count);
+        AreEqual(
+            "vanilla:TruckCannotDeliver:entity:42",
+            panel.Slots[0].AlarmId);
+        AreEqual(
+            "TruckCannotDeliver · Truck 42",
+            panel.Slots[0].Detail);
+        AreEqual("#AA3300", panel.Slots[0].ActiveColor);
+        IsTrue(EntityVanillaSlotPolicy.IsForEntity(panel.Slots[0], 42));
+        IsFalse(EntityVanillaSlotPolicy.IsForEntity(panel.Slots[0], 17));
+        IsFalse(EntityVanillaSlotPolicy.Synchronize(panel, new[] { source }));
+
+        var globalPanel = new PanelDefinition { OwnerEntityId = -1 };
+        IsFalse(EntityVanillaSlotPolicy.Synchronize(
+            globalPanel,
+            new[] { source }));
+        AreEqual(0, globalPanel.Slots.Count);
     }
 
     private static void TestCustomRuleLifecyclePolicy()

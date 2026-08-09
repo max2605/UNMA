@@ -1,3 +1,8 @@
+v0.9.6 | 2026-08-09
+* Renamed the Sounds tab to Notification Options.
+* Added inactive Vanilla alarm previews to individual object panels.
+* Added direct per-object and per-object-type suppression controls to Vanilla alarm tiles.
+
 v0.9.5 | 2026-08-09
 * Added a Do Not Log / Ignore Completely mode for Vanilla notifications.
 * Added per-object and per-prototype cleanup of matching active and recent UNMA history entries when complete suppression is enabled.

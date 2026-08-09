@@ -656,6 +656,26 @@ public sealed class UnmaRuntime : IDisposable
 
         lock (m_persistenceGate)
         {
+            PanelSlotDefinition[] runtimeVanillaSlots;
+            lock (m_gate)
+            {
+                runtimeVanillaSlots = m_alarms.Values
+                    .Select(state => state.View)
+                    .Where(view =>
+                        string.Equals(
+                            view.Source,
+                            "vanilla",
+                            StringComparison.Ordinal) &&
+                        (view.EntityId == entityId ||
+                         !string.IsNullOrWhiteSpace(entityPrototypeId) &&
+                         string.Equals(
+                             view.EntityPrototypeId,
+                             entityPrototypeId,
+                             StringComparison.Ordinal)))
+                    .Select(PanelSlotProjection.CreateSlot)
+                    .Where(slot => slot != null)
+                    .ToArray();
+            }
             PanelDefinition panel;
             var wasCreated = false;
             string previousName = null;
@@ -666,6 +686,7 @@ public sealed class UnmaRuntime : IDisposable
             var previousIncludeVanilla = false;
             var previousIncludeSystem = false;
             var previousIsDashboard = false;
+            List<PanelSlotDefinition> previousSlots = null;
             lock (m_configurationGate)
             {
                 panel = Configuration.Panels.FirstOrDefault(candidate =>
@@ -679,7 +700,7 @@ public sealed class UnmaRuntime : IDisposable
                         Id = CreateEntityPanelIdLocked(entityId),
                         Name = EntityPanelDisplayName(entityId, entityTitle),
                         Columns = 3,
-                        IncludeVanilla = false,
+                        IncludeVanilla = true,
                         IncludeSystem = false,
                         NotificationFilter = "",
                         IsDashboard = false,
@@ -702,16 +723,44 @@ public sealed class UnmaRuntime : IDisposable
                     previousIncludeVanilla = panel.IncludeVanilla;
                     previousIncludeSystem = panel.IncludeSystem;
                     previousIsDashboard = panel.IsDashboard;
+                    previousSlots = panel.Slots
+                        .Select(PanelSlotProjection.CloneSlot)
+                        .ToList();
                     panel.Name = EntityPanelDisplayName(entityId, entityTitle);
                     panel.OwnerEntityTitle = entityTitle?.Trim() ?? "";
                     panel.OwnerEntityPrototypeId =
                         entityPrototypeId?.Trim() ?? "";
                     panel.OwnerEntityType = entityType?.Trim() ?? "";
-                    panel.IncludeVanilla = false;
+                    panel.IncludeVanilla = true;
                     panel.IncludeSystem = false;
                     panel.IsDashboard = false;
                     panel.OwnerEntityId = entityId;
                 }
+
+                var knownPrototypeSlots = string.IsNullOrWhiteSpace(
+                        panel.OwnerEntityPrototypeId)
+                    ? Array.Empty<PanelSlotDefinition>()
+                    : Configuration.Panels
+                        .Where(candidate =>
+                            candidate != null &&
+                            PanelTopologyPolicy.IsEntityPanel(candidate) &&
+                            candidate.OwnerEntityId != entityId &&
+                            string.Equals(
+                                candidate.OwnerEntityPrototypeId,
+                                panel.OwnerEntityPrototypeId,
+                                StringComparison.Ordinal))
+                        .SelectMany(candidate =>
+                            candidate.Slots ??
+                            new List<PanelSlotDefinition>())
+                        .Where(slot => string.Equals(
+                            slot?.Source,
+                            "vanilla",
+                            StringComparison.Ordinal))
+                        .Select(PanelSlotProjection.CloneSlot)
+                        .ToArray();
+                EntityVanillaSlotPolicy.Synchronize(
+                    panel,
+                    runtimeVanillaSlots.Concat(knownPrototypeSlots));
             }
 
             if (SaveConfiguration())
@@ -735,6 +784,7 @@ public sealed class UnmaRuntime : IDisposable
                     panel.IncludeVanilla = previousIncludeVanilla;
                     panel.IncludeSystem = previousIncludeSystem;
                     panel.IsDashboard = previousIsDashboard;
+                    panel.Slots = previousSlots;
                 }
             }
             return null;
@@ -5454,6 +5504,12 @@ public sealed class UnmaRuntime : IDisposable
             return false;
         }
         if (PanelTopologyPolicy.IsEntityPanel(panel) &&
+            string.Equals(view.Source, "vanilla", StringComparison.Ordinal))
+        {
+            return panel.IncludeVanilla &&
+                   view.EntityId == panel.OwnerEntityId;
+        }
+        if (PanelTopologyPolicy.IsEntityPanel(panel) &&
             !string.Equals(view.Source, "custom", StringComparison.Ordinal))
         {
             return false;
@@ -5513,9 +5569,9 @@ public sealed class UnmaRuntime : IDisposable
         foreach (var panel in Configuration.Panels.Where(
                      PanelTopologyPolicy.IsEntityPanel))
         {
-            if (panel.IncludeVanilla)
+            if (!panel.IncludeVanilla)
             {
-                panel.IncludeVanilla = false;
+                panel.IncludeVanilla = true;
                 changed = true;
             }
             if (panel.IncludeSystem)
@@ -5540,6 +5596,12 @@ public sealed class UnmaRuntime : IDisposable
         PanelSlotDefinition slot)
     {
         if (!PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return true;
+        }
+        if (EntityVanillaSlotPolicy.IsForEntity(
+                slot,
+                panel.OwnerEntityId))
         {
             return true;
         }
