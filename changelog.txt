@@ -1,0 +1,26 @@
+v0.9.4 | 2026-08-09
+* Added a Mod Hub compatible changelog file.
+
+v0.9.3 | 2026-08-09
+* Added Normal, Log Without Sound, and Log Without Sound + Hide modes for existing Vanilla notifications.
+* Added separate notification handling for one object or all objects of the same prototype.
+* Kept hidden notifications in history while removing them from HOME, active counters, and UNMA audio.
+* Migrated previous global notification suppression settings to configuration schema 13.
+
+v0.9.2 | 2026-08-09
+* Fixed autosave failures caused by a saveable runtime event registration.
+* Added complete MultiLangLib catalogs for all 21 supported game locales.
+* Added English user documentation and provider integration documentation.
+
+v0.9.0 | 2026-08-08
+* Added scalable per-entity alarm panels and a separate alarm editor window.
+* Added linked global panels without duplicating alarm state.
+* Added persistent UI scaling and input protection for all UNMA windows.
+
+v0.8.0 | 2026-08-07
+* Added global Vanilla notification suppression in UNMA.
+* Added the active-only HOME dashboard and permanent fixed alarm panels.
+* Added the versioned external mod API and MultiLangLib integration.
+
+v0.1.0 | 2026-08-06
+- Initial release of the configurable industrial alarm annunciator.

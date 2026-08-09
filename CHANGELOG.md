@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.4 – 2026-08-09
+
+- Eine Mod-Hub-kompatible `changelog.txt` liegt jetzt direkt neben dem
+  Manifest und wird in jedem Uploadpaket mitgeliefert.
+
 ## 0.9.3 – 2026-08-09
 
 - Bestehende Vanilla-Meldungen lassen sich im TÖNE-Tab jetzt wahlweise nur für
