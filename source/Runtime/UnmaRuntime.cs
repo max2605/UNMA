@@ -656,6 +656,14 @@ public sealed class UnmaRuntime : IDisposable
 
         lock (m_persistenceGate)
         {
+            var definedVanillaSlots = TryGetLiveEntity(
+                    entityId,
+                    out var liveEntity)
+                ? EntityVanillaNotificationCatalog.DiscoverSlots(
+                    liveEntity,
+                    entityTitle,
+                    ColorFor)
+                : Array.Empty<PanelSlotDefinition>();
             PanelSlotDefinition[] runtimeVanillaSlots;
             lock (m_gate)
             {
@@ -760,7 +768,9 @@ public sealed class UnmaRuntime : IDisposable
                         .ToArray();
                 EntityVanillaSlotPolicy.Synchronize(
                     panel,
-                    runtimeVanillaSlots.Concat(knownPrototypeSlots));
+                    definedVanillaSlots
+                        .Concat(runtimeVanillaSlots)
+                        .Concat(knownPrototypeSlots));
             }
 
             if (SaveConfiguration())

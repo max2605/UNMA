@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7 – 2026-08-09
+
+- Objektpanels lesen die vom Spiel am konkreten Objekt registrierten
+  Vanilla-Dauermeldungen jetzt direkt aus. Dadurch sind alle für dieses Objekt
+  definierten Meldungen bereits vor ihrem ersten Auftreten sichtbar und lassen
+  sich vorsorglich pro Objekt oder Objekttyp unterdrücken.
+- Die maximale Breite der Hauptregister wurde erhöht, damit
+  `MELDUNGSOPTIONEN` auch bei breiten Fenstern vollständig dargestellt wird.
+
 ## 0.9.6 – 2026-08-09
 
 - Der bisherige Tab `TÖNE` heißt jetzt `MELDUNGSOPTIONEN` und bündelt damit

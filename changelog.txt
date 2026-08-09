@@ -1,3 +1,8 @@
+v0.9.7 | 2026-08-09
+* Added all Vanilla continuous notifications registered on an object to its individual panel before they occur.
+* Added preventive per-object and per-object-type suppression for these potential notifications.
+* Increased the main tab width so Notification Options is displayed completely.
+
 v0.9.6 | 2026-08-09
 * Renamed the Sounds tab to Notification Options.
 * Added inactive Vanilla alarm previews to individual object panels.

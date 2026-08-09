@@ -5007,7 +5007,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var width = Mathf.Clamp(
             (m_windowRect.width - 105f) / 5f,
             88f,
-            150f);
+            190f);
         if (GUILayout.Button(
                 label,
                 m_tab == tab ? m_primaryButtonStyle : m_buttonStyle,
