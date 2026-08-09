@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "LAOVARU MADAL",
+  "alarm.storage_low.detail": "Vähemalt ühe lao täituvus on alla 15 protsendi.",
+  "alarm.tank_pressure_high": "PAAGI RÕHK KÕRGE",
+  "alarm.tank_pressure_high.detail": "Paagi rõhk on üle 90 protsendi.",
+  "alarm.tank_pressure_very_high": "PAAGI RÕHU AVARII",
+  "alarm.tank_pressure_very_high.detail": "Paagi rõhk on üle 98 protsendi.",
+  "alarm.pump_trip": "SIIRDEPUMBA KAITSESEISKUMINE",
+  "alarm.pump_trip.detail": "Siirdepump peatati kaitseahela toimel.",
+  "metric.storage_fill": "Lao täituvus",
+  "metric.storage_capacity": "Lao mahutavus",
+  "metric.pressure_percent": "Paagi rõhk"
+}

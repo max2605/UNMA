@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "NÍZKÝ STAV ZÁSOBY",
+  "alarm.storage_low.detail": "Alespoň jeden sklad je naplněn na méně než 15 procent.",
+  "alarm.tank_pressure_high": "VYSOKÝ TLAK V NÁDRŽI",
+  "alarm.tank_pressure_high.detail": "Tlak v nádrži překročil 90 procent.",
+  "alarm.tank_pressure_very_high": "NOUZOVÝ TLAK V NÁDRŽI",
+  "alarm.tank_pressure_very_high.detail": "Tlak v nádrži překročil 98 procent.",
+  "alarm.pump_trip": "OCHRANNÉ ODSTAVENÍ PŘEČERPÁVACÍHO ČERPADLA",
+  "alarm.pump_trip.detail": "Přečerpávací čerpadlo bylo odstaveno ochranným obvodem.",
+  "metric.storage_fill": "Úroveň naplnění skladu",
+  "metric.storage_capacity": "Kapacita skladu",
+  "metric.pressure_percent": "Tlak v nádrži"
+}

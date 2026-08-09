@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.1 – 2026-08-09
+
+- Der Abriss-Listener verwendet jetzt ausdrücklich die nicht speicherbare
+  COI-Eventregistrierung. Autosaves versuchen dadurch nicht mehr,
+  `UnmaRuntime` als Callback-Besitzer zu serialisieren und brechen nicht mehr
+  wegen einer fehlenden `Serialize`-Methode ab.
+- Die LangLib-Kataloge von UNMA und des vollständigen Providerbeispiels decken
+  jetzt alle 21 mit der aktuellen COI-Version ausgelieferten Locale-Dateien ab.
+  Eine neue deutschsprachige Integrationsanleitung erklärt JSON- und C#-API,
+  mehrsprachige Providermeldungen, Fallbacks und die Release-Prüfung.
+
 ## 0.9.0 – 2026-08-08
 
 - Der Meldungseditor ist jetzt ein eigenes verschiebbares und skalierbares

@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "库存量低",
+  "alarm.storage_low.detail": "至少一个储存设施的存量低于 15%。",
+  "alarm.tank_pressure_high": "储罐压力高",
+  "alarm.tank_pressure_high.detail": "储罐压力超过百分之九十。",
+  "alarm.tank_pressure_very_high": "储罐压力紧急报警",
+  "alarm.tank_pressure_very_high.detail": "储罐压力超过百分之九十八。",
+  "alarm.pump_trip": "输送泵跳闸",
+  "alarm.pump_trip.detail": "保护回路已使输送泵停机。",
+  "metric.storage_fill": "仓储填充率",
+  "metric.storage_capacity": "储存容量",
+  "metric.pressure_percent": "储罐压力"
+}

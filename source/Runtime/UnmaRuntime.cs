@@ -133,6 +133,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_removedEntitiesGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
+    private readonly IEventNonSaveable<IEntity> m_entityRemovedEvent;
     private readonly IWorkersManager m_workersManager;
     private readonly SettlementsManager m_settlementsManager;
     private readonly PopsHealthManager m_healthManager;
@@ -194,6 +195,9 @@ public sealed class UnmaRuntime : IDisposable
     {
         m_notificationsManager = notificationsManager;
         m_entitiesManager = entitiesManager;
+        // Narrow the reference at construction time so saveable Add/Remove
+        // are not even available to this runtime-only subscription.
+        m_entityRemovedEvent = entitiesManager.EntityRemoved;
         m_workersManager = workersManager;
         m_settlementsManager = settlementsManager;
         m_healthManager = healthManager;
@@ -238,7 +242,13 @@ public sealed class UnmaRuntime : IDisposable
 
     public void Initialize()
     {
-        m_entitiesManager.EntityRemoved.Add(this, OnEntityRemoved);
+        // This callback owns runtime-only cleanup state. Registering it with
+        // Add() would make COI serialize this UnmaRuntime owner with the game
+        // save and fail because runtime services are intentionally not save
+        // data. The non-saveable subscription is the matching lifecycle API.
+        m_entityRemovedEvent.AddNonSaveable(
+            this,
+            OnEntityRemoved);
         m_notificationsManager.NotificationAdded += OnNotificationAdded;
         m_notificationsManager.NotificationRemoved += OnNotificationRemoved;
         m_notificationsManager.NotificationSuppressChanged +=
@@ -2625,7 +2635,9 @@ public sealed class UnmaRuntime : IDisposable
         m_notificationsManager.NotificationRemoved -= OnNotificationRemoved;
         m_notificationsManager.NotificationSuppressChanged -=
             OnNotificationSuppressChanged;
-        m_entitiesManager.EntityRemoved.Remove(this, OnEntityRemoved);
+        m_entityRemovedEvent.RemoveNonSaveable(
+            this,
+            OnEntityRemoved);
     }
 
     private void OnUpdateEndForUi()

@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "貯蔵レベル低",
+  "alarm.storage_low.detail": "少なくとも1つの貯蔵施設の貯蔵量が15パーセント未満です。",
+  "alarm.tank_pressure_high": "タンク圧力高",
+  "alarm.tank_pressure_high.detail": "タンク圧力が90パーセントを超えています。",
+  "alarm.tank_pressure_very_high": "タンク圧力緊急警報",
+  "alarm.tank_pressure_very_high.detail": "タンク圧力が98パーセントを超えています。",
+  "alarm.pump_trip": "移送ポンプトリップ",
+  "alarm.pump_trip.detail": "移送ポンプが保護回路によって停止しました。",
+  "metric.storage_fill": "貯蔵充填率",
+  "metric.storage_capacity": "貯蔵容量",
+  "metric.pressure_percent": "タンク圧力"
+}

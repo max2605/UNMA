@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "LAAG VOORRAADNIVEAU",
+  "alarm.storage_low.detail": "Minstens één opslageenheid is voor minder dan 15 procent gevuld.",
+  "alarm.tank_pressure_high": "HOGE TANKDRUK",
+  "alarm.tank_pressure_high.detail": "De tankdruk is hoger dan 90 procent.",
+  "alarm.tank_pressure_very_high": "NOODALARM TANKDRUK",
+  "alarm.tank_pressure_very_high.detail": "De tankdruk is hoger dan 98 procent.",
+  "alarm.pump_trip": "TRANSFERPOMP DOOR BEVEILIGING UITGESCHAKELD",
+  "alarm.pump_trip.detail": "De transferpomp is door het beveiligingscircuit gestopt.",
+  "metric.storage_fill": "Vulgraad van opslag",
+  "metric.storage_capacity": "Opslagcapaciteit",
+  "metric.pressure_percent": "Tankdruk"
+}

@@ -4,7 +4,8 @@ Dieses Verzeichnis zeigt beide UNMA-Extension-V1-Wege in einem kleinen
 Provider-Mod:
 
 - `UNMA/alarms.json` definiert zwei automatisch ausgewertete Meldungen.
-- `lang/de.json` und `lang/en.json` liefern die Texte über LangLib.
+- `lang/*.json` liefert die Texte über LangLib in allen 21 aktuell von COI
+  ausgelieferten Locales; `en.json` bleibt der vollständige Fallback.
 - `UnmaIntegration.cs` registriert einen mod-eigenen Messwert, eine
   automatische C#-Vorlage und eine programmgesteuerte Push-Meldung.
 - `ProviderMod.ApiSample.csproj` kompiliert den isolierten C#-Beispielcode
@@ -21,5 +22,9 @@ bewusst Platzhalter. Ein echter Provider ersetzt sie durch seine eigenen
 Entitätstypen und verwendet deren dauerhaft gespeicherte ID als
 `entityStableId`.
 
-Siehe `docs/external-mod-api.md` für den vollständigen Vertrag und
-`docs/unma-extension-v1.schema.json` für die maschinenlesbare Validierung.
+Siehe [`docs/provider-integration.de.md`](../../docs/provider-integration.de.md)
+für den deutschsprachigen Schnellstart,
+[`docs/external-mod-api.md`](../../docs/external-mod-api.md) für den
+vollständigen Vertrag und
+[`docs/unma-extension-v1.schema.json`](../../docs/unma-extension-v1.schema.json)
+für die maschinenlesbare Validierung.

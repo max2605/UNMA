@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "NISKI POZIOM ZAPASU",
+  "alarm.storage_low.detail": "Co najmniej jeden magazyn jest zapełniony poniżej 15 procent.",
+  "alarm.tank_pressure_high": "WYSOKIE CIŚNIENIE W ZBIORNIKU",
+  "alarm.tank_pressure_high.detail": "Ciśnienie w zbiorniku przekracza 90 procent.",
+  "alarm.tank_pressure_very_high": "ALARMOWE CIŚNIENIE W ZBIORNIKU",
+  "alarm.tank_pressure_very_high.detail": "Ciśnienie w zbiorniku przekracza 98 procent.",
+  "alarm.pump_trip": "WYŁĄCZENIE OCHRONNE POMPY PRZETŁACZAJĄCEJ",
+  "alarm.pump_trip.detail": "Pompa przetłaczająca została zatrzymana przez układ zabezpieczający.",
+  "metric.storage_fill": "Poziom napełnienia magazynu",
+  "metric.storage_capacity": "Pojemność magazynu",
+  "metric.pressure_percent": "Ciśnienie w zbiorniku"
+}

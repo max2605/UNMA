@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "NIVEAU DE STOCKAGE BAS",
+  "alarm.storage_low.detail": "Au moins une unité de stockage est en dessous de 15 pour cent.",
+  "alarm.tank_pressure_high": "PRESSION DU RÉSERVOIR ÉLEVÉE",
+  "alarm.tank_pressure_high.detail": "La pression du réservoir dépasse 90 pour cent.",
+  "alarm.tank_pressure_very_high": "URGENCE PRESSION RÉSERVOIR",
+  "alarm.tank_pressure_very_high.detail": "La pression du réservoir dépasse 98 pour cent.",
+  "alarm.pump_trip": "DÉCLENCHEMENT POMPE DE TRANSFERT",
+  "alarm.pump_trip.detail": "La pompe de transfert a été arrêtée par son circuit de protection.",
+  "metric.storage_fill": "Niveau de remplissage du stockage",
+  "metric.storage_capacity": "Capacité de stockage",
+  "metric.pressure_percent": "Pression du réservoir"
+}

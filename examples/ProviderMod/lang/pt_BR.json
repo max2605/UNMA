@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "NÍVEL DE ARMAZENAMENTO BAIXO",
+  "alarm.storage_low.detail": "Pelo menos uma unidade de armazenamento está abaixo de 15 por cento.",
+  "alarm.tank_pressure_high": "PRESSÃO DO TANQUE ALTA",
+  "alarm.tank_pressure_high.detail": "A pressão do tanque está acima de 90 por cento.",
+  "alarm.tank_pressure_very_high": "EMERGÊNCIA DE PRESSÃO DO TANQUE",
+  "alarm.tank_pressure_very_high.detail": "A pressão do tanque está acima de 98 por cento.",
+  "alarm.pump_trip": "DESARME DA BOMBA DE TRANSFERÊNCIA",
+  "alarm.pump_trip.detail": "A bomba de transferência foi parada pelo circuito de proteção.",
+  "metric.storage_fill": "Nível de enchimento do armazenamento",
+  "metric.storage_capacity": "Capacidade de armazenamento",
+  "metric.pressure_percent": "Pressão do tanque"
+}

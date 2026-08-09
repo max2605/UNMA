@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "저장량 낮음",
+  "alarm.storage_low.detail": "하나 이상의 보관소 적재율이 15퍼센트 미만입니다.",
+  "alarm.tank_pressure_high": "탱크 압력 높음",
+  "alarm.tank_pressure_high.detail": "탱크 압력이 90퍼센트를 초과했습니다.",
+  "alarm.tank_pressure_very_high": "탱크 압력 비상",
+  "alarm.tank_pressure_very_high.detail": "탱크 압력이 98퍼센트를 초과했습니다.",
+  "alarm.pump_trip": "이송 펌프 트립",
+  "alarm.pump_trip.detail": "보호 회로가 이송 펌프를 정지시켰습니다.",
+  "metric.storage_fill": "보관소 적재율",
+  "metric.storage_capacity": "보관 용량",
+  "metric.pressure_percent": "탱크 압력"
+}

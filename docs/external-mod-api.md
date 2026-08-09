@@ -26,7 +26,8 @@ ExampleProvider/
 |   `-- alarms.json
 `-- lang/
     |-- de.json
-    `-- en.json
+    |-- en.json
+    `-- <weitere-COI-Locale>.json
 ```
 
 `UNMA` liest beim Start sowie bei einem manuellen Neuladen alle `*.json`
@@ -175,6 +176,10 @@ Werte ist `RegisterMetric` stabiler als das Verlassen auf Reflection.
 
 ## LangLib
 
+Eine schrittweise Anleitung mit allen aktuell ausgelieferten COI-Locale-Codes,
+vollständiger Provider-Verzeichnisstruktur und Release-Checkliste steht in
+[provider-integration.de.md](provider-integration.de.md).
+
 UNMA 0.8.0 erklärt `LangLib>=0.1.0` selbst als verpflichtende Abhängigkeit.
 Ein reiner JSON-Provider muss `LangLib.dll` deshalb weder referenzieren noch
 kopieren. In `message_key`, `detail_key` und den Label-Schlüsseln steht der
@@ -184,8 +189,10 @@ vollständige kanonische LangLib-Schlüssel:
 langlib.ExampleProvider.alarm.storage_low
 ```
 
-Die provider-eigenen Sprachdateien liegen in `<ModRoot>/lang/de.json` und
-`<ModRoot>/lang/en.json`:
+Die provider-eigenen Sprachdateien liegen unter
+`<ModRoot>/lang/<COI-Locale>.json`. `en.json` ist der empfohlene vollständige
+Fallback; das mitgelieferte Providerbeispiel enthält zusätzlich alle aktuell
+von COI ausgelieferten Locale-Dateien:
 
 ```json
 {

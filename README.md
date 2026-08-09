@@ -177,7 +177,9 @@ Messwerte und direkt veröffentlichte Zustände stehen über
 `UNMA.Api.UnmaApi` mit `ApiVersion = 1` bereit.
 
 Der vollständige Vertrag, das JSON-Schema und ein lauffähiges Providerbeispiel
-stehen in [docs/external-mod-api.md](docs/external-mod-api.md),
+stehen im deutschsprachigen
+[Integrations- und Mehrsprachen-Schnellstart](docs/provider-integration.de.md),
+in [docs/external-mod-api.md](docs/external-mod-api.md),
 [docs/unma-extension-v1.schema.json](docs/unma-extension-v1.schema.json) und
 [examples/ProviderMod](examples/ProviderMod).
 

@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "НИЗЬКИЙ РІВЕНЬ ЗАПАСІВ",
+  "alarm.storage_low.detail": "Заповнення принаймні одного сховища нижче 15 відсотків.",
+  "alarm.tank_pressure_high": "ВИСОКИЙ ТИСК У РЕЗЕРВУАРІ",
+  "alarm.tank_pressure_high.detail": "Тиск у резервуарі перевищує 90 відсотків.",
+  "alarm.tank_pressure_very_high": "АВАРІЙНИЙ ТИСК У РЕЗЕРВУАРІ",
+  "alarm.tank_pressure_very_high.detail": "Тиск у резервуарі перевищує 98 відсотків.",
+  "alarm.pump_trip": "ЗАХИСНЕ ВІДКЛЮЧЕННЯ ПЕРЕКАЧУВАЛЬНОГО НАСОСА",
+  "alarm.pump_trip.detail": "Перекачувальний насос зупинено контуром захисту.",
+  "metric.storage_fill": "Рівень заповнення сховища",
+  "metric.storage_capacity": "Місткість сховища",
+  "metric.pressure_percent": "Тиск у резервуарі"
+}

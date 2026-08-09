@@ -1,0 +1,13 @@
+{
+  "alarm.storage_low": "ALACSONY KÉSZLETSZINT",
+  "alarm.storage_low.detail": "Legalább egy tároló töltöttsége 15 százalék alatt van.",
+  "alarm.tank_pressure_high": "MAGAS TARTÁLYNYOMÁS",
+  "alarm.tank_pressure_high.detail": "A tartálynyomás 90 százalék felett van.",
+  "alarm.tank_pressure_very_high": "VÉSZHELYZETI TARTÁLYNYOMÁS",
+  "alarm.tank_pressure_very_high.detail": "A tartálynyomás 98 százalék felett van.",
+  "alarm.pump_trip": "SZÁLLÍTÓSZIVATTYÚ VÉDELMI LEÁLLÁS",
+  "alarm.pump_trip.detail": "A szállítószivattyút leállította a védelmi áramköre.",
+  "metric.storage_fill": "Tároló töltöttségi szintje",
+  "metric.storage_capacity": "Tárolókapacitás",
+  "metric.pressure_percent": "Tartálynyomás"
+}
