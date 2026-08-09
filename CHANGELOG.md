@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.11 – 2026-08-09
+
+- Der Auswahlbereich für globale Variablen bleibt nun geöffnet, während seine
+  angezeigten Ist-Werte im Hintergrund aktualisiert werden.
+
 ## 0.9.10 – 2026-08-09
 
 - Eigene Meldungsregeln können jetzt globale Spielvariablen wie Bevölkerung,

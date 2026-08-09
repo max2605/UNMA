@@ -4400,10 +4400,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_selectedReferenceMetricIndex = preserveSelection
             ? FindMetricIndex(referencePath)
             : 0;
-        m_metricPickerOpen = false;
-        m_referenceMetricPickerOpen = false;
         if (!preserveSelection)
         {
+            m_metricPickerOpen = false;
+            m_referenceMetricPickerOpen = false;
             SetStatus("Globale Variablen als Quelle ausgewählt.");
         }
     }
