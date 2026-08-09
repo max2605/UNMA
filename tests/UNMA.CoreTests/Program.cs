@@ -2194,7 +2194,7 @@ internal static class Program
             {
                 Id = " level ",
                 PrototypeId = " ",
-                LabelKey = "langlib.RegistryProvider.metric.level",
+                LabelKey = "multilanglib.RegistryProvider.metric.level",
                 LabelFallback = " Level ",
                 Unit = " items ",
                 SuggestedReferenceMetric = " capacity ",
@@ -2424,7 +2424,7 @@ internal static class Program
                 PanelId = " ",
                 LocalizationNamespace = " NormalizeProvider ",
                 MessageKey =
-                    " langlib.NormalizeProvider.alarm.storage_low ",
+                    " multilanglib.NormalizeProvider.alarm.storage_low ",
                 MessageFallback = " Storage low ",
                 DetailFallback = " Remaining stock ",
                 Severity = " INFO ",
@@ -2442,9 +2442,9 @@ internal static class Program
                         ValueMode = " % ",
                         ReferenceMetric = " capacity ",
                         LabelKey =
-                            "langlib.NormalizeProvider.metric.fill",
+                            "multilanglib.NormalizeProvider.metric.fill",
                         ReferenceLabelKey =
-                            "langlib.NormalizeProvider.metric.capacity",
+                            "multilanglib.NormalizeProvider.metric.capacity",
                     },
                 },
             };
@@ -2461,7 +2461,7 @@ internal static class Program
             AreEqual("main", normalized.PanelId);
             AreEqual(owner, normalized.LocalizationNamespace);
             AreEqual(
-                "langlib.NormalizeProvider.alarm.storage_low",
+                "multilanglib.NormalizeProvider.alarm.storage_low",
                 normalized.MessageKey);
             AreEqual("Storage low", normalized.MessageFallback);
             AreEqual("Remaining stock", normalized.DetailFallback);

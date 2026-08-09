@@ -134,13 +134,13 @@ public static class ExternalDefinitionLoader
                 StringComparer.Ordinal)
             .ToArray();
 
-        // Active mods own their natural LangLib namespace even when they do
+        // Active mods own their natural MultiLangLib namespace even when they do
         // not ship UNMA JSON. This prevents another provider from redirecting
-        // protected keys such as langlib.UNMA.* to a different root.
+        // protected keys such as multilanglib.UNMA.* to a different root.
         foreach (var provider in orderedProviders)
         {
             var providerId = provider?.Id?.Trim() ?? "";
-            if (IsLangLibNamespace(providerId) &&
+            if (IsMultiLangLibNamespace(providerId) &&
                 !localizationOwners.ContainsKey(providerId))
             {
                 localizationOwners.Add(providerId, providerId);
@@ -508,7 +508,7 @@ public static class ExternalDefinitionLoader
             message);
     }
 
-    private static bool IsLangLibNamespace(string candidate)
+    private static bool IsMultiLangLibNamespace(string candidate)
     {
         if (string.IsNullOrWhiteSpace(candidate) ||
             candidate.Length > 128 ||

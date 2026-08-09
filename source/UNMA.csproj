@@ -21,8 +21,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="LangLib">
-      <HintPath>$(APPDATA)\Captain of Industry\Mods\LangLib\LangLib.dll</HintPath>
+    <Reference Include="MultiLangLib">
+      <HintPath>$(APPDATA)\Captain of Industry\Mods\MultiLangLib\MultiLangLib.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Mafi">

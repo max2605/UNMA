@@ -1,7 +1,7 @@
 # Mehrsprachige UNMA-Meldungen in einem eigenen Mod
 
 Diese Anleitung zeigt, wie ein Captain-of-Industry-Mod eigene Meldungen für
-UNMA bereitstellt und die sichtbaren Texte mit LangLib in allen aktuell
+UNMA bereitstellt und die sichtbaren Texte mit MultiLangLib in allen aktuell
 ausgelieferten Spielsprachen anbietet. Sie ist der praxisorientierte
 Schnellstart. Der vollständige V1-Vertrag steht in
 [external-mod-api.md](external-mod-api.md), das maschinenlesbare Schema in
@@ -28,8 +28,8 @@ UNMA-Abhängigkeit zwingend.
 
 ## Wichtig: UNMA nicht in den eigenen Mod kopieren
 
-UNMA und LangLib bleiben eigenständige Mods. Ein Provider kopiert weder
-`UNMA.dll` noch `LangLib.dll` in sein Release. Er legt nur seine Definitionen
+UNMA und MultiLangLib bleiben eigenständige Mods. Ein Provider kopiert weder
+`UNMA.dll` noch `MultiLangLib.dll` in sein Release. Er legt nur seine Definitionen
 und Übersetzungen im eigenen Modverzeichnis ab.
 
 Wenn UNMA für den Provider zwingend erforderlich ist, enthält dessen
@@ -39,11 +39,11 @@ Wenn UNMA für den Provider zwingend erforderlich ist, enthält dessen
 "mod_dependencies": [ "UNMA>=0.8.0" ]
 ```
 
-V1 ist seit UNMA 0.8.0 verfügbar. Ein reiner JSON-Provider muss LangLib nicht
+V1 ist seit UNMA 0.8.0 verfügbar. Ein reiner JSON-Provider muss MultiLangLib nicht
 zusätzlich als direkte Abhängigkeit angeben: UNMA bringt diese Abhängigkeit mit
 und registriert den Sprachordner des aktiven Providers. Ruft der Provider in
 seinem eigenen C#-Code selbst `Lang.Get`, `Lang.Format` oder `Lang.Localized`
-auf, muss er zusätzlich `LangLib>=0.1.0` deklarieren.
+auf, muss er zusätzlich `MultiLangLib>=0.1.0` deklarieren.
 
 ## Empfohlene Verzeichnisstruktur
 
@@ -97,9 +97,9 @@ nicht durchsucht. Die Sprachdateinamen müssen besonders bei `nb_NO`, `pt_BR`,
       "scope": "aggregate",
       "panel_id": "supply",
       "localization_namespace": "MyProvider",
-      "message_key": "langlib.MyProvider.alarm.storage_low",
+      "message_key": "multilanglib.MyProvider.alarm.storage_low",
       "message_fallback": "STORAGE LEVEL LOW",
-      "detail_key": "langlib.MyProvider.alarm.storage_low.detail",
+      "detail_key": "multilanglib.MyProvider.alarm.storage_low.detail",
       "detail_fallback": "At least one storage unit is below 15 percent.",
       "severity": "warning",
       "sound_id": "bell",
@@ -108,13 +108,13 @@ nicht durchsucht. Die Sprachdateinamen müssen besonders bei `nb_NO`, `pt_BR`,
       "conditions": [
         {
           "metric": "$stored.quantity",
-          "label_key": "langlib.MyProvider.metric.storage_fill",
+          "label_key": "multilanglib.MyProvider.metric.storage_fill",
           "label_fallback": "Storage fill level",
           "operator": "<",
           "threshold": 15,
           "value_mode": "percent_of_reference",
           "reference_metric": "$stored.capacity",
-          "reference_label_key": "langlib.MyProvider.metric.storage_capacity",
+          "reference_label_key": "multilanglib.MyProvider.metric.storage_capacity",
           "reference_label_fallback": "Storage capacity"
         }
       ]
@@ -144,16 +144,16 @@ nur verwendet werden, wenn diese Menge überschaubar bleibt. Ein unbekanntes
 zurück; benutzerdefinierte Panel-IDs eines Spielers sind für einen Provider
 nicht portabel vorhersagbar.
 
-## 2. LangLib-Schlüssel anlegen
+## 2. MultiLangLib-Schlüssel anlegen
 
 Ein kanonischer Schlüssel besteht aus:
 
 ```text
-langlib.<Namensraum>.<Text-ID>
+multilanglib.<Namensraum>.<Text-ID>
 ```
 
 Im Beispiel ist der vollständige Schlüssel
-`langlib.MyProvider.alarm.storage_low`. In der Sprachdatei selbst steht nur
+`multilanglib.MyProvider.alarm.storage_low`. In der Sprachdatei selbst steht nur
 die kurze Text-ID.
 
 `MyProvider/lang/en.json`:
@@ -178,7 +178,7 @@ die kurze Text-ID.
 }
 ```
 
-Die Dateien sind flache UTF-8-JSON-Objekte. Alternativ akzeptiert LangLib das
+Die Dateien sind flache UTF-8-JSON-Objekte. Alternativ akzeptiert MultiLangLib das
 COI-Arrayformat, für neue Mods ist das Objektformat leichter zu pflegen.
 
 Regeln für Schlüssel:
@@ -190,7 +190,7 @@ Regeln für Schlüssel:
 - Mindestens `message_key` oder `message_fallback` muss vorhanden sein. Die
   Detail- und Label-Schlüssel sind optional.
 - Wenn ein `*_key` gesetzt wird, muss er vollständig angegeben werden und mit
-  `langlib.<localization_namespace>.` beginnen.
+  `multilanglib.<localization_namespace>.` beginnen.
 - Jeder sichtbare Schlüssel sollte zusätzlich einen lesbaren englischen
   `*_fallback` besitzen. Eine fehlende Übersetzung blockiert dann weder die
   Meldung noch den Spielstart.
@@ -198,9 +198,9 @@ Regeln für Schlüssel:
   vollständig erhalten bleiben.
 
 Enthält die Manifest-ID Punkte, zum Beispiel `Acme.Mod`, kann sie nicht direkt
-als LangLib-Namensraum dienen. Die Vorlage setzt dann beispielsweise
+als MultiLangLib-Namensraum dienen. Die Vorlage setzt dann beispielsweise
 `"localization_namespace": "Acme_Mod"`, und alle Schlüssel beginnen mit
-`langlib.Acme_Mod.`. Dieser Alias muss eindeutig sein. Natürliche gültige
+`multilanglib.Acme_Mod.`. Dieser Alias muss eindeutig sein. Natürliche gültige
 Namensräume aktiver Mods sind reserviert; Kollisionen werden ohne Übernahme
 eines fremden Sprachverzeichnisses abgewiesen.
 
@@ -230,7 +230,7 @@ eines fremden Sprachverzeichnisses abgewiesen.
 | `zh_Hans.json` | Chinesisch (vereinfacht) | ja |
 | `zh_Hant.json` | Chinesisch (traditionell) | ja |
 
-LangLib übernimmt im Automatikmodus den tatsächlichen Dateinamen aus
+MultiLangLib übernimmt im Automatikmodus den tatsächlichen Dateinamen aus
 `LocalizationManager.CurrentLangInfo.FileName`. Die Suchreihenfolge ist:
 
 1. exakte aktive Sprache, zum Beispiel `pt_BR.json`;
@@ -238,28 +238,28 @@ LangLib übernimmt im Automatikmodus den tatsächlichen Dateinamen aus
 3. konfigurierte Fallbacksprache, standardmäßig `en`;
 4. der jeweilige `*_fallback` aus der UNMA-Definition.
 
-Bei jeder Sprachstufe sucht LangLib zuerst unter `<Provider>/lang` und danach
-optional im zentralen Fallbackordner `<LangLib>/lang/<Namensraum>`.
+Bei jeder Sprachstufe sucht MultiLangLib zuerst unter `<Provider>/lang` und danach
+optional im zentralen Fallbackordner `<MultiLangLib>/lang/<Namensraum>`.
 
 So bleibt eine Meldung auch dann lesbar, wenn eine neue COI-Sprache erscheint,
 bevor der Provider eine Übersetzung nachliefert.
 
-## 4. LangLib im eigenen C#-Code verwenden
+## 4. MultiLangLib im eigenen C#-Code verwenden
 
-Dieser Abschnitt ist nur nötig, wenn der Provider selbst LangLib aufruft. Für
+Dieser Abschnitt ist nur nötig, wenn der Provider selbst MultiLangLib aufruft. Für
 reine UNMA-JSON-Definitionen übernimmt UNMA die Registrierung.
 
 Manifest:
 
 ```json
-"mod_dependencies": [ "UNMA>=0.8.0", "LangLib>=0.1.0" ]
+"mod_dependencies": [ "UNMA>=0.8.0", "MultiLangLib>=0.1.0" ]
 ```
 
 Projektdatei:
 
 ```xml
-<Reference Include="LangLib">
-  <HintPath>$(APPDATA)\Captain of Industry\Mods\LangLib\LangLib.dll</HintPath>
+<Reference Include="MultiLangLib">
+  <HintPath>$(APPDATA)\Captain of Industry\Mods\MultiLangLib\MultiLangLib.dll</HintPath>
   <Private>false</Private>
 </Reference>
 ```
@@ -267,7 +267,7 @@ Projektdatei:
 Einmal im Mod-Konstruktor registrieren:
 
 ```csharp
-using LangLib;
+using MultiLangLib;
 
 public MyProviderMod(ModManifest manifest)
 {
@@ -283,12 +283,12 @@ in `localization_namespace` stehen.
 Danach können Texte aufgelöst werden:
 
 ```csharp
-string title = Lang.Get("langlib.MyProvider.alarm.storage_low");
-string text = Lang.Format("langlib.MyProvider.status.items", itemCount);
+string title = Lang.Get("multilanglib.MyProvider.alarm.storage_low");
+string text = Lang.Format("multilanglib.MyProvider.status.items", itemCount);
 ```
 
 Ein Consumer darf **niemals** `Lang.Configure(...)` aufrufen. Sprache,
-Fallback und Cache gehören global dem LangLib-Mod.
+Fallback und Cache gehören global dem MultiLangLib-Mod.
 
 ## 5. Erweiterte C#-UNMA-API
 
@@ -309,7 +309,7 @@ Ein vollständiges, kompilierbares Beispiel liegt unter
 Fehlerisolation enthält die [V1-Referenz](external-mod-api.md).
 
 Jeder `UnmaApi`-Aufruf verwendet als `ownerModId` exakt die Manifest-ID des
-aufrufenden Providers, nicht den optionalen LangLib-Alias. Eigene Messwertleser
+aufrufenden Providers, nicht den optionalen MultiLangLib-Alias. Eigene Messwertleser
 werden vor allen Vorlagen registriert, die sie verwenden. Doppelte IDs
 überschreiben bestehende Registrierungen nicht, sondern liefern `false`; ein
 bewusster Ersatz meldet zuerst die alte Registrierung ab. Beim Entladen oder
@@ -330,11 +330,11 @@ Zustände bleiben registriert.
 
 ## 6. Im Spiel prüfen
 
-1. Provider, UNMA und LangLib im Mod-Manager aktivieren.
+1. Provider, UNMA und MultiLangLib im Mod-Manager aktivieren.
 2. Spiel starten und in UNMA **OPTIONEN** öffnen.
 3. **API / JSON / SPRACHE NEU LADEN** drücken.
 4. Provider-, Datei-, Alarm- und Diagnosezähler kontrollieren.
-5. LangLib testweise mit `language_override` auf mehrere Locale-Codes stellen
+5. MultiLangLib testweise mit `language_override` auf mehrere Locale-Codes stellen
    oder `debug_language=true` verwenden, um vollständige Schlüssel sichtbar zu
    machen.
 6. Eine Bedingung aktivieren, MASTER QUIT prüfen, Bedingung gehen lassen und
@@ -349,7 +349,7 @@ Zustände bleiben registriert.
 - Platzhaltermenge und Platzhalternummern entsprechen in jeder Sprache
   `en.json`.
 - Jeder sichtbare Schlüssel besitzt einen verständlichen englischen Fallback.
-- `UNMA.dll` und `LangLib.dll` werden nicht mit dem Provider ausgeliefert.
+- `UNMA.dll` und `MultiLangLib.dll` werden nicht mit dem Provider ausgeliefert.
 - C#-Referenzen verwenden `<Private>false</Private>`.
 - JSON wird gegen das mitgelieferte V1-Schema geprüft.
 - Eine fehlende Übersetzung und ein nicht verfügbarer Messwert wurden als

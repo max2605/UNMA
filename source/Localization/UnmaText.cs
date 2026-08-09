@@ -1,14 +1,14 @@
 using System;
 using System.Globalization;
-using LangLib;
+using MultiLangLib;
 using Mafi;
 
 namespace UNMA.Localization;
 
 /// <summary>
-/// Small, failure-tolerant boundary around LangLib. UNMA deliberately does
-/// not configure LangLib: language selection and cache ownership belong to
-/// the LangLib mod itself.
+/// Small, failure-tolerant boundary around MultiLangLib. UNMA deliberately does
+/// not configure MultiLangLib: language selection and cache ownership belong to
+/// the MultiLangLib mod itself.
 /// </summary>
 public static class UnmaText
 {
@@ -34,7 +34,7 @@ public static class UnmaText
         {
             error = exception.Message;
             Log.Warning(
-                $"UNMA: LangLib-Provider '{localizationNamespace}' " +
+                $"UNMA: MultiLangLib-Provider '{localizationNamespace}' " +
                 $"konnte nicht registriert werden: {exception.Message}");
             return false;
         }
@@ -62,7 +62,7 @@ public static class UnmaText
 
     public static string Get(string textId, string fallback)
     {
-        return Resolve("langlib." + ModId + "." + textId, fallback);
+        return Resolve("multilanglib." + ModId + "." + textId, fallback);
     }
 
     public static string Resolve(string canonicalKey, string fallback)

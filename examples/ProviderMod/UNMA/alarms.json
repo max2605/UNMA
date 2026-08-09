@@ -12,9 +12,9 @@
       "scope": "aggregate",
       "panel_id": "supply",
       "localization_namespace": "ExampleProvider",
-      "message_key": "langlib.ExampleProvider.alarm.storage_low",
+      "message_key": "multilanglib.ExampleProvider.alarm.storage_low",
       "message_fallback": "LAGERVORRAT NIEDRIG",
-      "detail_key": "langlib.ExampleProvider.alarm.storage_low.detail",
+      "detail_key": "multilanglib.ExampleProvider.alarm.storage_low.detail",
       "detail_fallback": "Mindestens ein Lager liegt unter 15 Prozent.",
       "severity": "warning",
       "sound_id": "bell",
@@ -24,13 +24,13 @@
       "conditions": [
         {
           "metric": "$stored.quantity",
-          "label_key": "langlib.ExampleProvider.metric.storage_fill",
+          "label_key": "multilanglib.ExampleProvider.metric.storage_fill",
           "label_fallback": "Lagerfüllstand",
           "operator": "<=",
           "threshold": 15,
           "value_mode": "percent_of_reference",
           "reference_metric": "$stored.capacity",
-          "reference_label_key": "langlib.ExampleProvider.metric.storage_capacity",
+          "reference_label_key": "multilanglib.ExampleProvider.metric.storage_capacity",
           "reference_label_fallback": "Lagerkapazität"
         }
       ]
@@ -43,9 +43,9 @@
       "scope": "per_entity",
       "panel_id": "main",
       "localization_namespace": "ExampleProvider",
-      "message_key": "langlib.ExampleProvider.alarm.tank_pressure_high",
+      "message_key": "multilanglib.ExampleProvider.alarm.tank_pressure_high",
       "message_fallback": "TANKDRUCK HOCH",
-      "detail_key": "langlib.ExampleProvider.alarm.tank_pressure_high.detail",
+      "detail_key": "multilanglib.ExampleProvider.alarm.tank_pressure_high.detail",
       "detail_fallback": "Der Tankdruck liegt über 90 Prozent.",
       "severity": "critical",
       "sound_id": "horn",
@@ -55,7 +55,7 @@
       "conditions": [
         {
           "metric": "example.pressure_percent",
-          "label_key": "langlib.ExampleProvider.metric.pressure_percent",
+          "label_key": "multilanglib.ExampleProvider.metric.pressure_percent",
           "label_fallback": "Tankdruck",
           "operator": ">=",
           "threshold": 90,

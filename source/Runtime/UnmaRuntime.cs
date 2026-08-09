@@ -529,7 +529,7 @@ public sealed class UnmaRuntime : IDisposable
                     StringComparison.Ordinal))
             {
                 Log.Warning(
-                    "UNMA: LangLib-Namensraum '" + alias.Namespace +
+                    "UNMA: MultiLangLib-Namensraum '" + alias.Namespace +
                     "' gehört bereits zu '" + existingOwner +
                     "'; Registrierung von '" + alias.Owner +
                     "' wurde abgewiesen.");

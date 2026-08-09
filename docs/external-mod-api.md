@@ -8,7 +8,7 @@ Integrationswege bereit:
 2. **Die öffentliche C#-API** `UNMA.Api.UnmaApi` für eigene Messwertleser,
    programmgesteuerte Meldungsvorlagen und Push-Meldungen.
 
-Beide Wege verwenden LangLib für sichtbare Texte und dieselbe
+Beide Wege verwenden MultiLangLib für sichtbare Texte und dieselbe
 Schlitzmelder-Zustandsmaschine wie die eingebauten UNMA-Meldungen. Eine
 Integration darf deshalb den Alarmzustand liefern, aber niemals selbst `Q`
 (quittiert) setzen. Die Quittierung gehört dem Spieler und UNMA.
@@ -48,7 +48,7 @@ Eine minimale Datei sieht so aus:
       "scope": "aggregate",
       "panel_id": "supply",
       "localization_namespace": "ExampleProvider",
-      "message_key": "langlib.ExampleProvider.alarm.storage_low",
+      "message_key": "multilanglib.ExampleProvider.alarm.storage_low",
       "message_fallback": "LAGERVORRAT NIEDRIG",
       "severity": "warning",
       "sound_id": "bell",
@@ -58,7 +58,7 @@ Eine minimale Datei sieht so aus:
       "conditions": [
         {
           "metric": "$stored.quantity",
-          "label_key": "langlib.ExampleProvider.metric.storage_fill",
+          "label_key": "multilanglib.ExampleProvider.metric.storage_fill",
           "label_fallback": "Lagerfüllstand",
           "operator": "<=",
           "threshold": 15,
@@ -121,10 +121,10 @@ Stabilität angegeben.
 | `prototype_ids` | ja | Mindestens eine COI-Prototyp-ID für Gebäude oder Fahrzeuge. |
 | `scope` | nein | `aggregate` (Standard) oder `per_entity`. |
 | `panel_id` | nein | Zielpanel. `main` ist das dynamische Home-Dashboard ohne festen Schlitz; ein Fachpanel wie `supply` erzeugt eine dauerhafte Position. Ein unbekanntes Panel fällt sicher auf das Standardpanel zurück. |
-| `localization_namespace` | nein | LangLib-Mod-Namensraum; standardmäßig die Provider-ID. |
-| `message_key` | bedingt | Voller LangLib-Schlüssel, zum Beispiel `langlib.ExampleProvider.alarm.storage_low`. |
-| `message_fallback` | bedingt | Lesbarer Text, falls der LangLib-Schlüssel fehlt. |
-| `detail_key` | nein | Optionaler voller LangLib-Schlüssel für die Detailzeile. |
+| `localization_namespace` | nein | MultiLangLib-Mod-Namensraum; standardmäßig die Provider-ID. |
+| `message_key` | bedingt | Voller MultiLangLib-Schlüssel, zum Beispiel `multilanglib.ExampleProvider.alarm.storage_low`. |
+| `message_fallback` | bedingt | Lesbarer Text, falls der MultiLangLib-Schlüssel fehlt. |
+| `detail_key` | nein | Optionaler voller MultiLangLib-Schlüssel für die Detailzeile. |
 | `detail_fallback` | nein | Optionale lesbare Detailzeile. |
 | `severity` | nein | `notice`, `warning`, `critical` oder `emergency`; Standard `warning`. |
 | `sound_id` | nein | UNMA-Ton-ID, zum Beispiel `auto`, `bell`, `horn` oder `siren`; Standard `auto`. |
@@ -148,13 +148,13 @@ insbesondere Ton und automatische Quittierung, hat Vorrang.
 | Feld | Pflicht | Standard / Bedeutung |
 |---|---:|---|
 | `metric` | ja | Eingebauter UNMA-Messwertpfad oder per C# registrierte Messwert-ID. |
-| `label_key` | nein | Voller LangLib-Schlüssel für die Bezeichnung des Ist-Werts. |
+| `label_key` | nein | Voller MultiLangLib-Schlüssel für die Bezeichnung des Ist-Werts. |
 | `label_fallback` | nein | Lesbare Bezeichnung bei fehlender Übersetzung. |
 | `operator` | ja | Einer von `<`, `<=`, `==`, `!=`, `>=`, `>`. |
 | `threshold` | ja | Endlicher Sollwert. `NaN` und unendliche Werte sind ungültig. |
 | `value_mode` | nein | `absolute` (Standard) oder `percent_of_reference`. |
 | `reference_metric` | bedingt | Bei `percent_of_reference` verpflichtender Bezugswert. |
-| `reference_label_key` | nein | Voller LangLib-Schlüssel für den Bezugswert. |
+| `reference_label_key` | nein | Voller MultiLangLib-Schlüssel für den Bezugswert. |
 | `reference_label_fallback` | nein | Lesbare Bezeichnung des Bezugswerts. |
 
 Bei `percent_of_reference` vergleicht UNMA
@@ -174,19 +174,19 @@ Zu den eingebauten Pfaden gehören insbesondere:
 Messwertpfad verfügbar sein. Für mod-eigene, verschachtelte oder berechnete
 Werte ist `RegisterMetric` stabiler als das Verlassen auf Reflection.
 
-## LangLib
+## MultiLangLib
 
 Eine schrittweise Anleitung mit allen aktuell ausgelieferten COI-Locale-Codes,
 vollständiger Provider-Verzeichnisstruktur und Release-Checkliste steht in
 [provider-integration.de.md](provider-integration.de.md).
 
-UNMA 0.8.0 erklärt `LangLib>=0.1.0` selbst als verpflichtende Abhängigkeit.
-Ein reiner JSON-Provider muss `LangLib.dll` deshalb weder referenzieren noch
+UNMA 0.8.0 erklärt `MultiLangLib>=0.1.0` selbst als verpflichtende Abhängigkeit.
+Ein reiner JSON-Provider muss `MultiLangLib.dll` deshalb weder referenzieren noch
 kopieren. In `message_key`, `detail_key` und den Label-Schlüsseln steht der
-vollständige kanonische LangLib-Schlüssel:
+vollständige kanonische MultiLangLib-Schlüssel:
 
 ```text
-langlib.ExampleProvider.alarm.storage_low
+multilanglib.ExampleProvider.alarm.storage_low
 ```
 
 Die provider-eigenen Sprachdateien liegen unter
@@ -202,18 +202,18 @@ von COI ausgelieferten Locale-Dateien:
 ```
 
 In der Sprachdatei selbst reicht wie gewohnt die kurze Text-ID.
-Groß-/Kleinschreibung ist bei Mod- und Text-IDs relevant. LangLib-Namensräume
+Groß-/Kleinschreibung ist bei Mod- und Text-IDs relevant. MultiLangLib-Namensräume
 dürfen Buchstaben, Ziffern, `_` und `-`, aber keine Punkte enthalten. Besitzt
 die COI-Manifest-ID Punkte, muss eine Vorlage daher einen gültigen
 `localization_namespace` angeben. Alle ihre `*_key`-Felder müssen exakt mit
-`langlib.<localization_namespace>.` beginnen. Fehlt eine Übersetzung,
+`multilanglib.<localization_namespace>.` beginnen. Fehlt eine Übersetzung,
 verwendet UNMA den mitgelieferten Fallbacktext.
 
 Nur wenn der Provider selbst `Lang.Get`, `Lang.Format` oder andere
-LangLib-Aufrufe verwendet, sollte sein Manifest zusätzlich
-`LangLib>=0.1.0` deklarieren und sein Root mit `Lang.RegisterMod(...)`
+MultiLangLib-Aufrufe verwendet, sollte sein Manifest zusätzlich
+`MultiLangLib>=0.1.0` deklarieren und sein Root mit `Lang.RegisterMod(...)`
 registrieren. Ein Provider darf **niemals** `Lang.Configure(...)` aufrufen;
-die globale Konfiguration gehört dem LangLib-Mod.
+die globale Konfiguration gehört dem MultiLangLib-Mod.
 
 ## Öffentliche C#-API
 
@@ -223,10 +223,10 @@ Ein Provider, der C#-Funktionen nutzt, erklärt eine direkte Abhängigkeit:
 "mod_dependencies": [ "UNMA>=0.8.0" ]
 ```
 
-Wenn er LangLib auch direkt aufruft:
+Wenn er MultiLangLib auch direkt aufruft:
 
 ```json
-"mod_dependencies": [ "UNMA>=0.8.0", "LangLib>=0.1.0" ]
+"mod_dependencies": [ "UNMA>=0.8.0", "MultiLangLib>=0.1.0" ]
 ```
 
 Die Assemblyreferenz darf nicht in den Provider-Mod kopiert werden:
@@ -316,9 +316,9 @@ nicht verfügbarer Messwert behandelt; sie dürfen die Spielschleife nicht
 abbrechen.
 
 `ExternalMetricDefinition.LabelKey` ist leer oder ein vollständiger
-`langlib.<LocalizationNamespace>.<Text-ID>`-Schlüssel. Bei einem vom
+`multilanglib.<LocalizationNamespace>.<Text-ID>`-Schlüssel. Bei einem vom
 Provider-Namen abweichenden Namensraum muss der Provider dessen Root über
-LangLib registrieren oder denselben Namensraum in einer JSON-/C#-Vorlage
+MultiLangLib registrieren oder denselben Namensraum in einer JSON-/C#-Vorlage
 verwenden. `SuggestedReferenceMetric` kann Editoren einen passenden Bezugswert
 für Prozentbedingungen vorschlagen.
 
@@ -405,7 +405,7 @@ Messwertpfad darf nur die von UNMA unterstützten öffentlichen Eigenschaften
 lesen; komplexe Werte benötigen den isolierten C#-Reader. `mod_id` wird gegen
 den besitzenden Mod geprüft, Pfade verlassen niemals `<ModRoot>/UNMA`, und
 Duplikate innerhalb eines Besitzers werden nicht still überschrieben.
-Ein LangLib-Namensraum gehört beim JSON-Laden genau einem Provider; eine
+Ein MultiLangLib-Namensraum gehört beim JSON-Laden genau einem Provider; eine
 Kollision deaktiviert die spätere Definition statt einen fremden Sprachpfad
 zu übernehmen.
 

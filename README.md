@@ -72,7 +72,7 @@ Zielversion: Captain of Industry **0.8.6c**.
   Reader über die versionierte C#-API registrieren oder Alarmzustände direkt
   veröffentlichen. `aggregate` erzeugt einen festen Sammelschlitz,
   `per_entity` auf Wunsch je Instanz einen stabilen Schlitz.
-- LangLib-Grundanbindung für die UNMA-Fensterhülle und alle Providertexte. In Definitionen
+- MultiLangLib-Grundanbindung für die UNMA-Fensterhülle und alle Providertexte. In Definitionen
   bleiben stabile Übersetzungsschlüssel gespeichert; ein verpflichtender
   Fallback verhindert sichtbare Schlüssel bei fehlenden Sprachdateien.
 - Typisierte Produktmengen für Lager, Förderbänder/Rohre sowie Frachten von
@@ -220,7 +220,7 @@ oder Dateien mit einer Lizenz, die Weitergabe und Nutzung erlaubt.
 Voraussetzungen:
 
 - Captain of Industry 0.8.6c;
-- LangLib 0.1.0 oder neuer als aktivierte Mod-Abhängigkeit;
+- MultiLangLib 0.1.0 oder neuer als aktivierte Mod-Abhängigkeit;
 - .NET Framework 4.8 Reference Assemblies;
 - Visual Studio Build Tools 2022 oder `dotnet` mit passenden Referenzen.
 

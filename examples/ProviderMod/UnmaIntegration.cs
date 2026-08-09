@@ -25,7 +25,7 @@ public sealed class UnmaIntegration : IDisposable
             Id = PressureMetricId,
             PrototypeId = TankPrototypeId,
             LabelKey =
-                "langlib.ExampleProvider.metric.pressure_percent",
+                "multilanglib.ExampleProvider.metric.pressure_percent",
             LabelFallback = "Tankdruck",
             Unit = "%",
             Reader = ReadPressurePercent,
@@ -46,10 +46,10 @@ public sealed class UnmaIntegration : IDisposable
             PanelId = "main",
             LocalizationNamespace = OwnerModId,
             MessageKey =
-                "langlib.ExampleProvider.alarm.tank_pressure_very_high",
+                "multilanglib.ExampleProvider.alarm.tank_pressure_very_high",
             MessageFallback = "TANKDRUCK NOTFALL",
             DetailKey =
-                "langlib.ExampleProvider.alarm." +
+                "multilanglib.ExampleProvider.alarm." +
                 "tank_pressure_very_high.detail",
             DetailFallback = "Der Tankdruck liegt über 98 Prozent.",
             Severity = "emergency",
@@ -63,7 +63,7 @@ public sealed class UnmaIntegration : IDisposable
                 {
                     Metric = PressureMetricId,
                     LabelKey =
-                        "langlib.ExampleProvider.metric.pressure_percent",
+                        "multilanglib.ExampleProvider.metric.pressure_percent",
                     LabelFallback = "Tankdruck",
                     Operator = ">=",
                     Threshold = 98,
@@ -113,10 +113,10 @@ public sealed class UnmaIntegration : IDisposable
                 EntityKey = pump.StableId,
                 LocalizationNamespace = OwnerModId,
                 MessageKey =
-                    "langlib.ExampleProvider.alarm.pump_trip",
+                    "multilanglib.ExampleProvider.alarm.pump_trip",
                 MessageFallback = "FÖRDERPUMPE STÖRUNG",
                 DetailKey =
-                    "langlib.ExampleProvider.alarm.pump_trip.detail",
+                    "multilanglib.ExampleProvider.alarm.pump_trip.detail",
                 DetailFallback =
                     "Die Förderpumpe wurde durch ihre Schutzschaltung " +
                     "abgeschaltet.",

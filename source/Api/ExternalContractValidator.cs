@@ -870,7 +870,7 @@ internal static class ExternalContractValidator
         if (normalized.Length == 0 || normalized.Length > MaxOwnerLength ||
             !IsAsciiLetterOrDigit(normalized[0]))
         {
-            error = "LangLib namespace must start with an ASCII letter or " +
+            error = "MultiLangLib namespace must start with an ASCII letter or " +
                     "digit.";
             return false;
         }
@@ -881,7 +881,7 @@ internal static class ExternalContractValidator
             if (!IsAsciiLetterOrDigit(character) && character != '_' &&
                 character != '-')
             {
-                error = "LangLib namespace may only contain ASCII letters, " +
+                error = "MultiLangLib namespace may only contain ASCII letters, " +
                         "digits, '_' and '-'.";
                 return false;
             }
@@ -903,7 +903,7 @@ internal static class ExternalContractValidator
             return true;
         }
 
-        var prefix = "langlib." + localizationNamespace + ".";
+        var prefix = "multilanglib." + localizationNamespace + ".";
         if (!key.StartsWith(prefix, StringComparison.Ordinal) ||
             key.Length == prefix.Length)
         {
@@ -917,7 +917,7 @@ internal static class ExternalContractValidator
             if (!IsAsciiLetterOrDigit(character) && character != '.' &&
                 character != '_' && character != '-')
             {
-                error = fieldName + " is not a valid LangLib key.";
+                error = fieldName + " is not a valid MultiLangLib key.";
                 return false;
             }
         }
@@ -943,15 +943,15 @@ internal static class ExternalContractValidator
             return true;
         }
 
-        const string langLibPrefix = "langlib.";
-        if (!key.StartsWith(langLibPrefix, StringComparison.Ordinal))
+        const string multiLangLibPrefix = "multilanglib.";
+        if (!key.StartsWith(multiLangLibPrefix, StringComparison.Ordinal))
         {
-            error = fieldName + " must be a full 'langlib.<ModId>.<textId>' " +
+            error = fieldName + " must be a full 'multilanglib.<ModId>.<textId>' " +
                     "key.";
             return false;
         }
 
-        var remainder = key.Substring(langLibPrefix.Length);
+        var remainder = key.Substring(multiLangLibPrefix.Length);
         var separator = remainder.IndexOf('.');
         if (separator <= 0 || separator == remainder.Length - 1 ||
             !TryNormalizeLocalizationNamespace(
@@ -959,7 +959,7 @@ internal static class ExternalContractValidator
                 out _,
                 out _))
         {
-            error = fieldName + " is not a valid LangLib key.";
+            error = fieldName + " is not a valid MultiLangLib key.";
             return false;
         }
 
@@ -975,7 +975,7 @@ internal static class ExternalContractValidator
             if (!IsAsciiLetterOrDigit(character) && character != '.' &&
                 character != '_' && character != '-')
             {
-                error = fieldName + " is not a valid LangLib key.";
+                error = fieldName + " is not a valid MultiLangLib key.";
                 return false;
             }
         }

@@ -6,7 +6,7 @@
   COI-Eventregistrierung. Autosaves versuchen dadurch nicht mehr,
   `UnmaRuntime` als Callback-Besitzer zu serialisieren und brechen nicht mehr
   wegen einer fehlenden `Serialize`-Methode ab.
-- Die LangLib-Kataloge von UNMA und des vollständigen Providerbeispiels decken
+- Die MultiLangLib-Kataloge von UNMA und des vollständigen Providerbeispiels decken
   jetzt alle 21 mit der aktuellen COI-Version ausgelieferten Locale-Dateien ab.
   Eine neue deutschsprachige Integrationsanleitung erklärt JSON- und C#-API,
   mehrsprachige Providermeldungen, Fallbacks und die Release-Prüfung.
@@ -80,7 +80,7 @@
 - Automatische Provideralarme unterstützen feste Sammelschlitze sowie bewusst
   aktivierte instanzbezogene Schlitze. Stabile IDs erhalten K/G/Q und eine
   Quittierung auch dann, wenn sich der angezeigte Messwert ändert.
-- LangLib 0.1.0 ist jetzt eine deklarierte Abhängigkeit. Fensterhülle und
+- MultiLangLib 0.1.0 ist jetzt eine deklarierte Abhängigkeit. Fensterhülle und
   Providertexte werden über kanonische Schlüssel mit sicheren Fallbacks
   aufgelöst.
 - Der Optionen-Tab zeigt Provider-, Definitions- und Fehlerzahlen und kann

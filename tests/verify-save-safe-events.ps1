@@ -316,15 +316,15 @@ Get-ChildItem -LiteralPath $resolvedManagedPath -Filter "*.dll" -File |
         }
     }
 
-$langLibPath = Join-Path `
+$multiLangLibPath = Join-Path `
     (Split-Path (Split-Path $resolvedAssemblyPath -Parent) -Parent) `
-    "LangLib\LangLib.dll"
-if (Test-Path -LiteralPath $langLibPath -PathType Leaf) {
+    "MultiLangLib\MultiLangLib.dll"
+if (Test-Path -LiteralPath $multiLangLibPath -PathType Leaf) {
     try {
         [void][System.Reflection.Assembly]::LoadFrom(
-            $langLibPath)
+            $multiLangLibPath)
     } catch {
-        # LangLib is not part of the inspected event path.
+        # MultiLangLib is not part of the inspected event path.
     }
 }
 
