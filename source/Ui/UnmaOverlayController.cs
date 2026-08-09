@@ -1942,13 +1942,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Steuerzeichen", m_labelStyle, GUILayout.Width(150f));
+        GUILayout.Label(
+            UnmaText.Get("editor.comparison"),
+            m_labelStyle,
+            GUILayout.Width(150f));
         DrawComparisonSelector(ref m_draftComparison);
         GUILayout.Space(12f);
         GUILayout.Label(
             m_draftValueMode == ConditionValueMode.PercentOfReference
                 ? UnmaText.Get("auto.23a9b1f4773d")
-                : "Soll-Wert",
+                : UnmaText.Get("editor.target_value"),
             m_labelStyle,
             GUILayout.Width(105f));
         m_draftThreshold = GUILayout.TextField(
@@ -3192,14 +3195,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawOptions()
     {
-        GUILayout.Label("ANZEIGE", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("options.display"), m_sectionStyle);
         GUILayout.Label(
             UnmaText.Get("auto.05e9f359f2e3"),
             m_labelStyle);
 
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "UI-Skalierung",
+            UnmaText.Get("options.ui_scale"),
             m_labelStyle,
             GUILayout.Width(120f));
         var scaleChanged = false;
@@ -3243,19 +3246,28 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Warnfarbe", m_labelStyle, GUILayout.Width(95f));
+        GUILayout.Label(
+            UnmaText.Get("options.warning_color"),
+            m_labelStyle,
+            GUILayout.Width(95f));
         m_runtime.Configuration.WarningColor = GUILayout.TextField(
             m_runtime.Configuration.WarningColor,
             9,
             m_textFieldStyle,
             GUILayout.Width(100f));
-        GUILayout.Label("Kritisch", m_labelStyle, GUILayout.Width(72f));
+        GUILayout.Label(
+            UnmaText.Get("severity.critical"),
+            m_labelStyle,
+            GUILayout.Width(72f));
         m_runtime.Configuration.CriticalColor = GUILayout.TextField(
             m_runtime.Configuration.CriticalColor,
             9,
             m_textFieldStyle,
             GUILayout.Width(100f));
-        GUILayout.Label("Notfall", m_labelStyle, GUILayout.Width(68f));
+        GUILayout.Label(
+            UnmaText.Get("severity.emergency"),
+            m_labelStyle,
+            GUILayout.Width(68f));
         m_runtime.Configuration.EmergencyColor = GUILayout.TextField(
             m_runtime.Configuration.EmergencyColor,
             9,

@@ -3847,7 +3847,9 @@ public sealed class UnmaRuntime : IDisposable
             {
                 missingSource = true;
                 values.Add(false);
-                details.Add(condition.EntityTitle + ": Quelle fehlt");
+                details.Add(
+                    condition.EntityTitle + ": " +
+                    UnmaText.Get("runtime.source_missing"));
                 continue;
             }
 

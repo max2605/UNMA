@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.9 – 2026-08-09
+
+- Verbliebene fest eingebaute deutsche Texte bei Lager-, Transport- und
+  Fahrzeugmesswerten sowie deren Einheit werden nun korrekt lokalisiert.
+- Vergleichseditor, Anzeigeoptionen, Schweregrade, fehlende Quellen und die
+  Anzahl verknüpfter Bedingungen verwenden jetzt ebenfalls den aktiven
+  Sprachkatalog.
+
 ## 0.9.8 – 2026-08-09
 
 - Terrain-Collapse-Warnungen von unsichtbaren konstruktiven Unterobjekten wie

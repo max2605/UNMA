@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UNMA.Localization;
 
 namespace UNMA.Domain;
 
@@ -115,7 +116,8 @@ public static class PanelSlotProjection
             DisplayName = string.IsNullOrWhiteSpace(rule.Name)
                 ? "MELDUNG"
                 : rule.Name.Trim(),
-            Detail = (rule.Conditions?.Count ?? 0) + " Bedingung(en)",
+            Detail = (rule.Conditions?.Count ?? 0) +
+                     UnmaText.Get("auto.38bf168a03a3"),
             Source = "custom",
             Severity = rule.Severity,
             ActiveColor = string.IsNullOrWhiteSpace(rule.ActiveColor)

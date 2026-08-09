@@ -1,3 +1,7 @@
+v0.9.9 | 2026-08-09
+* Fixed untranslated metric labels and units when playing in English.
+* Localized comparison-editor labels, display settings, severity labels, missing-source details, and condition counts.
+
 v0.9.8 | 2026-08-09
 * Fixed terrain-collapse warnings from structural child entities such as transport pillars missing from their visible parent object's panel.
 * Added the potential uneven-terrain collapse notification to collapsible static object panels before it becomes active.

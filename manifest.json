@@ -1,6 +1,6 @@
 {
   "id": "UNMA",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "display_name": "UNMA – Universelle Nachrichten-Meldeanlage",
   "description_short": "Eine frei konfigurierbare Schlitzmelder-Tafel mit Quittierung, Sammelmeldungen und Alarmtönen.",
   "description_long": "Spiegelt Vanilla-Meldungen in eine industrielle Schlitzmelder-Tafel mit dauerhaft festen, frei sortierbaren Panelplätzen und ergänzt jeden Entity-Inspector um eine UNMA-Alarmglocke. Die Glocke öffnet eine eigene, dauerhafte Gebäudetafel; ihre Meldungen lassen sich ohne doppelten Alarmzustand mit globalen Tafeln verknüpfen. Ein kleines Pfeilsymbol am Schlitz springt direkt zum zugehörigen Objekt. Der separate, AWL-artige Meldungseditor unterstützt alle sechs Vergleiche, mehrere Entitäten in UND-/ODER-Sammelmeldungen und sichere Prozent-von-Bezugswert-Bedingungen. Die gesamte UI ist von 75 bis 200 Prozent skalierbar und blockiert Klicks sowie Mausrad zuverlässig gegen das Spiel im Hintergrund. Gesundheit, Nahrung und Arbeiter besitzen frei editierbare Stufen; NOTFALL wird in den Werkvorgaben nur für aktive Todesspiralen verwendet. KOMMT und ungequittiertes GEGANGEN blinken und wiederholen ihren Ton bis MASTER QUIT; automatische Quittierung bleibt pro Meldung optional. Andere aktive Mods können über UNMA/*.json und die öffentliche C#-API V1 eigene prototypgebundene Alarme, Messwerte und Zustände bereitstellen; Texte werden gemeinsam über MultiLangLib aufgelöst.",
