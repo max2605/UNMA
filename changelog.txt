@@ -1,3 +1,7 @@
+v0.9.5 | 2026-08-09
+* Added a Do Not Log / Ignore Completely mode for Vanilla notifications.
+* Added per-object and per-prototype cleanup of matching active and recent UNMA history entries when complete suppression is enabled.
+
 v0.9.4 | 2026-08-09
 * Added a Mod Hub compatible changelog file.
 

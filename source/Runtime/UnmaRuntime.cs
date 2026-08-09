@@ -2570,7 +2570,16 @@ public sealed class UnmaRuntime : IDisposable
 
         if (SaveConfiguration())
         {
-            return true;
+            if (behavior != VanillaNotificationBehavior.Ignored)
+            {
+                return true;
+            }
+            PurgeIgnoredVanillaAlarms(
+                overrideId,
+                scope,
+                entityId,
+                entityPrototypeId);
+            return SaveConfiguration();
         }
 
         lock (m_configurationGate)
@@ -2578,6 +2587,54 @@ public sealed class UnmaRuntime : IDisposable
             Configuration.VanillaNotificationRules = previousRules;
         }
         return false;
+    }
+
+    private void PurgeIgnoredVanillaAlarms(
+        string overrideId,
+        VanillaNotificationScope scope,
+        int entityId,
+        string entityPrototypeId)
+    {
+        var targetRule = new VanillaNotificationRule
+        {
+            AlarmId = overrideId,
+            Scope = scope,
+            EntityId = entityId,
+            EntityPrototypeId = entityPrototypeId,
+            Behavior = VanillaNotificationBehavior.Ignored,
+        };
+        lock (m_gate)
+        {
+            var matchingStates = m_alarms
+                .Where(pair =>
+                    string.Equals(
+                        pair.Value.View.Source,
+                        "vanilla",
+                        StringComparison.Ordinal) &&
+                    VanillaNotificationSuppressionPolicy.MatchesScope(
+                        targetRule,
+                        pair.Value.View.OverrideId,
+                        scope,
+                        pair.Value.View.EntityId,
+                        pair.Value.View.EntityPrototypeId))
+                .ToArray();
+            if (matchingStates.Length == 0)
+            {
+                return;
+            }
+
+            var sequences = new HashSet<long>(
+                matchingStates
+                    .Select(pair => pair.Value.Sequence)
+                    .Where(sequence => sequence > 0));
+            foreach (var matchingState in matchingStates)
+            {
+                m_alarms.Remove(matchingState.Key);
+            }
+            m_alarmHistory.RemoveAll(history =>
+                sequences.Contains(history.Sequence));
+            m_alarmHistoryRevision++;
+        }
     }
 
     public bool SetConfiguredSound(string alarmId, string soundId)
@@ -4324,9 +4381,6 @@ public sealed class UnmaRuntime : IDisposable
         {
             return;
         }
-        var reconciledLegacyHistory =
-            SustainedVanillaAlarmPolicy.IsSustainedPrototype(id) &&
-            RestoreSustainedVanillaAlarmFromHistory(id);
         var slotId = overrideId;
         var message = notification.Message.Value;
         var severity = ClassifyNotification(notification);
@@ -4350,6 +4404,17 @@ public sealed class UnmaRuntime : IDisposable
                 slotId += ":entity:" + entity.Id.Value;
             }
         }
+
+        if (ResolveVanillaNotificationBehavior(
+                overrideId,
+                entityId,
+                entityPrototypeId) == VanillaNotificationBehavior.Ignored)
+        {
+            return;
+        }
+        var reconciledLegacyHistory =
+            SustainedVanillaAlarmPolicy.IsSustainedPrototype(id) &&
+            RestoreSustainedVanillaAlarmFromHistory(id);
 
         SetAlarm(
             AlarmKeyForNotification(notification),
@@ -4945,12 +5010,25 @@ public sealed class UnmaRuntime : IDisposable
             view.EntityPrototypeId);
     }
 
+    private VanillaNotificationBehavior ResolveVanillaNotificationBehavior(
+        string overrideId,
+        int entityId,
+        string entityPrototypeId)
+    {
+        return VanillaNotificationSuppressionPolicy.ResolveBehavior(
+            GetVanillaNotificationRulesSnapshot(),
+            overrideId,
+            entityId,
+            entityPrototypeId);
+    }
+
     private static bool IsVanillaAlarmHidden(
         AlarmView view,
         IEnumerable<VanillaNotificationRule> rules)
     {
-        return ResolveVanillaNotificationBehavior(view, rules) ==
-               VanillaNotificationBehavior.Hidden;
+        var behavior = ResolveVanillaNotificationBehavior(view, rules);
+        return behavior == VanillaNotificationBehavior.Hidden ||
+               behavior == VanillaNotificationBehavior.Ignored;
     }
 
     private void RefreshDisabledVanillaOverrideIds()

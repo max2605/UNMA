@@ -3029,12 +3029,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.ExpandWidth(true));
         if (GUILayout.Button(
                 VanillaBehaviorLabel(behavior),
-                behavior == VanillaNotificationBehavior.Hidden
+                behavior == VanillaNotificationBehavior.Hidden ||
+                behavior == VanillaNotificationBehavior.Ignored
                     ? m_dangerButtonStyle
                     : behavior == VanillaNotificationBehavior.Silent
                         ? m_buttonStyle
                         : m_primaryButtonStyle,
-                GUILayout.Width(185f),
+                GUILayout.Width(245f),
                 GUILayout.Height(30f)))
         {
             SaveVanillaNotificationBehavior(
@@ -3054,6 +3055,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 VanillaNotificationBehavior.Silent,
             VanillaNotificationBehavior.Silent =>
                 VanillaNotificationBehavior.Hidden,
+            VanillaNotificationBehavior.Hidden =>
+                VanillaNotificationBehavior.Ignored,
             _ => VanillaNotificationBehavior.Normal,
         };
     }
@@ -3069,6 +3072,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             VanillaNotificationBehavior.Hidden => UnmaText.Get(
                 "sounds.override.behavior_hidden",
                 "LOGGEN · TON AUS · AUSBLENDEN"),
+            VanillaNotificationBehavior.Ignored => UnmaText.Get(
+                "sounds.override.behavior_ignored",
+                "NICHT LOGGEN · KOMPLETT IGNORIEREN"),
             _ => UnmaText.Get(
                 "sounds.override.behavior_normal",
                 "NORMAL"),

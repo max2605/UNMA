@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.5 – 2026-08-09
+
+- Vanilla-Meldungen können pro Objekt oder Objektprototyp jetzt vollständig
+  ignoriert werden. Dieser vierte Modus erzeugt weder Alarmzustände noch neue
+  Verlaufseinträge und bereinigt beim Aktivieren alle noch sicher zuordenbaren
+  aktiven und jüngeren Ereignisse aus dem UNMA-Verlauf.
+
 ## 0.9.4 – 2026-08-09
 
 - Eine Mod-Hub-kompatible `changelog.txt` liegt jetzt direkt neben dem

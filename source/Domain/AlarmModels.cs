@@ -41,6 +41,7 @@ public enum VanillaNotificationBehavior
     Normal = 0,
     Silent = 1,
     Hidden = 2,
+    Ignored = 3,
 }
 
 public enum VanillaNotificationScope

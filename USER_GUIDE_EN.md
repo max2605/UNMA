@@ -87,12 +87,12 @@ If an entity used by a multi-entity rule is permanently demolished or destroyed,
 
 Open **SOUNDS** (`TÖNE`) to configure known Vanilla and external-mod alarm types.
 
-- Set an object-bound Vanilla alarm to normal, silent, or hidden either for
-  only that object or for all objects of the same prototype.
+- Set an object-bound Vanilla alarm to normal, silent, hidden, or completely
+  ignored either for only that object or for all objects of the same prototype.
 - Choose its UNMA sound.
 - Choose whether it is acknowledged automatically when it clears.
 
-Silent alarms remain active and are logged without UNMA audio. Hidden alarms are also removed from HOME and active counters, while their history remains complete. Object-specific rules override prototype rules. These settings do **not** disable or modify the game's original notification.
+Silent alarms remain active and are logged without UNMA audio. Hidden alarms are also removed from HOME and active counters, while their history remains complete. Completely ignored alarms create no UNMA alarm state or history entry; enabling that mode also removes matching active and recent entries that UNMA can still identify safely. Object-specific rules override prototype rules. These settings do **not** disable or modify the game's original notification.
 
 UNMA includes a warning bell, an industrial horn, a motor siren, and several synthesized signals. To add a custom sound, copy a PCM WAV or Ogg Vorbis file to:
 

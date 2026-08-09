@@ -918,6 +918,30 @@ internal static class Program
                 "vanilla:Other",
                 17,
                 "TruckT2"));
+        var ignoredRules = new[]
+        {
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:TruckCannotDeliver",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "TruckT2",
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+        };
+        AreEqual(
+            VanillaNotificationBehavior.Ignored,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                ignoredRules,
+                "vanilla:TruckCannotDeliver",
+                99,
+                "TruckT2"));
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                ignoredRules,
+                "vanilla:TruckCannotDeliver",
+                99,
+                "TruckT3"));
 
         var legacyConfig = UnmaConfiguration.CreateDefault();
         legacyConfig.SchemaVersion = 12;
@@ -1582,6 +1606,14 @@ internal static class Program
                 EntityPrototypeId = "TruckT2",
                 Behavior = VanillaNotificationBehavior.Hidden,
             });
+        configuration.VanillaNotificationRules.Add(
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:TruckCannotDeliver",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "TruckT2",
+                Behavior = VanillaNotificationBehavior.Ignored,
+            });
         var editedSystemAlarm = configuration.SystemAlarms
             .Find(alarm => alarm.Id == "system:health");
         editedSystemAlarm.AutoAcknowledgeOnClear = true;
@@ -1690,13 +1722,16 @@ internal static class Program
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
         AreEqual(13, restored.SchemaVersion);
-        AreEqual(1, restored.VanillaNotificationRules.Count);
+        AreEqual(2, restored.VanillaNotificationRules.Count);
         AreEqual(
             VanillaNotificationBehavior.Hidden,
             restored.VanillaNotificationRules[0].Behavior);
         AreEqual(
             "TruckT2",
             restored.VanillaNotificationRules[0].EntityPrototypeId);
+        AreEqual(
+            VanillaNotificationBehavior.Ignored,
+            restored.VanillaNotificationRules[1].Behavior);
         IsTrue(restored.Panels[0].IsDashboard);
         IsFalse(restored.Panels[1].IsDashboard);
         AreEqual(
