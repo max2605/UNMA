@@ -65,6 +65,22 @@ public static class UnmaText
         return Resolve("multilanglib." + ModId + "." + textId, fallback);
     }
 
+    public static string Get(string textId)
+    {
+        var canonicalKey = "multilanglib." + ModId + "." + textId;
+        try
+        {
+            return Lang.Get(canonicalKey);
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                $"UNMA: Translation '{canonicalKey}' could not be read: " +
+                exception.Message);
+            return canonicalKey;
+        }
+    }
+
     public static string Resolve(string canonicalKey, string fallback)
     {
         if (string.IsNullOrWhiteSpace(canonicalKey))
@@ -93,6 +109,22 @@ public static class UnmaText
         params object[] arguments)
     {
         var template = Get(textId, fallback);
+        try
+        {
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                template,
+                arguments ?? Array.Empty<object>());
+        }
+        catch (FormatException)
+        {
+            return template;
+        }
+    }
+
+    public static string Format(string textId, params object[] arguments)
+    {
+        var template = Get(textId);
         try
         {
             return string.Format(

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.1 – 2026-08-09
+## 0.9.2 – 2026-08-09
 
 - Der Abriss-Listener verwendet jetzt ausdrücklich die nicht speicherbare
   COI-Eventregistrierung. Autosaves versuchen dadurch nicht mehr,

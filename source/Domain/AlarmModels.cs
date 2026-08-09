@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Serialization;
+using UNMA.Localization;
 
 namespace UNMA.Domain;
 
@@ -91,7 +92,7 @@ public sealed class AlarmRuleDefinition
 {
     [DataMember(Order = 1)] public string Id = Guid.NewGuid().ToString("N");
     [DataMember(Order = 2)] public string PanelId = "main";
-    [DataMember(Order = 3)] public string Name = "NEUE MELDUNG";
+    [DataMember(Order = 3)] public string Name = UnmaText.Get("auto.fe04a9d0e58c");
     [DataMember(Order = 4)] public AlarmSeverity Severity = AlarmSeverity.Warning;
     [DataMember(Order = 5)] public AlarmLogic Logic = AlarmLogic.All;
     [DataMember(Order = 6)] public List<ConditionDefinition> Conditions = new();
@@ -232,7 +233,7 @@ public sealed class UnmaConfiguration
         config.Panels.Add(new PanelDefinition
         {
             Id = "main",
-            Name = "ALLE MELDUNGEN",
+            Name = UnmaText.Get("auto.778a27cbcdf2"),
             Columns = 3,
             IncludeVanilla = true,
             IncludeSystem = true,
@@ -266,7 +267,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "warning",
                         100,
-                        "GESUNDHEIT UNTER NORMALWERT",
+                        UnmaText.Get("auto.d11c28379225"),
                         AlarmSeverity.Warning,
                         CreateSystemCondition(
                             "health.value",
@@ -275,7 +276,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "critical",
                         200,
-                        "GESUNDHEIT KRITISCH",
+                        UnmaText.Get("auto.80517e373fe8"),
                         AlarmSeverity.Critical,
                         CreateSystemCondition(
                             "health.value",
@@ -284,7 +285,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "critical.pollution",
                         210,
-                        "VERSCHMUTZUNG KRITISCH",
+                        UnmaText.Get("auto.288803ad208e"),
                         AlarmSeverity.Critical,
                         CreateSystemCondition(
                             "health.pollution_penalty",
@@ -293,7 +294,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "emergency.worker_spiral",
                         300,
-                        "NOTFALL: GESUNDHEITS-ARBEITERSPIRALE",
+                        UnmaText.Get("auto.a6f12e4f8a8d"),
                         AlarmSeverity.Emergency,
                         CreateSystemCondition(
                             "health.disease_active",
@@ -306,7 +307,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "emergency.structural_spiral",
                         310,
-                        "NOTFALL: STRUKTURELLE TODESSPIRALE",
+                        UnmaText.Get("auto.16eef1f4c097"),
                         AlarmSeverity.Emergency,
                         CreateSystemCondition(
                             "health.structural_value",
@@ -328,7 +329,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "warning",
                         100,
-                        "NAHRUNGSVORRAT NIEDRIG",
+                        UnmaText.Get("auto.ec076a9bd367"),
                         AlarmSeverity.Warning,
                         CreateSystemCondition(
                             "food.months",
@@ -337,7 +338,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "critical",
                         200,
-                        "NAHRUNGSVORRAT KRITISCH",
+                        UnmaText.Get("auto.c5629fd15dcf"),
                         AlarmSeverity.Critical,
                         CreateSystemCondition(
                             "food.months",
@@ -346,7 +347,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "emergency.starving",
                         300,
-                        "NOTFALL: HUNGER-TODESSPIRALE",
+                        UnmaText.Get("auto.dae3282f0df2"),
                         AlarmSeverity.Emergency,
                         CreateSystemCondition(
                             "food.spiral",
@@ -364,7 +365,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "warning",
                         100,
-                        "ARBEITERRESERVE NIEDRIG",
+                        UnmaText.Get("auto.95bd3959b728"),
                         AlarmSeverity.Warning,
                         CreateSystemCondition(
                             "workers.reserve_percent",
@@ -373,7 +374,7 @@ public sealed class UnmaConfiguration
                     CreateSystemStage(
                         "critical",
                         200,
-                        "ARBEITER FEHLEN",
+                        UnmaText.Get("auto.78780c9a06e6"),
                         AlarmSeverity.Critical,
                         CreateSystemCondition(
                             "workers.reserve_percent",
@@ -849,7 +850,7 @@ public sealed class UnmaConfiguration
                 {
                     existing.DisplayName = rule.Name;
                     existing.Detail =
-                        rule.Conditions.Count + " Bedingung(en)";
+                        rule.Conditions.Count + UnmaText.Get("auto.38bf168a03a3");
                     existing.Source = "custom";
                     existing.Severity = rule.Severity;
                     existing.ActiveColor = rule.ActiveColor;

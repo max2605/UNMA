@@ -1,5 +1,7 @@
 # UNMA – Universelle Nachrichten-Meldeanlage
 
+**English documentation:** [UNMA User Guide](USER_GUIDE_EN.md)
+
 UNMA ergänzt Captain of Industry um eine frei konfigurierbare industrielle
 Schlitzmelder-Tafel. Das Vorbild ist die klassische Meldeanlage: im Ruhezustand
 hellgrau mit schwarzer Schrift, beim Kommen blinkend in Aktivfarbe und nach

@@ -444,15 +444,15 @@ public sealed class UnmaRuntime : IDisposable
         foreach (var diagnostic in loaded.Diagnostics.Take(20))
         {
             Log.Warning(
-                "UNMA: Fremdmod-Definition " + diagnostic.Code +
+                UnmaText.Get("auto.3289fc75fbec") + diagnostic.Code +
                 " [" + diagnostic.ProviderId + "] " +
                 diagnostic.Message);
         }
         if (loaded.Diagnostics.Count > 20)
         {
             Log.Warning(
-                "UNMA: " + (loaded.Diagnostics.Count - 20) +
-                " weitere Fremdmod-Diagnosen wurden zusammengefasst.");
+                UnmaText.Get("auto.a01209a822a4") + (loaded.Diagnostics.Count - 20) +
+                UnmaText.Get("auto.2e4a6d9e30ad"));
         }
 
         Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
@@ -529,10 +529,10 @@ public sealed class UnmaRuntime : IDisposable
                     StringComparison.Ordinal))
             {
                 Log.Warning(
-                    "UNMA: MultiLangLib-Namensraum '" + alias.Namespace +
-                    "' gehört bereits zu '" + existingOwner +
-                    "'; Registrierung von '" + alias.Owner +
-                    "' wurde abgewiesen.");
+                    UnmaText.Get("auto.97b72c42d7ed") + alias.Namespace +
+                    UnmaText.Get("auto.c634fae93531") + existingOwner +
+                    UnmaText.Get("auto.c5da52c41902") + alias.Owner +
+                    UnmaText.Get("auto.3740d62d7a01"));
                 continue;
             }
             namespaceOwners[alias.Namespace] = alias.Owner;
@@ -985,7 +985,7 @@ public sealed class UnmaRuntime : IDisposable
         string entityTitle)
     {
         return string.IsNullOrWhiteSpace(entityTitle)
-            ? "OBJEKT #" + entityId.ToString(CultureInfo.InvariantCulture)
+            ? UnmaText.Get("auto.2623e678be24") + entityId.ToString(CultureInfo.InvariantCulture)
             : entityTitle.Trim();
     }
 
@@ -2122,7 +2122,7 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     AlarmId = alarmId,
                     DisplayName = rule.Name,
-                    Detail = rule.Conditions.Count + " Bedingung(en)",
+                    Detail = rule.Conditions.Count + UnmaText.Get("auto.38bf168a03a3"),
                     Source = "custom",
                     Severity = rule.Severity,
                     ActiveColor = rule.ActiveColor,
@@ -2800,8 +2800,8 @@ public sealed class UnmaRuntime : IDisposable
         }
 
         Log.Info(
-            "UNMA: " + removedCount +
-            " Meldung(en) entfernter Entitäten automatisch gelöscht.");
+            UnmaText.Get("auto.a01209a822a4") + removedCount +
+            UnmaText.Get("auto.9548beef5dd8"));
         foreach (var entityId in removedEntityIds)
         {
             m_missingStaticEntityTracker.Forget(entityId);
@@ -2914,7 +2914,7 @@ public sealed class UnmaRuntime : IDisposable
                     "",
                     "",
                     Array.Empty<MetricDescriptor>(),
-                    "Die ausgewählte Entität ist nicht mehr verfügbar.");
+                    UnmaText.Get("auto.402d28b2c076"));
             }
             else
             {
@@ -2937,7 +2937,7 @@ public sealed class UnmaRuntime : IDisposable
                 "",
                 "",
                 Array.Empty<MetricDescriptor>(),
-                "Messwerte konnten nicht gelesen werden: " +
+                UnmaText.Get("auto.631c5fe440a9") +
                 exception.Message);
         }
 
@@ -3272,33 +3272,33 @@ public sealed class UnmaRuntime : IDisposable
     {
         if (string.Equals(alarmId, "system:health", StringComparison.Ordinal))
         {
-            return "Gesundheit " + Metric(metrics, "health.value") +
-                   " (neutral 10) · Krankheit " +
+            return UnmaText.Get("auto.ae446db0ed2d") + Metric(metrics, "health.value") +
+                   UnmaText.Get("auto.21dcbd739235") +
                    Metric(metrics, "health.disease_penalty") +
-                   " · Krankheitsmortalität " +
+                   UnmaText.Get("auto.f6301281505f") +
                    Metric(metrics, "health.disease_mortality") + " %" +
-                   " · Pollution/Müll " +
+                   UnmaText.Get("auto.dd15ca245c19") +
                    Metric(metrics, "health.pollution_penalty") +
-                   " · Arbeitsreserve " +
+                   UnmaText.Get("auto.6ef1a6c3fad0") +
                    Metric(metrics, "workers.reserve_percent") + " %" +
-                   " · erwarteter Nettoverlust " +
+                   UnmaText.Get("auto.863c4e001bd8") +
                    Metric(metrics, "health.expected_loss") + "/Monat";
         }
         if (string.Equals(alarmId, "system:food", StringComparison.Ordinal))
         {
-            return "Nahrung " + Metric(metrics, "food.months") +
-                   " Monate · Hunger " +
+            return UnmaText.Get("auto.d956b9a281db") + Metric(metrics, "food.months") +
+                   UnmaText.Get("auto.def3f955a1d1") +
                    (MetricValue(metrics, "food.starving") >= 1d
                        ? "JA"
                        : "nein") +
-                   " · verhungert " +
+                   UnmaText.Get("auto.407b1f41ae3c") +
                    Metric(metrics, "food.starved_last_month");
         }
         if (string.Equals(alarmId, "system:workers", StringComparison.Ordinal))
         {
-            return "Arbeitsreserve " +
+            return UnmaText.Get("auto.41b9b814c3ef") +
                    Metric(metrics, "workers.reserve_percent") + " % · " +
-                   "frei/fehlend " +
+                   UnmaText.Get("auto.d7a78ffa1014") +
                    Metric(metrics, "workers.free_or_missing");
         }
         return "Systemmeldung";
@@ -3473,7 +3473,7 @@ public sealed class UnmaRuntime : IDisposable
                     actual.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) +
-                    ", Bezug " +
+                    UnmaText.Get("auto.9a1d422d96f9") +
                     reference.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) + ")");
@@ -3495,11 +3495,11 @@ public sealed class UnmaRuntime : IDisposable
                     : condition.ReferenceMetricLabel;
                 details.Add(
                     condition.EntityTitle + " · " +
-                    condition.MetricLabel + " % von " + referenceLabel +
+                    condition.MetricLabel + UnmaText.Get("auto.a2a26d7166e8") + referenceLabel +
                     " " + OperatorText(condition.Comparison) + " " +
                     condition.Threshold.ToString(
                         "0.###",
-                        CultureInfo.CurrentCulture) + " % (ist " +
+                        CultureInfo.CurrentCulture) + UnmaText.Get("auto.4a7f5dd7bab3") +
                     comparable.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) + " %; " +
@@ -3519,7 +3519,7 @@ public sealed class UnmaRuntime : IDisposable
                     condition.Threshold.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) +
-                    " (ist " +
+                    UnmaText.Get("auto.ce1d97e09d6b") +
                     actual.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) + ")");
@@ -3531,7 +3531,7 @@ public sealed class UnmaRuntime : IDisposable
             "rule:" + rule.Id,
             rule.Name,
             string.Join(
-                rule.Logic == AlarmLogic.All ? " UND " : " ODER ",
+                rule.Logic == AlarmLogic.All ? UnmaText.Get("auto.a3f10eb98ea4") : UnmaText.Get("auto.5f15b34155a9"),
                 details),
             "custom",
             rule.PanelId,
@@ -3619,9 +3619,9 @@ public sealed class UnmaRuntime : IDisposable
             else if (logCollisions)
             {
                 Log.Warning(
-                    "UNMA: C#-Alarmvorlage '" + template.OwnerModId +
+                    UnmaText.Get("auto.ba86c9b0922c") + template.OwnerModId +
                     ":" + template.Id +
-                    "' kollidiert mit JSON; die JSON-Definition gilt.");
+                    UnmaText.Get("auto.1e204fc5991c"));
             }
         }
         m_lastExternalCollisionStamp = collisionStamp;
@@ -3639,8 +3639,8 @@ public sealed class UnmaRuntime : IDisposable
             catch (Exception exception)
             {
                 Log.Warning(
-                    "UNMA: Entitäten für Fremdmod-Alarme konnten nicht " +
-                    "gelesen werden: " + exception.Message);
+                    UnmaText.Get("auto.2055eaefc4f5") +
+                    UnmaText.Get("auto.a5aa7c9bef16") + exception.Message);
             }
         }
         var liveEntitiesByPrototype = IndexExternalEntities(
@@ -3896,7 +3896,7 @@ public sealed class UnmaRuntime : IDisposable
         var aggregateDetail = matchingEntities.Length == 0
             ? UnmaText.Get(
                 "external.no_matching_entity",
-                "Keine passende Entität aktiv")
+                UnmaText.Get("auto.89833959965c"))
             : active.Length + "/" + matchingEntities.Length + " " +
               UnmaText.Get("external.active", "aktiv");
         if (representative != null)
@@ -4007,12 +4007,12 @@ public sealed class UnmaRuntime : IDisposable
                         ? condition.ReferenceMetric
                         : condition.ReferenceLabelFallback);
                 details.Add(
-                    label + " % von " + referenceLabel + " " +
+                    label + UnmaText.Get("auto.a2a26d7166e8") + referenceLabel + " " +
                     condition.Operator + " " +
                     condition.Threshold.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) +
-                    " % (ist " + comparable.ToString(
+                    UnmaText.Get("auto.4a7f5dd7bab3") + comparable.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) + " %; " +
                     actual.ToString(
@@ -4029,7 +4029,7 @@ public sealed class UnmaRuntime : IDisposable
                     condition.Threshold.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) +
-                    " (ist " + comparable.ToString(
+                    UnmaText.Get("auto.ce1d97e09d6b") + comparable.ToString(
                         "0.###",
                         CultureInfo.CurrentCulture) + ")");
             }
@@ -4042,8 +4042,8 @@ public sealed class UnmaRuntime : IDisposable
                 : AlarmLogic.All);
         result.Detail = string.Join(
             string.Equals(template.Logic, "any", StringComparison.Ordinal)
-                ? " ODER "
-                : " UND ",
+                ? UnmaText.Get("auto.5f15b34155a9")
+                : UnmaText.Get("auto.a3f10eb98ea4"),
             details);
         return result;
     }
@@ -4869,8 +4869,8 @@ public sealed class UnmaRuntime : IDisposable
         catch (Exception exception)
         {
             Log.Warning(
-                "UNMA: Vanilla-Meldungsart konnte nicht sofort " +
-                "neu eingelesen werden: " + exception.Message);
+                UnmaText.Get("auto.b1be85351986") +
+                UnmaText.Get("auto.daf987e22580") + exception.Message);
             return;
         }
 

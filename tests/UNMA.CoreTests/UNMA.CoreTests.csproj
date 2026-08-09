@@ -8,6 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="..\..\lang\de.json"
+             Link="lang\de.json"
+             CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\..\source\Domain\AlarmModels.cs"
              Link="Domain\AlarmModels.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"

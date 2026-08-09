@@ -9,6 +9,7 @@ using Mafi.Unity.Ui;
 using Mafi.Unity.UiToolkit.Component;
 using Mafi.Unity.UiToolkit.Library;
 using UnityEngine;
+using UNMA.Localization;
 
 namespace UNMA.Ui;
 
@@ -67,8 +68,8 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
         if (!m_isCompatible)
         {
             Log.Warning(
-                "UNMA: Inspector-Alarmknopf deaktiviert; " +
-                "die Inspector-API ist nicht kompatibel.");
+                UnmaText.Get("auto.e191f80e2132") +
+                UnmaText.Get("auto.f8a83f1fa442"));
         }
     }
 
@@ -97,7 +98,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
             if (rawInstances is not LystStruct<IEntityInspector> instances)
             {
                 DisableAfterFailure(
-                    "Inspector-Liste hat einen unerwarteten Typ.",
+                    UnmaText.Get("auto.e1c5837d7159"),
                     null);
                 return;
             }
@@ -110,7 +111,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
         catch (Exception exception)
         {
             DisableAfterFailure(
-                "Inspector-Liste konnte nicht gelesen werden.",
+                UnmaText.Get("auto.287ce4c9992e"),
                 exception);
         }
     }
@@ -129,8 +130,8 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
             catch (Exception exception)
             {
                 Log.Warning(
-                    "UNMA: Inspector-Alarmknopf konnte nicht entfernt " +
-                    "werden: " + exception.Message);
+                    UnmaText.Get("auto.fe2d25e488db") +
+                    UnmaText.Get("auto.2ec5753e2d63") + exception.Message);
             }
         }
         m_buttons.Clear();
@@ -166,7 +167,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
             {
                 MarkInspectorTypeIncompatible(
                     inspector.GetType(),
-                    "TopRightButtons fehlt.",
+                    UnmaText.Get("auto.b8f18a1005df"),
                     null);
                 return;
             }
@@ -177,7 +178,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
                     BellIconPath,
                     () => m_onButtonClicked(capturedInspector))
                 .Tooltip(new LocStrFormatted(
-                    "UNMA: Gebäudetafel öffnen"));
+                    UnmaText.Get("auto.25abb205769a")));
             var headerPanelField = inspector.GetType().GetField(
                 "HeaderPanel",
                 BindingFlags.Instance | BindingFlags.Public);
@@ -197,7 +198,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
             {
                 MarkInspectorTypeIncompatible(
                     inspector.GetType(),
-                    "Inspector-Kopfzeile ist ausgeblendet.",
+                    UnmaText.Get("auto.9fb76cba2185"),
                     null);
                 button.RemoveFromHierarchy();
                 return;
@@ -208,7 +209,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
         {
             MarkInspectorTypeIncompatible(
                 inspector.GetType(),
-                "Alarmknopf konnte nicht eingefügt werden.",
+                UnmaText.Get("auto.0b2fb71b6882"),
                 exception);
         }
     }
@@ -224,7 +225,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
         }
 
         Log.Warning(
-            "UNMA: Kein Inspector-Alarmknopf für " +
+            UnmaText.Get("auto.c83c783282a7") +
             inspectorType.FullName + ": " + message +
             FormatException(exception));
     }
@@ -241,7 +242,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
 
         m_updateFailureLogged = true;
         Log.Warning(
-            "UNMA: Inspector-Alarmknopf deaktiviert: " + message +
+            UnmaText.Get("auto.3d7c4d1e1508") + message +
             FormatException(exception));
     }
 
@@ -263,7 +264,7 @@ public sealed class InspectorAlarmButtonBridge : IDisposable
             if (result != null)
             {
                 Log.Warning(
-                    "UNMA: Mehrere kompatible Inspector-Listen gefunden.");
+                    UnmaText.Get("auto.ba5db201b770"));
                 return null;
             }
             result = field;

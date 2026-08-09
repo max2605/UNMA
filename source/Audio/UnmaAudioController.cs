@@ -6,6 +6,7 @@ using System.Linq;
 using Mafi;
 using Mafi.Unity.Audio;
 using UnityEngine;
+using UNMA.Localization;
 using UnityEngine.Networking;
 using UNMA.Domain;
 
@@ -29,16 +30,16 @@ public sealed class UnmaAudioController : MonoBehaviour
 
     private static readonly SoundOption[] s_builtinOptions =
     {
-        new("auto", "Automatisch nach Stufe"),
-        new("none", "Kein Ton"),
+        new("auto", UnmaText.Get("auto.d5a4cc78ecf9")),
+        new("none", UnmaText.Get("auto.767bc310bb61")),
         new("bell", "Klingel"),
         new("horn", "Industriehorn"),
-        new("siren", "E57-Motorsirene \u00b7 2 s hoch / 2 s runter"),
-        new("sine", "Oszillator · Sinus"),
-        new("square", "Oszillator · Rechteck"),
-        new("saw", "Oszillator · Sägezahn"),
-        new("triangle", "Oszillator · Dreieck"),
-        new("pulse", "Oszillator · Impuls"),
+        new("siren", UnmaText.Get("auto.93380f165444")),
+        new("sine", UnmaText.Get("auto.9a71304036e6")),
+        new("square", UnmaText.Get("auto.5b658f11c96e")),
+        new("saw", UnmaText.Get("auto.2d9aead140a0")),
+        new("triangle", UnmaText.Get("auto.70934afb18eb")),
+        new("pulse", UnmaText.Get("auto.fc3524d5baee")),
     };
 
     private readonly Dictionary<string, AudioClip> m_clips =
@@ -137,13 +138,13 @@ public sealed class UnmaAudioController : MonoBehaviour
                 var fileName = Path.GetFileName(path);
                 m_soundOptions.Add(new SoundOption(
                     "file:" + fileName,
-                    "Datei · " + fileName));
+                    UnmaText.Get("auto.3a1cbc4478b0") + fileName));
             }
         }
         catch (Exception exception)
         {
             Log.Warning(
-                "UNMA: Sound-Verzeichnis konnte nicht gelesen werden: " +
+                UnmaText.Get("auto.567bb01fcccb") +
                 exception.Message);
         }
     }
@@ -323,11 +324,11 @@ public sealed class UnmaAudioController : MonoBehaviour
                             RegisterCustomSoundFailure(
                                 soundId,
                                 fileName,
-                                "kein AudioClip erzeugt");
+                                UnmaText.Get("auto.9cff4c7a069f"));
                         }
                         else
                         {
-                            clip.name = "UNMA " + fileName;
+                            clip.name = UnmaText.Get("auto.9efeab6faae0") + fileName;
                             m_clips[soundId] = clip;
                             if (string.Equals(
                                     m_requestedSoundId,
@@ -471,12 +472,12 @@ public sealed class UnmaAudioController : MonoBehaviour
         if (samples == null || samples.Length == 0)
         {
             throw new ArgumentException(
-                "Generated UNMA audio data must not be empty.",
+                UnmaText.Get("auto.f9c182691284"),
                 nameof(samples));
         }
 
         var clip = AudioClip.Create(
-            "UNMA " + id,
+            UnmaText.Get("auto.9efeab6faae0") + id,
             samples.Length,
             1,
             SampleRate,
@@ -493,7 +494,7 @@ public sealed class UnmaAudioController : MonoBehaviour
         {
             Destroy(clip);
             throw new InvalidOperationException(
-                "Unity rejected generated UNMA audio data for " + id);
+                UnmaText.Get("auto.162e492a1cc9") + id);
         }
         m_clips[id] = clip;
     }

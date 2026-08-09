@@ -157,7 +157,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private AlarmSeverity m_draftSeverity = AlarmSeverity.Warning;
     private AlarmLogic m_draftLogic = AlarmLogic.All;
     private string m_draftThreshold = "0";
-    private string m_draftRuleName = "NEUE MELDUNG";
+    private string m_draftRuleName = UnmaText.Get("auto.fe04a9d0e58c");
     private string m_draftColor = "#F0C541";
     private int m_draftSoundIndex;
     private string m_originalDraftSoundId = "auto";
@@ -167,7 +167,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_draftTargetPanelId = "";
     private string m_lastAlarmTileClickId = "";
     private float m_lastAlarmTileClickAt;
-    private string m_newPanelName = "NEUES PANEL";
+    private string m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     private string m_panelSlotFilter = "";
     private string m_soundOverrideFilter = "";
     private SystemAlarmDefinition m_systemAlarmDraft;
@@ -213,7 +213,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         AudioDb audioDb,
         string modRoot)
     {
-        var gameObject = new GameObject("UNMA Overlay");
+        var gameObject = new GameObject(UnmaText.Get("auto.b2d42e12e3c8"));
         gameObject.hideFlags = HideFlags.HideAndDontSave;
         DontDestroyOnLoad(gameObject);
         var overlay = gameObject.AddComponent<UnmaOverlayController>();
@@ -324,8 +324,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ResetDraftRule();
             m_entityAlarmWindowOpen = false;
             SetStatus(
-                "Die bearbeitete Meldung wurde entfernt, weil ihre " +
-                "überwachte Entity nicht mehr existiert.");
+                UnmaText.Get("auto.ced08b6f8b50") +
+                UnmaText.Get("auto.e24c442816b5"));
         }
 
         var alarmEditorVisible = m_entityAlarmWindowOpen &&
@@ -504,8 +504,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (GUI.Button(
                 buttonRect,
                 m_runtime.UnacknowledgedCount > 0
-                    ? "UNMA  !" + m_runtime.UnacknowledgedCount
-                    : "UNMA  F8",
+                    ? UnmaText.Get("auto.bda0aafdab42") + m_runtime.UnacknowledgedCount
+                    : UnmaText.Get("auto.6da300ca5a04"),
                 m_runtime.UnacknowledgedCount > 0
                     ? m_dangerButtonStyle
                     : m_buttonStyle))
@@ -552,7 +552,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         HandleResizeInput();
         DrawWindowHeader(UnmaText.Get(
             "window.title",
-            "UNMA · UNIVERSELLE NACHRICHTEN-MELDEANLAGE"),
+            UnmaText.Get("auto.dfab1e8598ee")),
             m_windowRect.width);
 
         GUILayout.BeginArea(new Rect(
@@ -565,7 +565,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawTabButton(TabBoard, UnmaText.Get("tab.board", "MELDETAFEL"));
         DrawTabButton(TabHistory, UnmaText.Get("tab.history", "VERLAUF"));
         DrawTabButton(TabSystem, UnmaText.Get("tab.system", "SYSTEM"));
-        DrawTabButton(TabSounds, UnmaText.Get("tab.sounds", "TÖNE"));
+        DrawTabButton(TabSounds, UnmaText.Get("tab.sounds", UnmaText.Get("auto.e2056083541e")));
         DrawTabButton(TabOptions, UnmaText.Get("tab.options", "OPTIONEN"));
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
@@ -605,7 +605,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var panel = CurrentPanel;
         if (panel == null)
         {
-            GUILayout.Label("Kein Panel vorhanden.", m_labelStyle);
+            GUILayout.Label(UnmaText.Get("auto.660051723bb3"), m_labelStyle);
             return;
         }
 
@@ -613,7 +613,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (PanelTopologyPolicy.IsEntityPanel(panel))
         {
             if (GUILayout.Button(
-                    "← GLOBALE PANEL",
+                    UnmaText.Get("auto.c76615f2e3a1"),
                     m_buttonStyle,
                     GUILayout.Width(170f),
                     GUILayout.Height(30f)))
@@ -622,7 +622,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_boardScroll = Vector2.zero;
             }
             GUILayout.Label(
-                "GEBÄUDETAFEL · " + panel.Name,
+                UnmaText.Get("auto.5a88ed325cbb") + panel.Name,
                 m_primaryButtonStyle,
                 GUILayout.Height(30f));
         }
@@ -659,7 +659,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.EndHorizontal();
             GUILayout.EndScrollView();
             if (GUILayout.Button(
-                    "+ PANEL",
+                    UnmaText.Get("auto.6f4982ecd932"),
                     m_buttonStyle,
                     GUILayout.Width(88f),
                     GUILayout.Height(30f)))
@@ -688,12 +688,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(6f);
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "AKTIVE EREIGNISSE " + activeCount +
-            "   ·   UNQUITTIERT " + unacknowledgedCount,
+            UnmaText.Get("auto.397544fe1d24") + activeCount +
+            UnmaText.Get("auto.ac9ef4c5783a") + unacknowledgedCount,
             m_sectionStyle,
             GUILayout.Height(34f));
         if (GUILayout.Button(
-                "MASTER QUIT · QUITTIEREN",
+                UnmaText.Get("auto.e47523e046af"),
                 m_dangerButtonStyle,
                 GUILayout.Width(245f),
                 GUILayout.Height(34f)))
@@ -701,10 +701,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_runtime.AcknowledgeAll();
             m_audio.StopAlarm();
             SetStatus(
-                "Alle kommenden und gegangenen Meldungen quittiert.");
+                UnmaText.Get("auto.dc2bb45a2f14"));
         }
         if (GUILayout.Button(
-                "PANEL ABKOPPELN",
+                UnmaText.Get("auto.c70a06d3a782"),
                 m_buttonStyle,
                 GUILayout.Width(180f),
                 GUILayout.Height(34f)))
@@ -712,7 +712,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             DetachPanel(panel.Id);
         }
         if (!panel.IsDashboard && GUILayout.Button(
-                "+ NEUE MELDUNG",
+                UnmaText.Get("auto.1cc8d34d4b3e"),
                 m_primaryButtonStyle,
                 GUILayout.Width(175f),
                 GUILayout.Height(34f)))
@@ -725,7 +725,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (!m_entityAssignmentPending)
         {
             GUILayout.Label(
-                "Eigene Meldung doppelklicken = direkt im Editor öffnen.",
+                UnmaText.Get("auto.22344e5e1ac7"),
                 m_smallLabelStyle);
         }
         m_boardScroll = GUILayout.BeginScrollView(m_boardScroll);
@@ -738,8 +738,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             panel.IsDashboard ? null : panel,
             m_entityAssignmentPending && !panel.IsDashboard,
             panel.IsDashboard
-                ? "Keine aktiven Meldungen."
-                : "Keine Meldeschlitze in diesem Panel.",
+                ? UnmaText.Get("auto.f895fe84e658")
+                : UnmaText.Get("auto.e8bad0a4452b"),
             !panel.IsDashboard);
         GUILayout.EndScrollView();
     }
@@ -754,33 +754,33 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(6f);
         GUILayout.BeginHorizontal();
         var entityText = m_assignmentEntity == null
-            ? "OBJEKT #" + m_assignmentEntityId + " WIRD GELADEN"
-            : "OBJEKT HINZUGEFÜGT: " +
+            ? UnmaText.Get("auto.2623e678be24") + m_assignmentEntityId + UnmaText.Get("auto.76e7b0bbc88e")
+            : UnmaText.Get("auto.9eb6dbd0927f") +
               m_assignmentEntity.Title.ToUpperInvariant() +
-              " · ID " + m_assignmentEntity.EntityId;
+              UnmaText.Get("auto.9da04860d6fc") + m_assignmentEntity.EntityId;
         GUILayout.Label(
             entityText,
             m_sectionStyle,
             GUILayout.Height(34f));
         if (GUILayout.Button(
-                "ZUWEISUNG ABBRECHEN",
+                UnmaText.Get("auto.71418af14024"),
                 m_buttonStyle,
                 GUILayout.Width(190f),
                 GUILayout.Height(34f)))
         {
             CancelEntityAssignment();
-            SetStatus("Objektzuweisung abgebrochen.");
+            SetStatus(UnmaText.Get("auto.a0b453e90074"));
         }
         GUILayout.EndHorizontal();
         GUILayout.Label(
             m_assignmentEntity == null
-                ? "Nach dem Laden kann ein Ziel gewählt werden."
+                ? UnmaText.Get("auto.ddaf88332415")
                 : panel.IsDashboard
-                    ? "HOME zeigt nur aktive Meldungen. Für einen festen " +
-                      "Meldeschlitz zuerst ein Fachpanel wählen."
-                    : "Auf " + panel.Name +
-                  ": eigene Meldung anklicken = verknüpfen; " +
-                  "+ NEUE MELDUNG anklicken = neuer fester Schlitz.",
+                    ? UnmaText.Get("auto.4d0bf7520637") +
+                      UnmaText.Get("auto.a2b9fddc25ba")
+                    : UnmaText.Get("auto.eb02fc0a8069") + panel.Name +
+                  UnmaText.Get("ui.assignment.link_hint") +
+                  UnmaText.Get("auto.3b6919024f08"),
             m_smallLabelStyle);
     }
 
@@ -790,15 +790,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "VERLAUF   " + entries.Count + " EINTRÄGE",
+            UnmaText.Get("auto.2cf87f46efd8") + entries.Count + UnmaText.Get("auto.79c82a039536"),
             m_sectionStyle,
             GUILayout.Height(34f));
         var confirmingDelete =
             Time.realtimeSinceStartup < m_pendingHistoryDeleteUntil;
         if (GUILayout.Button(
                 confirmingDelete
-                    ? "NOCHMAL: ALLE KGQ LÖSCHEN"
-                    : "ALLE KGQ LÖSCHEN",
+                    ? UnmaText.Get("auto.beb568ff57a3")
+                    : UnmaText.Get("auto.3ecf169c4abf"),
                 confirmingDelete
                     ? m_dangerButtonStyle
                     : m_buttonStyle,
@@ -810,7 +810,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_pendingHistoryDeleteUntil =
                     Time.realtimeSinceStartup + 5f;
                 SetStatus(
-                    "Zum Löschen aller KGQ-Einträge erneut drücken.");
+                    UnmaText.Get("auto.af9b4e96e001"));
             }
             else if (m_runtime.DeleteCompletedAlarmHistory(
                          out var deletedCount))
@@ -818,19 +818,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_pendingHistoryDeleteUntil = 0f;
                 m_historyScroll = Vector2.zero;
                 SetStatus(
-                    deletedCount + " KGQ-Einträge gelöscht.");
+                    deletedCount + UnmaText.Get("auto.fe46d61b2afe"));
             }
             else
             {
                 SetStatus(
-                    "Löschen fehlgeschlagen: " +
+                    UnmaText.Get("auto.c1f0ffc84e81") +
                     m_runtime.LastPersistenceError);
             }
         }
         GUILayout.EndHorizontal();
 
         GUILayout.Label(
-            "K = KOMMEN   |   G = GEGANGEN   |   Q = QUITTIERT",
+            UnmaText.Get("auto.546f06f29ca0"),
             m_smallLabelStyle);
         DrawStatusMessage();
         DrawHistoryHeader();
@@ -850,7 +850,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             GUILayout.Space(16f);
             GUILayout.Label(
-                "Noch keine Meldungen im Verlauf.",
+                UnmaText.Get("auto.d63794d49841"),
                 m_labelStyle);
         }
         else
@@ -1004,17 +1004,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     inner.y + 4f,
                     actionWidth - 8f,
                     inner.height - 8f),
-                "LÖSCHEN",
+                UnmaText.Get("auto.9cf94f11833b"),
                 m_buttonStyle))
         {
             if (m_runtime.DeleteAlarmHistoryEntry(entry.Sequence))
             {
-                SetStatus("KGQ-Eintrag gelöscht.");
+                SetStatus(UnmaText.Get("auto.ca50a93bd9e5"));
             }
             else
             {
                 SetStatus(
-                    "Löschen fehlgeschlagen: " +
+                    UnmaText.Get("auto.c1f0ffc84e81") +
                     m_runtime.LastPersistenceError);
             }
         }
@@ -1029,14 +1029,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(12f);
         GUILayout.Label(
             string.IsNullOrWhiteSpace(m_editingRuleId)
-                ? "NEUE MELDUNG / SAMMELMELDUNG"
-                : "MELDUNG NACHTRÄGLICH BEARBEITEN",
+                ? UnmaText.Get("auto.3fc83596b4ef")
+                : UnmaText.Get("auto.f8226d218f15"),
             m_sectionStyle);
         GUILayout.Label(
-            "Am einfachsten: UNMA-Glocke im Inspector drücken, dann auf " +
-            "der Meldetafel eine eigene Meldung zum Verknüpfen oder das " +
-            "freie + Karree wählen. Hier kann weiterhin die aktuelle " +
-            "Spielauswahl übernommen werden.",
+            UnmaText.Get("auto.30893e3ab657") +
+            UnmaText.Get("auto.a4af228f3574") +
+            UnmaText.Get("auto.9053cc535627") +
+            UnmaText.Get("auto.6232fc63f818"),
             m_smallLabelStyle);
         DrawAlarmRuleEditor(false);
 
@@ -1051,9 +1051,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_pendingPanelDeleteId = "";
         }
-        GUILayout.Label("PANEL AUSWÄHLEN", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.251e714a80a6"), m_sectionStyle);
         GUILayout.Label(
-            "Ein Panel ist eine Meldetafel. Beim Speichern einer Meldung wird ausdrücklich gewählt, auf welcher Tafel sie erscheint.",
+            UnmaText.Get("auto.8db078b96ea7"),
             m_smallLabelStyle);
 
         var panels = m_runtime.Configuration.Panels;
@@ -1083,7 +1083,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (panel != null)
         {
             GUILayout.Space(6f);
-            GUILayout.Label("AKTUELLES PANEL BEARBEITEN", m_sectionStyle);
+            GUILayout.Label(UnmaText.Get("auto.d03a4752df6c"), m_sectionStyle);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Name", m_labelStyle, GUILayout.Width(90f));
             panel.Name = GUILayout.TextField(
@@ -1092,7 +1092,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_textFieldStyle,
                 GUILayout.Width(260f));
             GUILayout.Label(
-                "Spalten " + panel.Columns,
+                UnmaText.Get("auto.7f6972b99a3e") + panel.Columns,
                 m_labelStyle,
                 GUILayout.Width(90f));
             if (GUILayout.Button("-", m_buttonStyle, GUILayout.Width(34f)))
@@ -1107,36 +1107,36 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 panel.IncludeVanilla = GUILayout.Toggle(
                     panel.IncludeVanilla,
-                    " Vanilla auto",
+                    UnmaText.Get("auto.ef309fc5dd19"),
                     GUILayout.Width(100f));
                 panel.IncludeSystem = GUILayout.Toggle(
                     panel.IncludeSystem,
-                    " System auto",
+                    UnmaText.Get("auto.025c249edeb5"),
                     GUILayout.Width(100f));
             }
             else
             {
                 GUILayout.Label(
-                    "HOME / DASHBOARD",
+                    UnmaText.Get("auto.6e1d936caf5d"),
                     m_smallLabelStyle,
                     GUILayout.Width(205f));
             }
             if (GUILayout.Button(
-                    "ÄNDERUNGEN SPEICHERN",
+                    UnmaText.Get("auto.d4efd9369153"),
                     m_primaryButtonStyle,
                     GUILayout.Width(190f)))
             {
-                SaveConfiguration("Panel gespeichert.");
+                SaveConfiguration(UnmaText.Get("auto.4bd5b213cd77"));
             }
             GUILayout.EndHorizontal();
 
             if (panel.IsDashboard)
             {
                 GUILayout.Label(
-                    "HOME zeigt automatisch nur aktuell anstehende " +
-                    "Meldungen: K und KQ. Gegangene, normale und leere " +
-                    "Schlitze werden hier nicht angezeigt. HOME ist nicht " +
-                    "löschbar.",
+                    UnmaText.Get("auto.e0e998aea68a") +
+                    UnmaText.Get("auto.fee217fd8b0d") +
+                    UnmaText.Get("auto.df66ce36493c") +
+                    UnmaText.Get("ui.dashboard.not_deletable"),
                     m_smallLabelStyle);
             }
             else
@@ -1162,8 +1162,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         StringComparison.Ordinal));
                 if (GUILayout.Button(
                         pendingDelete
-                            ? "SICHER? " + affectedRules + " MELDUNG(EN)"
-                            : "AKTUELLES PANEL LÖSCHEN",
+                            ? UnmaText.Get("auto.2f4d2d64f711") + affectedRules + UnmaText.Get("auto.29b8add2ed8c")
+                            : UnmaText.Get("auto.48a2c61d595d"),
                         m_dangerButtonStyle,
                         GUILayout.Width(220f)))
                 {
@@ -1177,10 +1177,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.Space(6f);
-        GUILayout.Label("NEUES PANEL ANLEGEN", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.ba2a4502c2e0"), m_sectionStyle);
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "Name der neuen Meldetafel",
+            UnmaText.Get("auto.770ddae89d54"),
             m_labelStyle,
             GUILayout.Width(205f));
         m_newPanelName = GUILayout.TextField(
@@ -1189,7 +1189,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(300f));
         if (GUILayout.Button(
-                "MELDETAFEL ANLEGEN",
+                UnmaText.Get("auto.1aedbc19e04e"),
                 m_primaryButtonStyle,
                 GUILayout.Width(190f)))
         {
@@ -1203,10 +1203,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         panel.Slots ??= new List<PanelSlotDefinition>();
         GUILayout.Space(10f);
         GUILayout.Label(
-            "FESTE MELDESCHLITZE   " + panel.Slots.Count,
+            UnmaText.Get("auto.47b5a4a498c8") + panel.Slots.Count,
             m_sectionStyle);
         GUILayout.Label(
-            "Jede Alarm-ID belegt genau einen dauerhaften Platz. Zustand und Schwere verschieben keinen Schlitz. 'Vanilla auto' und 'System auto' hängen passende Arten einmalig hinten an. ENTFERNEN sperrt den Auto-Schlitz dauerhaft; + SCHLITZ gibt ihn wieder frei.",
+            UnmaText.Get("auto.882f8bc83052"),
             m_smallLabelStyle);
 
         for (var index = 0; index < panel.Slots.Count; index++)
@@ -1226,7 +1226,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 panel.Slots.RemoveAt(index);
                 panel.Slots.Insert(index - 1, slot);
-                SaveConfiguration("Schlitz nach oben verschoben.");
+                SaveConfiguration(UnmaText.Get("auto.e4e962c7b82e"));
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
                 return;
@@ -1236,7 +1236,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 panel.Slots.RemoveAt(index);
                 panel.Slots.Insert(index + 1, slot);
-                SaveConfiguration("Schlitz nach unten verschoben.");
+                SaveConfiguration(UnmaText.Get("auto.f0dec1316ddd"));
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
                 return;
@@ -1247,7 +1247,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal);
             GUI.enabled = !isCustom;
             if (GUILayout.Button(
-                    isCustom ? "ÜBER REGEL" : "ENTFERNEN",
+                    isCustom ? UnmaText.Get("auto.063bd868b890") : "ENTFERNEN",
                     m_buttonStyle,
                     GUILayout.Width(105f)))
             {
@@ -1259,7 +1259,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     panel.ExcludedAlarmIds.Add(slot.AlarmId);
                 }
                 panel.Slots.RemoveAt(index);
-                SaveConfiguration("Fester Meldeschlitz entfernt.");
+                SaveConfiguration(UnmaText.Get("auto.43a8099eaf2a"));
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
                 return;
@@ -1271,7 +1271,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(6f);
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "Bekannte Meldung hinzufügen",
+            UnmaText.Get("auto.02a7427b4413"),
             m_labelStyle,
             GUILayout.Width(205f));
         m_panelSlotFilter = GUILayout.TextField(
@@ -1312,7 +1312,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 SlotSourceLabel(slot.Source),
                 m_smallLabelStyle);
             if (GUILayout.Button(
-                    "+ SCHLITZ",
+                    UnmaText.Get("auto.15a322e13c45"),
                     m_primaryButtonStyle,
                     GUILayout.Width(105f)))
             {
@@ -1334,7 +1334,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 panel.ExcludedAlarmIds.RemoveAll(
                     exclusionIds.Contains);
                 panel.Slots.Add(PanelSlotProjection.CloneSlot(slot));
-                SaveConfiguration("Fester Meldeschlitz angehängt.");
+                SaveConfiguration(UnmaText.Get("auto.8a0412c725ad"));
                 GUILayout.EndHorizontal();
                 return;
             }
@@ -1343,7 +1343,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (available.Length == 0)
         {
             GUILayout.Label(
-                "Keine weitere bekannte Vanilla- oder Systemmeldung passend zur Suche.",
+                UnmaText.Get("auto.f7502479c781"),
                 m_smallLabelStyle);
         }
     }
@@ -1354,7 +1354,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             "vanilla" => "VANILLA",
             "system" => "SYSTEM",
-            "custom" => "EIGENE REGEL",
+            "custom" => UnmaText.Get("auto.5aa074c71bd3"),
             _ => "MELDUNG",
         };
     }
@@ -1387,7 +1387,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawDefinedRules()
     {
-        GUILayout.Label("DEFINIERTE MELDUNGEN", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.1d7281b62bea"), m_sectionStyle);
         var sounds = m_audio.GetSoundOptions();
         var panelId = CurrentPanel?.Id;
         foreach (var rule in m_runtime.Configuration.Rules
@@ -1402,22 +1402,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 if (m_runtime.SetRuleEnabled(rule.Id, !rule.Enabled))
                 {
-                    SetStatus("Meldung aktualisiert.");
+                    SetStatus(UnmaText.Get("auto.106717c1a131"));
                 }
                 else
                 {
                     SetStatus(
-                        "Speichern fehlgeschlagen: " +
+                        UnmaText.Get("auto.5df942eb6687") +
                         m_runtime.LastPersistenceError);
                 }
             }
             GUILayout.Label(
                 rule.Name + " · " + SeverityLabel(rule.Severity) +
-                " · " + rule.Conditions.Count + " Bedingung(en) · " +
+                " · " + rule.Conditions.Count + UnmaText.Get("auto.05534195bbe5") +
                 (rule.Logic == AlarmLogic.All ? "UND" : "ODER") + " · " +
                 (rule.AutoAcknowledgeOnClear
-                    ? "GEHT: AUTOMATISCH"
-                    : "GEHT: MASTER QUIT"),
+                    ? UnmaText.Get("auto.367f30137868")
+                    : UnmaText.Get("auto.c9097d398192")),
                 m_labelStyle);
             if (GUILayout.Button(
                     "BEARBEITEN",
@@ -1438,7 +1438,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 }
             }
             if (GUILayout.Button(
-                    "LÖSCHEN",
+                    UnmaText.Get("auto.9cf94f11833b"),
                     m_dangerButtonStyle,
                     GUILayout.Width(90f)))
             {
@@ -1451,12 +1451,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     {
                         ResetDraftRule();
                     }
-                    SetStatus("Meldung gelöscht.");
+                    SetStatus(UnmaText.Get("auto.61bea0138542"));
                 }
                 else
                 {
                     SetStatus(
-                        "Löschen fehlgeschlagen: " +
+                        UnmaText.Get("auto.c1f0ffc84e81") +
                         m_runtime.LastPersistenceError);
                 }
             }
@@ -1471,10 +1471,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var title = m_editorWindowMode switch
         {
             EditorWindowMode.PanelCreation =>
-                "UNMA · NEUES GLOBALES PANEL",
+                UnmaText.Get("auto.5e9e7c9addd9"),
             EditorWindowMode.PanelSettings =>
-                "UNMA · PANEL-EINSTELLUNGEN",
-            _ => "UNMA · MELDUNGS-EDITOR" +
+                UnmaText.Get("auto.0e8b76140a09"),
+            _ => UnmaText.Get("auto.b9ccafdfaef7") +
                  (targetPanel == null ? "" : " · " + targetPanel.Name),
         };
         DrawWindowHeader(title, m_entityAlarmWindowRect.width);
@@ -1523,10 +1523,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawNewPanelWindowContent()
     {
-        GUILayout.Label("NEUES PANEL ANLEGEN", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.ba2a4502c2e0"), m_sectionStyle);
         GUILayout.Label(
-            "Globale Panels sind dauerhafte Meldetafeln. " +
-            "Gebäudetafeln werden über die UNMA-Glocke im Inspector geöffnet.",
+            UnmaText.Get("auto.05a309b6f1bd") +
+            UnmaText.Get("auto.61fdafb643aa"),
             m_smallLabelStyle);
         GUILayout.Space(8f);
         GUILayout.BeginHorizontal();
@@ -1537,7 +1537,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(360f));
         if (GUILayout.Button(
-                "PANEL ANLEGEN",
+                UnmaText.Get("auto.ea4da1cee467"),
                 m_primaryButtonStyle,
                 GUILayout.Width(180f),
                 GUILayout.Height(32f)))
@@ -1560,12 +1560,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
         {
             GUILayout.Label(
-                "Das globale Panel existiert nicht mehr.",
+                UnmaText.Get("auto.0e35fa3ee857"),
                 m_labelStyle);
             return;
         }
 
-        GUILayout.Label("PANEL BEARBEITEN", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.63a4d85953f8"), m_sectionStyle);
         GUILayout.BeginHorizontal();
         GUILayout.Label("Name", m_labelStyle, GUILayout.Width(90f));
         m_panelSettingsName = GUILayout.TextField(
@@ -1574,7 +1574,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(300f));
         GUILayout.Label(
-            "Spalten " + m_panelSettingsColumns,
+            UnmaText.Get("auto.7f6972b99a3e") + m_panelSettingsColumns,
             m_labelStyle,
             GUILayout.Width(90f));
         if (GUILayout.Button("−", m_buttonStyle, GUILayout.Width(36f)))
@@ -1601,8 +1601,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (panel.IsDashboard)
         {
             GUILayout.Label(
-                "Das Dashboard zeigt automatisch nur aktive Ereignisse " +
-                "und kann nicht gelöscht werden.",
+                UnmaText.Get("auto.2eb2c75b7d87") +
+                UnmaText.Get("auto.a1af7061ed28"),
                 m_smallLabelStyle);
             return;
         }
@@ -1610,11 +1610,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.BeginHorizontal();
         m_panelSettingsIncludeVanilla = GUILayout.Toggle(
             m_panelSettingsIncludeVanilla,
-            "Vanilla automatisch",
+            UnmaText.Get("auto.d696777f43cd"),
             GUILayout.Width(170f));
         m_panelSettingsIncludeSystem = GUILayout.Toggle(
             m_panelSettingsIncludeSystem,
-            "System automatisch",
+            UnmaText.Get("auto.e71a0cea7772"),
             GUILayout.Width(170f));
         GUILayout.Label("Auto-Filter", m_labelStyle, GUILayout.Width(90f));
         m_panelSettingsFilter = GUILayout.TextField(
@@ -1624,7 +1624,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.Label(
-            "Schlitz-Aktionen werden jeweils sofort gespeichert.",
+            UnmaText.Get("auto.fe1185445958"),
             m_smallLabelStyle);
         DrawPanelSlots(panel);
 
@@ -1637,8 +1637,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                m_pendingPanelDeleteUntil;
         if (GUILayout.Button(
                 confirmingDelete
-                    ? "NOCHMAL: PANEL LÖSCHEN"
-                    : "PANEL LÖSCHEN",
+                    ? UnmaText.Get("auto.df65358a4dae")
+                    : UnmaText.Get("auto.74d628988b87"),
                 confirmingDelete ? m_dangerButtonStyle : m_buttonStyle,
                 GUILayout.Width(220f)))
         {
@@ -1648,7 +1648,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_pendingPanelDeleteUntil =
                     Time.realtimeSinceStartup + 6f;
                 SetStatus(
-                    "Panel-Löschung innerhalb von 6 Sekunden bestätigen.");
+                    UnmaText.Get("auto.2f5dc812ca48"));
             }
             else if (m_runtime.RemovePanel(panel.Id))
             {
@@ -1658,12 +1658,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_currentPanelIndex = Math.Max(
                     0,
                     Math.Min(m_currentPanelIndex, GlobalPanels.Count - 1));
-                SetStatus("Globales Panel gelöscht.");
+                SetStatus(UnmaText.Get("auto.05ac06816324"));
             }
             else
             {
                 SetStatus(
-                    "Panel konnte nicht gelöscht werden: " +
+                    UnmaText.Get("auto.0fb0c7def7d9") +
                     m_runtime.LastPersistenceError);
             }
         }
@@ -1684,12 +1684,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
             m_panelSettingsIncludeSystem = panel.IncludeSystem;
             m_panelSettingsFilter = panel.NotificationFilter ?? "";
-            SetStatus("Panel gespeichert.");
+            SetStatus(UnmaText.Get("auto.4bd5b213cd77"));
             return;
         }
 
         SetStatus(
-            "Panel konnte nicht gespeichert werden: " +
+            UnmaText.Get("auto.27f10f6dc69e") +
             m_runtime.LastPersistenceError);
     }
 
@@ -1717,8 +1717,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (panel == null)
         {
             GUILayout.Label(
-                "Kein gültiges Zielpanel gewählt. Editor schließen und " +
-                "die Meldung über + NEUE MELDUNG im gewünschten Panel anlegen.",
+                UnmaText.Get("auto.ebe65b2ddfb6") +
+                UnmaText.Get("auto.193650f56055"),
                 m_labelStyle);
             return;
         }
@@ -1726,8 +1726,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.BeginHorizontal();
         GUILayout.Label(
             PanelTopologyPolicy.IsEntityPanel(panel)
-                ? "GEBÄUDETAFEL"
-                : "GLOBALES PANEL",
+                ? UnmaText.Get("auto.ef933adc4bdb")
+                : UnmaText.Get("auto.3ed702323b47"),
             m_labelStyle,
             GUILayout.Width(160f));
         GUILayout.Label(
@@ -1746,11 +1746,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         GUILayout.Space(6f);
         GUILayout.Label(
-            "ZU GLOBALEM PANEL HINZUFÜGEN",
+            UnmaText.Get("auto.c350c4d6b1d5"),
             m_sectionStyle);
         GUILayout.Label(
-            "Die Gebäudemeldung bleibt einmalig. Verknüpfte globale " +
-            "Meldeschlitze zeigen denselben K/G/Q- und Quittierzustand.",
+            UnmaText.Get("auto.7237b12624f3") +
+            UnmaText.Get("auto.e4505264649b"),
             m_smallLabelStyle);
 
         var globalTargets = GlobalPanels
@@ -1759,7 +1759,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (globalTargets.Length == 0)
         {
             GUILayout.Label(
-                "Noch kein globales Fachpanel vorhanden.",
+                UnmaText.Get("auto.637c3fbb4c15"),
                 m_smallLabelStyle);
             return;
         }
@@ -1794,7 +1794,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "Neue Meldetafel",
+            UnmaText.Get("auto.96cad36109c7"),
             m_labelStyle,
             GUILayout.Width(205f));
         var guiWasEnabled = GUI.enabled;
@@ -1805,7 +1805,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(310f));
         if (GUILayout.Button(
-                "+ MELDETAFEL ANLEGEN",
+                UnmaText.Get("auto.af812ec572bb"),
                 m_buttonStyle,
                 GUILayout.Width(205f)))
         {
@@ -1814,8 +1814,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUI.enabled = guiWasEnabled;
         GUILayout.Label(
             slotPositionLocked
-                ? "Für ein anderes Ziel zuerst ENTWURF LEEREN."
-                : "Das neue Panel wird sofort als Ziel gewählt.",
+                ? UnmaText.Get("auto.da45fd0a048f")
+                : UnmaText.Get("auto.83f9628c70ab"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
     }
@@ -1825,7 +1825,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Label("QUELLOBJEKT", m_sectionStyle);
         GUILayout.BeginHorizontal();
         if (GUILayout.Button(
-                "AKTUELLE SPIEL-AUSWAHL ÜBERNEHMEN",
+                UnmaText.Get("auto.7edb47ed7ea9"),
                 m_primaryButtonStyle,
                 GUILayout.Width(315f),
                 GUILayout.Height(30f)))
@@ -1834,13 +1834,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         GUILayout.Label(
             m_selectedEntity == null
-                ? "Noch kein Objekt geladen. Im Inspector die " +
-                  "UNMA-Glocke drücken oder die aktuelle Spielauswahl " +
-                  "übernehmen."
+                ? UnmaText.Get("auto.51f6d86aa271") +
+                  UnmaText.Get("auto.3ebeb0f6f700") +
+                  UnmaText.Get("ui.entity.take_selection")
                 : m_selectedEntity.Title + " · " +
                   ShortTypeName(m_selectedEntity.EntityType) +
-                  " · ID " + m_selectedEntity.EntityId +
-                  " · " + m_selectedMetrics.Count + " Messwerte",
+                  UnmaText.Get("auto.9da04860d6fc") + m_selectedEntity.EntityId +
+                  " · " + m_selectedMetrics.Count + UnmaText.Get("auto.c8b47a039c3f"),
             m_labelStyle);
         GUILayout.EndHorizontal();
     }
@@ -1852,11 +1852,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Math.Min(m_selectedMetricIndex, m_selectedMetrics.Count - 1));
         var metric = m_selectedMetrics[m_selectedMetricIndex];
 
-        GUILayout.Label("NEUE AWL-BEDINGUNG", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.d7ee9125f8f1"), m_sectionStyle);
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Kennung / Ist-Wert", m_labelStyle, GUILayout.Width(150f));
+        GUILayout.Label(UnmaText.Get("auto.6bb4e33de37c"), m_labelStyle, GUILayout.Width(150f));
         if (GUILayout.Button(
-                metric.Label + "   [aktuell " + FormatMetricValue(metric) + "]",
+                metric.Label + UnmaText.Get("auto.e824707b8b2d") + FormatMetricValue(metric) + "]",
                 m_metricPickerOpen ? m_primaryButtonStyle : m_buttonStyle,
                 GUILayout.Height(30f)))
         {
@@ -1887,8 +1887,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 metric.Path.StartsWith(
                     "$input.product:",
                     StringComparison.Ordinal)
-                    ? "% KAPAZITÄT"
-                    : "% VON",
+                    ? UnmaText.Get("auto.b3ada244026c")
+                    : UnmaText.Get("auto.9424124c3537"),
                 m_draftValueMode == ConditionValueMode.PercentOfReference
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
@@ -1907,7 +1907,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_selectedMetrics.Count - 1));
             var reference = m_selectedMetrics[m_selectedReferenceMetricIndex];
             if (GUILayout.Button(
-                    "Bezug: " + reference.Label +
+                    UnmaText.Get("auto.cbe287253675") + reference.Label +
                     " [" + FormatMetricValue(reference) + "]",
                     m_referenceMetricPickerOpen
                         ? m_primaryButtonStyle
@@ -1925,8 +1925,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal))
         {
             GUILayout.Label(
-                "ABSOLUT prüft die Produktmenge, z. B. Kartoffeln < 400. " +
-                "% KAPAZITÄT prüft den Füllstand, z. B. Kartoffeln < 50 %.",
+                UnmaText.Get("auto.104537c3e0ed") +
+                UnmaText.Get("auto.0c0050a05708"),
                 m_smallLabelStyle);
         }
 
@@ -1942,7 +1942,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(12f);
         GUILayout.Label(
             m_draftValueMode == ConditionValueMode.PercentOfReference
-                ? "Soll-Wert in %"
+                ? UnmaText.Get("auto.23a9b1f4773d")
                 : "Soll-Wert",
             m_labelStyle,
             GUILayout.Width(105f));
@@ -1952,7 +1952,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(105f));
         if (GUILayout.Button(
-                "+ ZEILE HINZUFÜGEN",
+                UnmaText.Get("auto.3cb2b0054d58"),
                 m_primaryButtonStyle,
                 GUILayout.Width(190f),
                 GUILayout.Height(30f)))
@@ -1976,7 +1976,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(280f));
         GUILayout.Label(
-            "Messwert anklicken; technische Pfade bleiben intern.",
+            UnmaText.Get("auto.84d283754bde"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
         if (referencePicker)
@@ -2009,7 +2009,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             if (++shown > 80)
             {
                 GUILayout.Label(
-                    "Weitere Treffer ausblendet – Suche genauer eingrenzen.",
+                    UnmaText.Get("auto.7a9d07fa642b"),
                     m_smallLabelStyle);
                 break;
             }
@@ -2018,7 +2018,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 ? index == m_selectedReferenceMetricIndex
                 : index == m_selectedMetricIndex;
             if (GUILayout.Button(
-                    candidate.Label + "   · aktuell " +
+                    candidate.Label + UnmaText.Get("auto.fe59854f2cdf") +
                     FormatMetricValue(candidate),
                     selected ? m_primaryButtonStyle : m_buttonStyle,
                     GUILayout.Height(27f)))
@@ -2067,7 +2067,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawConditionTable()
     {
-        GUILayout.Label("BEDINGUNGEN DER MELDUNG", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.6dc84400fbd4"), m_sectionStyle);
         GUILayout.BeginHorizontal();
         GUILayout.Label("IST-WERT", m_smallLabelStyle, GUILayout.Width(135f));
         GUILayout.Label("KENNUNG", m_smallLabelStyle, GUILayout.Width(330f));
@@ -2079,7 +2079,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (m_draftConditions.Count == 0)
         {
             GUILayout.Label(
-                "Noch keine Zeile. Oben Messwert, Berechnung, Steuerzeichen und Soll-Wert auswählen.",
+                UnmaText.Get("auto.71931e3b5361"),
                 m_smallLabelStyle);
             return;
         }
@@ -2110,7 +2110,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             if (GUILayout.Button(
                     condition.ValueMode == ConditionValueMode.Absolute
                         ? "ABSOLUT"
-                        : "% VON",
+                        : UnmaText.Get("auto.9424124c3537"),
                     m_buttonStyle,
                     GUILayout.Width(85f)))
             {
@@ -2132,8 +2132,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 if (GUILayout.Button(
                         string.IsNullOrWhiteSpace(condition.ReferenceMetricLabel)
-                            ? "BEZUG WÄHLEN"
-                            : "Bezug: " + condition.ReferenceMetricLabel,
+                            ? UnmaText.Get("auto.72b40251b34b")
+                            : UnmaText.Get("auto.cbe287253675") + condition.ReferenceMetricLabel,
                         m_conditionReferencePickerIndex == index
                             ? m_primaryButtonStyle
                             : m_buttonStyle))
@@ -2191,9 +2191,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Verknüpfung aller Zeilen", m_labelStyle, GUILayout.Width(210f));
+        GUILayout.Label(UnmaText.Get("auto.956d69c9e3ca"), m_labelStyle, GUILayout.Width(210f));
         if (GUILayout.Button(
-                "UND · alle Bedingungen müssen stimmen",
+                UnmaText.Get("auto.76efbe95b3a4"),
                 m_draftLogic == AlarmLogic.All
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
@@ -2202,7 +2202,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_draftLogic = AlarmLogic.All;
         }
         if (GUILayout.Button(
-                "ODER · mindestens eine muss stimmen",
+                UnmaText.Get("auto.556080cfb23f"),
                 m_draftLogic == AlarmLogic.Any
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
@@ -2211,7 +2211,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_draftLogic = AlarmLogic.Any;
         }
         GUILayout.Label(
-            "Gemischte Klammerlogik folgt in einer späteren Ausbaustufe.",
+            UnmaText.Get("auto.9a99ea646292"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
     }
@@ -2224,10 +2224,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.BeginHorizontal();
             GUILayout.Space(135f);
             GUILayout.Label(
-                "Zum Ändern des Bezugs muss das Quellobjekt kurz geladen werden.",
+                UnmaText.Get("auto.af0f45a59557"),
                 m_smallLabelStyle);
             if (GUILayout.Button(
-                    "QUELLOBJEKT LADEN",
+                    UnmaText.Get("auto.c29601081242"),
                     m_buttonStyle,
                     GUILayout.Width(190f)))
             {
@@ -2239,14 +2239,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         GUILayout.BeginHorizontal();
         GUILayout.Space(135f);
-        GUILayout.Label("Bezug suchen", m_smallLabelStyle, GUILayout.Width(90f));
+        GUILayout.Label(UnmaText.Get("auto.bb45057d02f0"), m_smallLabelStyle, GUILayout.Width(90f));
         m_referenceMetricPickerFilter = GUILayout.TextField(
             m_referenceMetricPickerFilter,
             60,
             m_textFieldStyle,
             GUILayout.Width(280f));
         GUILayout.Label(
-            "Der Ist-Wert selbst wird nicht als Bezug angeboten.",
+            UnmaText.Get("auto.d47099108ed4"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
 
@@ -2270,7 +2270,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 continue;
             }
             if (GUILayout.Button(
-                    "BEZUG: " + metric.Label + " · aktuell " +
+                    UnmaText.Get("auto.64762227fbd5") + metric.Label + UnmaText.Get("auto.f583d8b1f88d") +
                     FormatMetricValue(metric),
                     string.Equals(
                         condition.ReferenceMetricPath,
@@ -2344,7 +2344,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     StringComparison.OrdinalIgnoreCase));
             GUILayout.Label(
                 originalSoundMissing
-                    ? "DATEI FEHLT · " + m_originalDraftSoundId
+                    ? UnmaText.Get("auto.40bffd508dbf") + m_originalDraftSoundId
                     : sounds[m_draftSoundIndex].Label,
                 m_labelStyle,
                 GUILayout.Width(310f));
@@ -2355,7 +2355,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             GUI.enabled = !originalSoundMissing;
             if (GUILayout.Button(
-                    "TON TESTEN",
+                    UnmaText.Get("auto.775da082f4c5"),
                     m_buttonStyle,
                     GUILayout.Width(125f)))
             {
@@ -2363,7 +2363,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             GUI.enabled = true;
             if (GUILayout.Button(
-                    "TON STOP",
+                    UnmaText.Get("auto.ae84ac2ff8ca"),
                     m_buttonStyle,
                     GUILayout.Width(105f)))
             {
@@ -2376,10 +2376,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Space(105f);
         m_draftAutoAcknowledgeOnClear = GUILayout.Toggle(
             m_draftAutoAcknowledgeOnClear,
-            "BEIM GEHEN AUTOMATISCH QUITTIEREN",
+            UnmaText.Get("auto.19a7e6f7335e"),
             GUILayout.Width(340f));
         GUILayout.Label(
-            "AUS: KG bleibt bis MASTER QUIT; quittiert wird sonst immer manuell.",
+            UnmaText.Get("auto.f8daf4186ab9"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
 
@@ -2388,8 +2388,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                       GetDraftTargetPanel() != null;
         if (GUILayout.Button(
                 string.IsNullOrWhiteSpace(m_editingRuleId)
-                    ? "MELDUNG SPEICHERN"
-                    : "ÄNDERUNGEN SPEICHERN",
+                    ? UnmaText.Get("auto.3a86ba973853")
+                    : UnmaText.Get("auto.d4efd9369153"),
                 m_primaryButtonStyle,
                 GUILayout.Width(220f),
                 GUILayout.Height(34f)))
@@ -2398,13 +2398,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         GUI.enabled = true;
         if (GUILayout.Button(
-                "ENTWURF LEEREN",
+                UnmaText.Get("auto.bc47a8f97988"),
                 m_buttonStyle,
                 GUILayout.Width(155f),
                 GUILayout.Height(34f)))
         {
             ResetDraftRule();
-            SetStatus("Entwurf geleert.");
+            SetStatus(UnmaText.Get("auto.8df90cb55cac"));
         }
         GUILayout.EndHorizontal();
     }
@@ -2415,9 +2415,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_pendingSystemResetId = "";
         }
-        GUILayout.Label("EDITIERBARE VORDEFINIERTE MELDUNGEN", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.2d1f579a5d01"), m_sectionStyle);
         GUILayout.Label(
-            "Jede Systemmeldung und jede Stufe kann auch später geändert werden. Gesundheit 10 ist neutral; NOTFALL ist ab Werk ausschließlich an eine aktive Hunger- oder Gesundheitstodesspirale gebunden.",
+            UnmaText.Get("auto.2092938a7b0b"),
             m_smallLabelStyle);
 
         m_systemAlarmScroll = GUILayout.BeginScrollView(m_systemAlarmScroll);
@@ -2429,10 +2429,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Label(
                     alarm.DisplayName + " · " +
                     alarm.Stages.Count(stage => stage.Enabled) +
-                    " aktive Stufe(n) · " +
+                    UnmaText.Get("auto.da08863fac44") +
                     (alarm.AutoAcknowledgeOnClear
-                        ? "GEHT: AUTOMATISCH"
-                        : "GEHT: MASTER QUIT"),
+                        ? UnmaText.Get("auto.367f30137868")
+                        : UnmaText.Get("auto.c9097d398192")),
                     m_labelStyle);
                 if (GUILayout.Button(
                         alarm.Enabled ? "AN" : "AUS",
@@ -2444,12 +2444,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     alarm.Enabled = !alarm.Enabled;
                     if (m_runtime.UpdateSystemAlarm(alarm))
                     {
-                        SetStatus("Systemmeldung aktualisiert.");
+                        SetStatus(UnmaText.Get("auto.1145c5c75960"));
                     }
                     else
                     {
                         SetStatus(
-                            "Speichern fehlgeschlagen: " +
+                            UnmaText.Get("auto.5df942eb6687") +
                             m_runtime.LastPersistenceError);
                     }
                 }
@@ -2465,7 +2465,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                             m_pendingSystemResetId,
                             alarm.Id,
                             StringComparison.Ordinal)
-                            ? "SICHER?"
+                            ? UnmaText.Get("auto.91d331fc1397")
                             : "WERKSVORGABE",
                         string.Equals(
                             m_pendingSystemResetId,
@@ -2484,20 +2484,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         m_pendingSystemResetUntil =
                             Time.realtimeSinceStartup + 5f;
                         SetStatus(
-                            "Werkvorgabe innerhalb von 5 Sekunden " +
-                            "noch einmal bestätigen.");
+                            UnmaText.Get("auto.cd3ff75f956e") +
+                            UnmaText.Get("auto.a63963cdfdad"));
                     }
                     else
                     {
                         m_pendingSystemResetId = "";
                         if (m_runtime.ResetSystemAlarm(alarm.Id))
                         {
-                            SetStatus("Werkvorgabe wiederhergestellt.");
+                            SetStatus(UnmaText.Get("auto.85ff6c110b12"));
                         }
                         else
                         {
                             SetStatus(
-                                "Zurücksetzen fehlgeschlagen: " +
+                                UnmaText.Get("auto.1e0dd8281824") +
                                 m_runtime.LastPersistenceError);
                         }
                     }
@@ -2523,7 +2523,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.BeginHorizontal();
         draft.Enabled = GUILayout.Toggle(
             draft.Enabled,
-            "Gesamtmeldung aktiv",
+            UnmaText.Get("auto.9bb40c22f772"),
             GUILayout.Width(170f));
         GUILayout.Label("Name", m_labelStyle, GUILayout.Width(45f));
         draft.DisplayName = GUILayout.TextField(
@@ -2535,10 +2535,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.BeginHorizontal();
         draft.AutoAcknowledgeOnClear = GUILayout.Toggle(
             draft.AutoAcknowledgeOnClear,
-            "BEIM GEHEN AUTOMATISCH QUITTIEREN",
+            UnmaText.Get("auto.19a7e6f7335e"),
             GUILayout.Width(340f));
         GUILayout.Label(
-            "AUS: GEGANGEN · UNQUITTIERT bleibt bis MASTER QUIT.",
+            UnmaText.Get("auto.e330dc16dd70"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
 
@@ -2550,7 +2550,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.BeginHorizontal();
             stage.Enabled = GUILayout.Toggle(
                 stage.Enabled,
-                "Stufe aktiv",
+                UnmaText.Get("auto.6477bc93951f"),
                 GUILayout.Width(105f));
             GUILayout.Label("Text", m_labelStyle, GUILayout.Width(38f));
             stage.Message = GUILayout.TextField(
@@ -2569,8 +2569,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(
                     stage.Logic == AlarmLogic.All
-                        ? "UND · alle"
-                        : "ODER · eine",
+                        ? UnmaText.Get("auto.77bbd577fc42")
+                        : UnmaText.Get("auto.7c378839a7f0"),
                     m_buttonStyle,
                     GUILayout.Width(115f)))
             {
@@ -2600,7 +2600,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Label(
                     soundAvailable
                         ? sounds[soundIndex].Label
-                        : "DATEI FEHLT · " + stage.SoundId,
+                        : UnmaText.Get("auto.40bffd508dbf") + stage.SoundId,
                     m_smallLabelStyle,
                     GUILayout.Width(190f));
                 if (GUILayout.Button("▶", m_buttonStyle, GUILayout.Width(30f)))
@@ -2627,8 +2627,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     ? metrics[metricIndex]
                     : new SystemMetricDescriptor(
                         condition.MetricId ?? "",
-                        "UNBEKANNT: " + (condition.MetricId ?? ""),
-                        "nicht verfügbar");
+                        UnmaText.Get("auto.516699304b80") + (condition.MetricId ?? ""),
+                        UnmaText.Get("auto.9a98b3d0d737"));
                 var thresholdKey = SystemThresholdKey(stage.Id, index);
                 if (!m_systemThresholdTexts.TryGetValue(
                         thresholdKey,
@@ -2652,7 +2652,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Label(
                     metric.Label + " · " + metric.Unit +
                     (currentValues.TryGetValue(metric.Id, out var current)
-                        ? " [jetzt " + current.ToString(
+                        ? UnmaText.Get("auto.aa3d8483c2cc") + current.ToString(
                             "0.##",
                             CultureInfo.CurrentCulture) + "]"
                         : ""),
@@ -2692,7 +2692,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
 
             if (GUILayout.Button(
-                    "+ BEDINGUNG",
+                    UnmaText.Get("auto.d6c391b41588"),
                     m_buttonStyle,
                     GUILayout.Width(135f)))
             {
@@ -2710,7 +2710,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         GUILayout.BeginHorizontal();
         if (GUILayout.Button(
-                "SYSTEMMELDUNG SPEICHERN",
+                UnmaText.Get("auto.2cf14a67c208"),
                 m_primaryButtonStyle,
                 GUILayout.Width(235f),
                 GUILayout.Height(30f)))
@@ -2725,7 +2725,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_systemAlarmDraft = null;
             m_systemThresholdTexts.Clear();
-            SetStatus("Bearbeitung abgebrochen.");
+            SetStatus(UnmaText.Get("auto.6b89012b7c85"));
         }
         GUILayout.EndHorizontal();
     }
@@ -2735,7 +2735,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_systemAlarmDraft = alarm;
         RebuildSystemThresholdTexts();
         m_systemAlarmScroll = Vector2.zero;
-        SetStatus("Systemmeldung in den Editor geladen.");
+        SetStatus(UnmaText.Get("auto.f57478cbd5c5"));
     }
 
     private void SaveSystemAlarmDraft()
@@ -2749,7 +2749,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     !TryParseDouble(text, out var threshold))
                 {
                     SetStatus(
-                        "Ungültige Schwelle in Stufe '" +
+                        UnmaText.Get("auto.85b8b6dcd53e") +
                         stage.Message + "'.");
                     return;
                 }
@@ -2764,13 +2764,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (!m_runtime.UpdateSystemAlarm(m_systemAlarmDraft))
         {
             SetStatus(
-                "Speichern fehlgeschlagen: " +
+                UnmaText.Get("auto.5df942eb6687") +
                 m_runtime.LastPersistenceError);
             return;
         }
         m_systemAlarmDraft = null;
         m_systemThresholdTexts.Clear();
-        SetStatus("Systemmeldung dauerhaft gespeichert.");
+        SetStatus(UnmaText.Get("auto.a62e7b126c0b"));
     }
 
     private void RebuildSystemThresholdTexts()
@@ -2822,25 +2822,25 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Label(
             UnmaText.Get(
                 "sounds.override.title",
-                "MELDUNGSTYPEN: GLOBAL / TÖNE / QUITTIERUNG"),
+                UnmaText.Get("auto.8d7c9716a814")),
             m_sectionStyle);
         GUILayout.Label(
             UnmaText.Get(
                 "sounds.override.description",
-                "Eigene Regeln werden im Editor und vordefinierte " +
-                "Meldungen im SYSTEM-Tab eingestellt. Vanilla-" +
-                "Meldungstypen lassen sich hier für alle Gebäude und " +
-                "Fahrzeuge global in UNMA ein- oder ausblenden. Ton und " +
-                "Quittierung bleiben für Vanilla- und Fremdmod-Meldungen " +
-                "separat einstellbar. Die Spielmeldung selbst wird nicht " +
-                "verändert."),
+                UnmaText.Get("auto.858b267a7513") +
+                UnmaText.Get("auto.fe4117aa6b38") +
+                UnmaText.Get("auto.f65fbbbc7afc") +
+                UnmaText.Get("auto.5f6d3281fc28") +
+                UnmaText.Get("auto.0d87a97f32cd") +
+                UnmaText.Get("auto.6083c2c35caf") +
+                UnmaText.Get("ui.vanilla.notification_unchanged")),
             m_smallLabelStyle);
 
         GUILayout.BeginHorizontal();
         GUILayout.Label(
             UnmaText.Get(
                 "sounds.override.filter_label",
-                "Meldungstyp suchen"),
+                UnmaText.Get("auto.8567d6ad7823")),
             m_labelStyle,
             GUILayout.Width(155f));
         m_soundOverrideFilter = GUILayout.TextField(
@@ -2861,9 +2861,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.Label(
                 UnmaText.Get(
                     "sounds.override.empty",
-                    "Noch keine passende Meldung bekannt. Vanilla- und " +
-                    "Fremdmod-Meldungen erscheinen hier, sobald UNMA sie " +
-                    "einmal ausgewertet hat."),
+                    UnmaText.Get("auto.24b5ad869385") +
+                    UnmaText.Get("auto.2a5f3853286c") +
+                    UnmaText.Get("auto.2a8545158425")),
                 m_labelStyle);
         }
 
@@ -2892,10 +2892,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     vanillaEnabled
                         ? UnmaText.Get(
                             "sounds.override.global_enabled",
-                            "GLOBAL AN · IN UNMA ANZEIGEN")
+                            UnmaText.Get("auto.953d260c4225"))
                         : UnmaText.Get(
                             "sounds.override.global_disabled",
-                            "GLOBAL AUS · AUSGEBLENDET"),
+                            UnmaText.Get("auto.e5052e1d9cb3")),
                     vanillaEnabled
                         ? m_primaryButtonStyle
                         : m_dangerButtonStyle,
@@ -2935,7 +2935,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 autoAcknowledgeOnClear,
                 UnmaText.Get(
                     "sounds.override.auto_acknowledge",
-                    "BEIM GEHEN AUTOMATISCH QUITTIEREN"));
+                    UnmaText.Get("auto.19a7e6f7335e")));
             if (updatedAutoAcknowledgeOnClear != autoAcknowledgeOnClear)
             {
                 SaveAutoAcknowledgeOnClear(
@@ -2969,16 +2969,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "Vanilla")
             : UnmaText.Get(
                 "sounds.override.filter_tokens_external",
-                "Fremdmod extern external");
+                UnmaText.Get("auto.1b06e318a052"));
         var statusTokens = !isVanilla
             ? ""
             : enabled
                 ? UnmaText.Get(
                     "sounds.override.filter_tokens_enabled",
-                    "aktiv an eingeschaltet enabled on")
+                    UnmaText.Get("auto.995781363573"))
                 : UnmaText.Get(
                     "sounds.override.filter_tokens_disabled",
-                    "aus ausgeschaltet ausgeblendet disabled off hidden");
+                    UnmaText.Get("auto.db3bac7e3811"));
         var haystack = string.Join(
             " ",
             candidate.Name,
@@ -3006,15 +3006,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     ? "sounds.override.status_global_enabled"
                     : "sounds.override.status_global_disabled",
                 enabled
-                    ? "Meldungstyp {0} global eingeschaltet."
-                    : "Meldungstyp {0} global ausgeschaltet.",
+                    ? UnmaText.Get("auto.c9c235dca05e")
+                    : UnmaText.Get("auto.b2db5c92e05b"),
                 overrideId));
         }
         else
         {
             SetStatus(UnmaText.Format(
                 "sounds.override.status_global_error",
-                "Meldungstyp {0} konnte nicht geändert werden: {1}",
+                UnmaText.Get("auto.ea482c77e2dc"),
                 overrideId,
                 m_runtime.LastPersistenceError));
         }
@@ -3024,12 +3024,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (m_runtime.SetConfiguredSound(alarmId, sound.Id))
         {
-            SetStatus("Tonzuordnung gespeichert: " + sound.Label);
+            SetStatus(UnmaText.Get("auto.27294bb6c18a") + sound.Label);
         }
         else
         {
             SetStatus(
-                "Tonzuordnung konnte nicht gespeichert werden: " +
+                UnmaText.Get("auto.b379f0ea571f") +
                 m_runtime.LastPersistenceError);
         }
     }
@@ -3044,13 +3044,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             SetStatus(
                 autoAcknowledgeOnClear
-                    ? "Beim Gehen wird automatisch quittiert."
-                    : "Beim Gehen ist MASTER QUIT erforderlich.");
+                    ? UnmaText.Get("auto.3e6ba3666853")
+                    : UnmaText.Get("auto.5cf22fd5cda5"));
         }
         else
         {
             SetStatus(
-                "Quittierverhalten konnte nicht gespeichert werden: " +
+                UnmaText.Get("auto.a1eb5fd04b07") +
                 m_runtime.LastPersistenceError);
         }
     }
@@ -3059,7 +3059,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         GUILayout.Label("ANZEIGE", m_sectionStyle);
         GUILayout.Label(
-            "F8 oder der verschiebbare UNMA-Launcher am linken Rand öffnet und schließt die Zentrale. Der Launcher wird bei offener Zentrale ausgeblendet. Panels können mehrfach abgekoppelt, innerhalb des Spielbildes verschoben und in drei Größen dargestellt werden.",
+            UnmaText.Get("auto.05e9f359f2e3"),
             m_labelStyle);
 
         GUILayout.BeginHorizontal();
@@ -3095,7 +3095,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             scaleChanged = true;
         }
         GUILayout.Label(
-            "75–200 % · 100 % passt für 1080p, 150–200 % für 4K.",
+            UnmaText.Get("auto.df85f85313da"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
         if (scaleChanged)
@@ -3103,7 +3103,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             CancelResizeCapture();
             CancelEditorResizeCapture();
             SaveConfiguration(
-                "UI-Skalierung gespeichert: " +
+                UnmaText.Get("auto.9f37ceb925ab") +
                 m_runtime.Configuration.UiScalePercent + " %.");
         }
 
@@ -3127,51 +3127,51 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_textFieldStyle,
             GUILayout.Width(100f));
         if (GUILayout.Button(
-                "FARBEN SPEICHERN",
+                UnmaText.Get("auto.373d6df29cf1"),
                 m_primaryButtonStyle,
                 GUILayout.Width(175f)))
         {
-            SaveConfiguration("Farben gespeichert.");
+            SaveConfiguration(UnmaText.Get("auto.f7bb0c5b2c6c"));
         }
         GUILayout.EndHorizontal();
 
         GUILayout.Space(10f);
         GUILayout.Label("AUDIO", m_sectionStyle);
         GUILayout.Label(
-            "Mitgeliefert: Klingel, tiefes Industriehorn (3,2 s Ton / 1,2 s Pause), E57-artige Motorsirene (2 s hoch / 2 s runter) sowie Sinus-, Rechteck-, Sägezahn-, Dreieck- und Impulston. Alle werden mathematisch erzeugt und enthalten keine Samples Dritter.",
+            UnmaText.Get("auto.f98a9c516625"),
             m_labelStyle);
         GUILayout.Label(
-            "Eigene PCM-WAV- oder Ogg-Vorbis-Dateien: " +
+            UnmaText.Get("auto.665123745b97") +
             m_audio.SoundsDirectory,
             m_smallLabelStyle);
         GUILayout.Label(
-            "Audioformat und Lizenz sind zwei verschiedene Dinge: Für fremde Dateien bitte CC0, eigene Aufnahmen oder eine andere passende offene Lizenz verwenden.",
+            UnmaText.Get("auto.b4f0fa6a9f20"),
             m_smallLabelStyle);
         if (GUILayout.Button(
-                "TONDATEIEN NEU EINLESEN",
+                UnmaText.Get("auto.3ac4c11a94ac"),
                 m_buttonStyle,
                 GUILayout.Width(220f)))
         {
             m_audio.RefreshSoundOptions();
-            SetStatus("WAV-/OGG-Tonliste neu eingelesen.");
+            SetStatus(UnmaText.Get("auto.48d4265633fa"));
         }
 
         GUILayout.Space(10f);
         GUILayout.Label("SYSTEMALARME", m_sectionStyle);
         GUILayout.Label(
-            "Gesundheit, Nahrung und Arbeiter werden im SYSTEM-Tab pro Spielstand bearbeitet. Gesundheit 10 ist neutral; die Werkvorgabe nutzt NOTFALL nur für eine aktive Hunger- oder Gesundheitstodesspirale. Warnung → Klingel, kritisch → Horn, Notfall → Sirene.",
+            UnmaText.Get("auto.5ca97b0efd51"),
             m_labelStyle);
 
         GUILayout.Space(10f);
-        GUILayout.Label("ZWEITER BILDSCHIRM", m_sectionStyle);
+        GUILayout.Label(UnmaText.Get("auto.461c23ce7edb"), m_sectionStyle);
         GUILayout.Label(
-            "Mehrere abgekoppelte Meldetafeln sind unterstützt, bleiben aber innerhalb des Captain-of-Industry-Fensters. Ein echtes zweites Betriebssystemfenster stellt die Mod-API nicht bereit; ein externer Companion-Prozess wäre ein separates, experimentelles Phase-2-Projekt.",
+            UnmaText.Get("auto.a183668aa2b3"),
             m_labelStyle);
 
         GUILayout.Space(10f);
         GUILayout.Label("ZUSTANDSMODELL", m_sectionStyle);
         GUILayout.Label(
-            "NORMAL: hellgrau, schwarze Schrift. KOMMT: Aktivfarbe blinkt und der Ton wiederholt sich. MASTER QUIT: Aktivfarbe bleibt stehen, Ton endet. GEGANGEN · UNQUITTIERT: Die Ursache ist weg, aber Anzeige und Ton warten auf MASTER QUIT. Mit BEIM GEHEN AUTOMATISCH QUITTIEREN wechselt die Meldung stattdessen direkt zu NORMAL.",
+            UnmaText.Get("auto.fdea5764a7c1"),
             m_labelStyle);
 
         GUILayout.Space(10f);
@@ -3181,16 +3181,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.Label(
             UnmaText.Get(
                 "options.integration.description",
-                "Aktive Mods können Alarmvorlagen aus UNMA/*.json, " +
-                "eigene Messwerte und direkte Alarmzustände bereitstellen."),
+                UnmaText.Get("auto.a67711e569a9") +
+                UnmaText.Get("auto.ae53894897ea")),
             m_labelStyle);
         var integration = m_runtime.GetExternalIntegrationStatus();
         GUILayout.Label(
             UnmaText.Format(
                 "options.integration.status",
-                "Provider {0} · JSON {1}/{2} Dateien · {3} Alarme · " +
-                "API {4} Messwerte / {5} Vorlagen / {6} Zustände · " +
-                "Diagnosen {7}",
+                UnmaText.Get("auto.824596e450d8") +
+                UnmaText.Get("auto.7365af489dd8") +
+                UnmaText.Get("auto.f7593a8c54ea"),
                 integration.ActiveProviderCount,
                 integration.LoadedFileCount,
                 integration.ScannedFileCount,
@@ -3203,7 +3203,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (GUILayout.Button(
                 UnmaText.Get(
                     "options.integration.reload",
-                    "API / JSON / SPRACHE NEU LADEN"),
+                    UnmaText.Get("auto.6a0576853198")),
                 m_buttonStyle,
                 GUILayout.Width(260f)))
         {
@@ -3211,11 +3211,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SetStatus(clean
                 ? UnmaText.Get(
                     "options.integration.reload_ok",
-                    "Fremdmod-Definitionen und Sprache neu geladen.")
+                    UnmaText.Get("auto.872181b517a4"))
                 : UnmaText.Get(
                     "options.integration.reload_partial",
-                    "Gültige Fremdmod-Definitionen geladen; Diagnosen " +
-                    "siehe darunter und im Log."));
+                    UnmaText.Get("auto.b7537ab622a9") +
+                    UnmaText.Get("auto.6b9b10331ab0")));
         }
         foreach (var diagnostic in m_runtime
                      .GetExternalIntegrationDiagnostics()
@@ -3246,7 +3246,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var unacknowledgedCount = panel.IsDashboard
             ? alarms.Count(alarm => !alarm.IsAcknowledged)
             : m_runtime.UnacknowledgedCount;
-        DrawWindowHeader("UNMA · " + panel.Name, detached.Rect.width);
+        DrawWindowHeader(UnmaText.Get("auto.528ebd6136c2") + panel.Name, detached.Rect.width);
         GUILayout.BeginArea(new Rect(
             10f,
             40f,
@@ -3254,11 +3254,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             detached.Rect.height - 50f));
         GUILayout.BeginHorizontal();
         GUILayout.Label(
-            "AKTIVE EREIGNISSE " + activeCount +
-            " · UNQUITTIERT " + unacknowledgedCount,
+            UnmaText.Get("auto.397544fe1d24") + activeCount +
+            UnmaText.Get("auto.ddc0834bf463") + unacknowledgedCount,
             m_smallLabelStyle);
         if (GUILayout.Button(
-                "MASTER QUIT",
+                UnmaText.Get("auto.77be2ec4ae31"),
                 m_dangerButtonStyle,
                 GUILayout.Width(130f)))
         {
@@ -3266,7 +3266,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_audio.StopAlarm();
         }
         if (!panel.IsDashboard && GUILayout.Button(
-                "+ MELDUNG",
+                UnmaText.Get("auto.d5302ca93907"),
                 m_primaryButtonStyle,
                 GUILayout.Width(120f)))
         {
@@ -3304,8 +3304,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             null,
             false,
             panel.IsDashboard
-                ? "Keine aktiven Meldungen."
-                : "Keine Meldeschlitze in diesem Panel.",
+                ? UnmaText.Get("auto.f895fe84e658")
+                : UnmaText.Get("auto.e8bad0a4452b"),
             !panel.IsDashboard);
         GUILayout.EndScrollView();
         GUILayout.EndArea();
@@ -3476,7 +3476,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_isOpen = true;
             SetStatus(
-                "Die eigene Meldung in diesem Schlitz existiert nicht mehr.");
+                UnmaText.Get("auto.b4e21cd402a4"));
             return true;
         }
 
@@ -3490,8 +3490,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 OpenRuleEditorWindow();
                 SetStatus(
-                    "Im Editor liegt bereits eine andere oder ungespeicherte " +
-                    "Meldung. Erst speichern oder ENTWURF LEEREN.");
+                    UnmaText.Get("auto.67e43fb81ece") +
+                    UnmaText.Get("auto.90f638ce60bc"));
                 return true;
             }
             BeginEditingRule(rule, m_audio.GetSoundOptions());
@@ -3524,7 +3524,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var firstCondition = rule.Conditions.FirstOrDefault();
         if (alreadyEditing)
         {
-            SetStatus("Bereits geöffnete Meldung im Editor fokussiert.");
+            SetStatus(UnmaText.Get("auto.7f308a23243a"));
         }
         else if (firstCondition != null)
         {
@@ -3532,7 +3532,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else
         {
-            SetStatus("Meldung per Doppelklick im Editor geöffnet.");
+            SetStatus(UnmaText.Get("auto.93f638d82e65"));
         }
         return true;
     }
@@ -3564,14 +3564,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawPanelRect(inner, background);
 
         var badge = alarm.IsGoneUnacknowledged
-            ? "GEGANGEN · UNQUITTIERT"
+            ? UnmaText.Get("auto.3f6e1a7c5590")
             : alarm.IsActive
                 ? alarm.IsAcknowledged ? "STEHT" : "KOMMT"
-                : alarm.IsMissingSource ? "QUELLE FEHLT" : "NORMAL";
+                : alarm.IsMissingSource ? UnmaText.Get("auto.6a49896902cb") : "NORMAL";
         if ((alarm.IsActive || alarm.IsGoneUnacknowledged) &&
             alarm.IsMissingSource)
         {
-            badge += " / QUELLE FEHLT";
+            badge += UnmaText.Get("auto.70ab47b6f195");
         }
         GUI.Label(
             new Rect(inner.x + 7f, inner.y + 5f, inner.width - 14f, 18f),
@@ -3657,7 +3657,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (!m_runtime.TryGetLiveEntity(entityId, out var entity))
         {
-            SetStatus("Das zugehörige Objekt existiert nicht mehr.");
+            SetStatus(UnmaText.Get("auto.28a2ba9ec3eb"));
             return;
         }
 
@@ -3666,7 +3666,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_cameraController?.PanTo(positioned.Position2f);
         }
         m_inspectorsManager?.TryActivateFor(entity);
-        SetStatus("Zum zugehörigen Objekt gesprungen.");
+        SetStatus(UnmaText.Get("auto.75b7d485418f"));
     }
 
     private void DrawEmptyTile(Rect rect)
@@ -3702,8 +3702,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUI.Label(
             actionRect,
             canLink
-                ? "OBJEKT VERKNÜPFEN"
-                : "NUR ANZEIGE · NICHT VERKNÜPFBAR",
+                ? UnmaText.Get("auto.fe5cfa5cedb5")
+                : UnmaText.Get("auto.dcc40b537b28"),
             m_assignmentActionStyle);
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none))
         {
@@ -3725,13 +3725,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawPanelRect(inner, new Color(0.78f, 0.86f, 0.84f, 1f));
         GUI.Label(
             new Rect(inner.x + 7f, inner.y + 17f, inner.width - 14f, 52f),
-            "+ NEUE MELDUNG",
+            UnmaText.Get("auto.1cc8d34d4b3e"),
             m_tileTitleStyle);
         GUI.Label(
             new Rect(inner.x + 7f, inner.y + 73f, inner.width - 14f, 25f),
             m_assignmentEntity == null
-                ? "Objekt wird geladen"
-                : "FESTER SCHLITZ FÜR " +
+                ? UnmaText.Get("auto.7c06a5edce22")
+                : UnmaText.Get("auto.36a818f7f3f3") +
                   m_assignmentEntity.Title.ToUpperInvariant(),
             m_tileDetailStyle);
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none))
@@ -3746,7 +3746,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (!IsEntityAssignmentReady())
         {
-            SetStatus("Das hinzugefügte Objekt wird noch geladen.");
+            SetStatus(UnmaText.Get("auto.23d65250f6f8"));
             return;
         }
         if (!PanelSlotProjection.TryGetCustomRuleId(
@@ -3754,9 +3754,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 out var ruleId))
         {
             SetStatus(
-                "Vanilla- und Systemmeldungen sind feste Anzeigen. " +
-                "Für eine Objektbedingung eine eigene Meldung oder " +
-                "das freie + Karree wählen.");
+                UnmaText.Get("auto.437d5121f36c") +
+                UnmaText.Get("auto.27567c838396") +
+                UnmaText.Get("auto.422bced1880e"));
             return;
         }
 
@@ -3765,8 +3765,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (rule == null)
         {
             SetStatus(
-                "Die Meldung in diesem Schlitz existiert nicht mehr. " +
-                "Bitte das freie + Karree verwenden.");
+                UnmaText.Get("auto.a8773cef8433") +
+                UnmaText.Get("auto.60fcc3b8049f"));
             return;
         }
         if (!string.Equals(
@@ -3777,10 +3777,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             if (HasDraftRuleWork())
             {
                 SetStatus(
-                    "Im Editor ist bereits eine Meldung oder ein " +
-                    "ungespeicherter Entwurf geöffnet. Erst speichern " +
-                    "oder ENTWURF LEEREN; danach den " +
-                    "Meldeschlitz erneut anklicken.");
+                    UnmaText.Get("auto.4683ec5b7d62") +
+                    UnmaText.Get("auto.8dd3eb1fc170") +
+                    UnmaText.Get("auto.bdbb3a94176a") +
+                    UnmaText.Get("auto.9c6bb5adc23c"));
                 return;
             }
             BeginEditingRule(rule, m_audio.GetSoundOptions());
@@ -3788,9 +3788,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         m_draftPreferredSlotIndex = -1;
         OpenAssignmentEntityEditor(
-            m_assignmentEntity.Title + " kann jetzt mit »" +
-            rule.Name + "« verknüpft werden. Messwert auswählen und " +
-            "Bedingung hinzufügen.");
+            m_assignmentEntity.Title + UnmaText.Get("auto.b2ce0caec171") +
+            rule.Name + UnmaText.Get("auto.a885f14507a3") +
+            UnmaText.Get("auto.27846549c7aa"));
     }
 
     private void HandleNewAssignmentTarget(
@@ -3799,16 +3799,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (!IsEntityAssignmentReady())
         {
-            SetStatus("Das hinzugefügte Objekt wird noch geladen.");
+            SetStatus(UnmaText.Get("auto.23d65250f6f8"));
             return;
         }
         if (HasDraftRuleWork())
         {
             SetStatus(
-                "Im Editor ist bereits eine Meldung oder ein " +
-                "ungespeicherter Entwurf geöffnet. Erst speichern oder " +
-                "ENTWURF LEEREN; danach das freie " +
-                "+ Karree erneut anklicken.");
+                UnmaText.Get("auto.4683ec5b7d62") +
+                UnmaText.Get("auto.2f8c34a0d52c") +
+                UnmaText.Get("auto.3b8557a9f488") +
+                UnmaText.Get("auto.2937f45b1021"));
             return;
         }
 
@@ -3818,8 +3818,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             0,
             Math.Min(slotIndex, panel.Slots?.Count ?? 0));
         OpenAssignmentEntityEditor(
-            "Neue Meldung für " + m_assignmentEntity.Title +
-            " im gewählten Meldeschlitz vorbereiten.");
+            UnmaText.Get("auto.e6ff6d9861e1") + m_assignmentEntity.Title +
+            UnmaText.Get("auto.0dcaccd035ba"));
     }
 
     private bool IsEntityAssignmentReady()
@@ -3835,7 +3835,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var entity = m_assignmentEntity;
         if (entity == null)
         {
-            SetStatus("Das hinzugefügte Objekt ist nicht mehr verfügbar.");
+            SetStatus(UnmaText.Get("auto.21ced0635377"));
             return;
         }
 
@@ -3880,7 +3880,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                m_draftConditions.Count > 0 ||
                !string.Equals(
                    m_draftRuleName?.Trim(),
-                   "NEUE MELDUNG",
+                   UnmaText.Get("auto.fe04a9d0e58c"),
                    StringComparison.Ordinal) ||
                m_draftSeverity != AlarmSeverity.Warning ||
                m_draftLogic != AlarmLogic.All ||
@@ -3913,7 +3913,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (entity == null)
         {
             SetStatus(
-                "Das angeklickte Inspector-Objekt ist nicht mehr verfügbar.");
+                UnmaText.Get("auto.9de6b84cdfae"));
             return;
         }
 
@@ -3926,7 +3926,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             false,
             preserveCurrentSelection: true);
         SetStatus(
-            "Gebäudetafel wird geladen …");
+            UnmaText.Get("auto.a3f0c28806d6"));
     }
 
     private void CaptureSelectedEntity()
@@ -3940,7 +3940,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (entity == null)
         {
             SetStatus(
-                "Keine gültige Entität gefunden. Erst Gebäude, Fahrzeug oder Transport anklicken.");
+                UnmaText.Get("auto.6f402f1dba14"));
             return;
         }
 
@@ -3971,7 +3971,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_entityAlarmWindowOpen = true;
         }
         m_runtime.RequestEntityInspection(entityId);
-        SetStatus("Spielauswahl wird sicher im Simulations-Takt gelesen …");
+        SetStatus(UnmaText.Get("auto.82ed078e6c1f"));
     }
 
     private void ApplyCompletedInspection(EntityInspectionSnapshot inspection)
@@ -4017,14 +4017,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 CancelEntityAssignment();
                 SetStatus(
-                    "Für diese Entität wurden keine Messwerte gefunden.");
+                    UnmaText.Get("auto.5891d5e7de9b"));
                 return;
             }
             m_assignmentEntity = inspection;
             SetStatus(
                 inspection.Title +
-                " hinzugefügt. Jetzt eigene Meldung oder leeres " +
-                "Karree anklicken.");
+                UnmaText.Get("auto.5b5d1db02fdb") +
+                UnmaText.Get("auto.4717f3c076e3"));
             return;
         }
 
@@ -4055,7 +4055,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             if (entityPanel == null)
             {
                 SetStatus(
-                    "Gebäudetafel konnte nicht gespeichert werden: " +
+                    UnmaText.Get("auto.39b196c55f60") +
                     m_runtime.LastPersistenceError);
                 return;
             }
@@ -4064,7 +4064,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_tab = TabBoard;
             m_boardScroll = Vector2.zero;
             SetStatus(
-                "Gebäudetafel für " + inspection.Title + " geöffnet.");
+                UnmaText.Get("auto.8a42487f2b31") + inspection.Title + UnmaText.Get("auto.70834308d14f"));
             return;
         }
         if (automaticRefresh)
@@ -4079,15 +4079,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_openEntityAlarmAfterInspection = false;
         if (m_selectedMetrics.Count == 0)
         {
-            SetStatus("Für diese Entität wurden keine Messwerte gefunden.");
+            SetStatus(UnmaText.Get("auto.5891d5e7de9b"));
         }
         else
         {
             SetStatus(
                 m_selectedMetrics.Count +
-                " Messwerte für " +
+                UnmaText.Get("auto.8df11b2d3716") +
                 inspection.Title +
-                " erkannt.");
+                UnmaText.Get("auto.d6cb6d182723"));
         }
     }
 
@@ -4095,12 +4095,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (m_selectedEntity == null || m_selectedMetrics.Count == 0)
         {
-            SetStatus("Zuerst eine Spiel-Entität übernehmen.");
+            SetStatus(UnmaText.Get("auto.a852547fe390"));
             return;
         }
         if (!TryParseDouble(m_draftThreshold, out var threshold))
         {
-            SetStatus("Schwelle ist keine gültige Zahl.");
+            SetStatus(UnmaText.Get("auto.019d3710d0ee"));
             return;
         }
 
@@ -4120,7 +4120,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     StringComparison.Ordinal))
             {
                 SetStatus(
-                    "Ist-Wert und Bezugswert dürfen bei % VON nicht identisch sein.");
+                    UnmaText.Get("auto.2bdbbc810cee"));
                 return;
             }
         }
@@ -4147,7 +4147,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             threshold.ToString("0.###", CultureInfo.CurrentCulture));
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
-        SetStatus("Bedingung zur Sammelmeldung hinzugefügt.");
+        SetStatus(UnmaText.Get("auto.af3edd1b9f09"));
     }
 
     private void SaveDraftRule(IReadOnlyList<SoundOption> sounds)
@@ -4166,8 +4166,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     out var threshold))
             {
                 SetStatus(
-                    "Schwelle in Bedingung " + (index + 1) +
-                    " ist ungültig.");
+                    UnmaText.Get("auto.cb85d7309ac1") + (index + 1) +
+                    UnmaText.Get("auto.ddb8c3cdbc29"));
                 return;
             }
             m_draftConditions[index].Threshold = threshold;
@@ -4177,8 +4177,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_draftConditions[index].ReferenceMetricPath))
             {
                 SetStatus(
-                    "Bezugswert in Bedingung " + (index + 1) +
-                    " fehlt. Bei % VON bitte einen Bezug wählen.");
+                    UnmaText.Get("auto.21ca7079c12b") + (index + 1) +
+                    UnmaText.Get("auto.115b04808134"));
                 return;
             }
             if (m_draftConditions[index].ValueMode ==
@@ -4189,8 +4189,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     StringComparison.Ordinal))
             {
                 SetStatus(
-                    "Ist- und Bezugswert in Bedingung " + (index + 1) +
-                    " sind identisch. Bitte einen anderen Bezug wählen.");
+                    UnmaText.Get("auto.53c26ac33af4") + (index + 1) +
+                    UnmaText.Get("auto.be2c20cf5599"));
                 return;
             }
         }
@@ -4211,8 +4211,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (isEditing && existingRule == null)
         {
             SetStatus(
-                "Die bearbeitete Meldung existiert nicht mehr. " +
-                "Entwurf wurde nicht als neue Meldung gespeichert.");
+                UnmaText.Get("auto.575fe354a165") +
+                UnmaText.Get("auto.e60fb9e527e6"));
             return;
         }
         var soundId = isEditing && !m_draftSoundChanged
@@ -4240,7 +4240,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (!saved)
         {
             SetStatus(
-                "Speichern fehlgeschlagen: " +
+                UnmaText.Get("auto.5df942eb6687") +
                 m_runtime.LastPersistenceError);
             return;
         }
@@ -4250,8 +4250,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftTargetPanelId = savedPanelId;
         SetStatus(
             wasEditing
-                ? "Meldung aktualisiert; neue Werte gelten im nächsten Takt."
-                : "Meldung gespeichert; Überwachung startet im nächsten Takt.");
+                ? UnmaText.Get("auto.961c0245ef89")
+                : UnmaText.Get("auto.fb19aab1dadd"));
     }
 
     private void BeginEditingRule(
@@ -4284,7 +4284,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     "0.###",
                     CultureInfo.CurrentCulture)));
         m_editorScroll = Vector2.zero;
-        SetStatus("Meldung in den Editor geladen.");
+        SetStatus(UnmaText.Get("auto.bc7894226481"));
     }
 
     private void ResetDraftRule()
@@ -4293,7 +4293,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_editingRuleId = "";
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
-        m_draftRuleName = "NEUE MELDUNG";
+        m_draftRuleName = UnmaText.Get("auto.fe04a9d0e58c");
         m_draftSeverity = AlarmSeverity.Warning;
         m_draftLogic = AlarmLogic.All;
         m_draftColor = "#F0C541";
@@ -4322,13 +4322,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             OpenRuleEditorWindow();
             SetStatus(
-                "Zuerst den offenen Meldungsentwurf speichern oder leeren.");
+                UnmaText.Get("auto.48d5f7bcd7c1"));
             return;
         }
         m_editorWindowMode = EditorWindowMode.PanelCreation;
         m_entityAlarmWindowOpen = true;
         m_entityAlarmScroll = Vector2.zero;
-        m_newPanelName = "NEUES PANEL";
+        m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     }
 
     private void OpenPanelSettingsEditor(PanelDefinition panel)
@@ -4341,7 +4341,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             OpenRuleEditorWindow();
             SetStatus(
-                "Zuerst den offenen Meldungsentwurf speichern oder leeren.");
+                UnmaText.Get("auto.48d5f7bcd7c1"));
             return;
         }
         m_panelSettingsPanelId = panel.Id;
@@ -4359,15 +4359,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (panel == null || panel.IsDashboard)
         {
-            SetStatus("Neue Meldungen brauchen ein festes Zielpanel.");
+            SetStatus(UnmaText.Get("auto.da029f65d8db"));
             return;
         }
         if (HasDraftRuleWork())
         {
             OpenRuleEditorWindow();
             SetStatus(
-                "Im Meldungs-Editor liegt bereits ein Entwurf. Erst " +
-                "speichern oder ENTWURF LEEREN.");
+                UnmaText.Get("auto.243d4fdd7115") +
+                UnmaText.Get("auto.eec1a0f95ac1"));
             return;
         }
 
@@ -4398,7 +4398,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             Id = Guid.NewGuid().ToString("N"),
             Name = string.IsNullOrWhiteSpace(m_newPanelName)
-                ? "NEUES PANEL"
+                ? UnmaText.Get("auto.3f5c86818d70")
                 : m_newPanelName.Trim(),
             Columns = 3,
             IncludeVanilla = false,
@@ -4408,7 +4408,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (!m_runtime.AddPanel(panel))
         {
             SetStatus(
-                "Panel konnte nicht gespeichert werden: " +
+                UnmaText.Get("auto.27f10f6dc69e") +
                 m_runtime.LastPersistenceError);
             return false;
         }
@@ -4420,8 +4420,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_draftTargetPanelId = panel.Id;
         }
-        m_newPanelName = "NEUES PANEL";
-        SetStatus("Panel angelegt.");
+        m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
+        SetStatus(UnmaText.Get("auto.f63589d2dc6f"));
         return true;
     }
 
@@ -4435,8 +4435,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (CurrentPanel.IsDashboard)
         {
             SetStatus(
-                "HOME / DASHBOARD ist die aktive Übersicht und kann nicht " +
-                "gelöscht werden.");
+                UnmaText.Get("auto.dec8763d2a8a") +
+                UnmaText.Get("auto.6ab723fab24d"));
             return;
         }
 
@@ -4466,14 +4466,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_pendingPanelDeleteId = panelId;
             m_pendingPanelDeleteUntil = Time.realtimeSinceStartup + 6f;
             SetStatus(
-                "Panel löschen entfernt auch " + affectedRules +
-                " eigene Meldung(en). Innerhalb von 6 Sekunden erneut bestätigen.");
+                UnmaText.Get("auto.e7b6d1d30034") + affectedRules +
+                UnmaText.Get("auto.85843058797a"));
             return;
         }
         if (!m_runtime.RemovePanel(panelId))
         {
             SetStatus(
-                "Panel konnte nicht gelöscht werden: " +
+                UnmaText.Get("auto.0fb0c7def7d9") +
                 m_runtime.LastPersistenceError);
             return;
         }
@@ -4497,7 +4497,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_draftPreferredSlotIndex = -1;
         }
         m_detachedPanels.RemoveAll(item => item.PanelId == panelId);
-        SetStatus("Panel und zugehörige eigene Meldungen gelöscht.");
+        SetStatus(UnmaText.Get("auto.d57565ce0bc8"));
     }
 
     private void DetachPanel(string panelId)
@@ -4523,7 +4523,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.OrdinalIgnoreCase))
         {
             StopTestSound();
-            SetStatus("Kein Ton ausgewählt; laufende Alarme bleiben hörbar.");
+            SetStatus(UnmaText.Get("auto.0fe1119242e6"));
             return;
         }
 
@@ -4535,7 +4535,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SoundId = soundId,
         };
         m_testAlarmUntil = Time.realtimeSinceStartup + 8f;
-        SetStatus("Tontest läuft acht Sekunden oder bis TON STOP.");
+        SetStatus(UnmaText.Get("auto.e176fed55042"));
     }
 
     private void StopTestSound()
@@ -4694,13 +4694,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (m_selectedEntity == null ||
             m_selectedEntity.EntityId != condition.EntityId)
         {
-            return "LIVE IM SPIEL";
+            return UnmaText.Get("auto.a33569399406");
         }
 
         var actualMetric = FindSelectedMetric(condition.MetricPath);
         if (actualMetric == null)
         {
-            return "MESSWERT FEHLT";
+            return UnmaText.Get("auto.16fff883f67a");
         }
         if (condition.ValueMode == ConditionValueMode.Absolute)
         {
@@ -4716,7 +4716,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 referenceMetric.CurrentValue,
                 out var comparable))
         {
-            return "BEZUG FEHLT";
+            return UnmaText.Get("auto.34f75a7a7720");
         }
         return comparable.ToString(
                    "0.###",
@@ -4732,7 +4732,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         else
         {
             SetStatus(
-                "Speichern fehlgeschlagen: " +
+                UnmaText.Get("auto.5df942eb6687") +
                 m_runtime.LastPersistenceError);
         }
     }
@@ -5265,7 +5265,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         texture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
         {
             hideFlags = HideFlags.HideAndDontSave,
-            name = "UNMA " + key,
+            name = UnmaText.Get("auto.9efeab6faae0") + key,
         };
         texture.SetPixel(0, 0, color);
         texture.Apply(false, true);
@@ -5426,7 +5426,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         if (string.IsNullOrWhiteSpace(fullName))
         {
-            return "Entität";
+            return UnmaText.Get("auto.a8a6d6ec304d");
         }
         var separator = fullName.LastIndexOf('.');
         return separator >= 0 && separator + 1 < fullName.Length
@@ -5450,8 +5450,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             if (!s_gameplayStateFailureLogged)
             {
                 s_gameplayStateFailureLogged = true;
-                Log.Warning(
-                    $"UNMA: Menüstatus nicht lesbar; Tafel wird zugelassen: {exception.Message}");
+                Log.Warning(UnmaText.Format(
+                    "log.menu_state_unreadable",
+                    exception.Message));
             }
             return true;
         }

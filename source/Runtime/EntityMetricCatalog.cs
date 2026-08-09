@@ -142,11 +142,11 @@ public static class EntityMetricCatalog
         var result = new List<MetricDescriptor>();
         var paths = new HashSet<string>(StringComparer.Ordinal);
 
-        Add(result, paths, "$entity.enabled", "Aktiviert (0/1)",
+        Add(result, paths, "$entity.enabled", UnmaText.Get("auto.1c17e8c09407"),
             entity.IsEnabled ? 1d : 0d);
-        Add(result, paths, "$entity.paused", "Pausiert (0/1)",
+        Add(result, paths, "$entity.paused", UnmaText.Get("auto.d1207434db53"),
             entity.IsPaused ? 1d : 0d);
-        Add(result, paths, "$entity.destroyed", "Zerstört (0/1)",
+        Add(result, paths, "$entity.destroyed", UnmaText.Get("auto.cb2b11f3cb70"),
             entity.IsDestroyed ? 1d : 0d);
 
         if (entity is IEntityWithStoredProductForUi stored)
@@ -158,7 +158,7 @@ public static class EntityMetricCatalog
             Add(result, paths, StorageCapacityPath,
                 "Lagerkapazität", storedCapacity, "Einheiten");
             Add(result, paths, FillPercentPath,
-                "Füllstand (%)",
+                UnmaText.Get("auto.90817d0fdd55"),
                 storedCapacity <= 0
                     ? 0d
                     : quantity * 100d / storedCapacity,
@@ -468,7 +468,7 @@ public static class EntityMetricCatalog
                 result,
                 paths,
                 InputProductPrefix + productId,
-                productName + " · Bestand",
+                productName + UnmaText.Get("auto.5ef37159ad68"),
                 totals.Quantity,
                 "Einheiten",
                 InputCapacityPrefix + productId);
@@ -476,7 +476,7 @@ public static class EntityMetricCatalog
                 result,
                 paths,
                 InputCapacityPrefix + productId,
-                productName + " · Kapazität",
+                productName + UnmaText.Get("auto.a98a6884f7ef"),
                 totals.Capacity,
                 "Einheiten");
         }
@@ -597,12 +597,12 @@ public static class EntityMetricCatalog
 
         var capacity = GetTransportCapacity(transport);
         Add(result, paths, TransportQuantityPath,
-            "Transportierte Menge", total, "Einheiten",
+            UnmaText.Get("auto.91e00a41f65d"), total, "Einheiten",
             TransportCapacityPath);
         Add(result, paths, TransportCapacityPath,
             "Transportkapazität", capacity, "Einheiten");
         Add(result, paths, TransportFillPercentPath,
-            "Transportfüllstand (%)",
+            UnmaText.Get("auto.2cfde2279aa4"),
             capacity <= 0d ? 0d : total * 100d / capacity,
             "%");
 
@@ -615,7 +615,7 @@ public static class EntityMetricCatalog
 
             Add(result, paths,
                 TransportProductPrefix + product.Id.Value,
-                "Transport: " + GetProductName(product),
+                UnmaText.Get("auto.9c927c263cf2") + GetProductName(product),
                 pair.Value,
                 "Einheiten",
                 TransportCapacityPath);
@@ -634,7 +634,7 @@ public static class EntityMetricCatalog
         Add(result, paths, CargoCapacityPath,
             "Fahrzeugkapazität", capacity, "Einheiten");
         Add(result, paths, CargoFillPercentPath,
-            "Fahrzeugfüllstand (%)",
+            UnmaText.Get("auto.30411f36db60"),
             capacity <= 0d ? 0d : total * 100d / capacity,
             "%");
 
@@ -642,7 +642,7 @@ public static class EntityMetricCatalog
         {
             Add(result, paths,
                 CargoProductPrefix + pair.Key.Id.Value,
-                "Fracht: " + GetProductName(pair.Key),
+                UnmaText.Get("auto.0bca4ba56a9f") + GetProductName(pair.Key),
                 pair.Value.Value,
                 "Einheiten",
                 CargoCapacityPath);
@@ -664,7 +664,7 @@ public static class EntityMetricCatalog
             Add(result, paths, CargoCapacityPath,
                 "Fahrzeugkapazität", capacity, "Einheiten");
             Add(result, paths, CargoFillPercentPath,
-                "Fahrzeugfüllstand (%)",
+                UnmaText.Get("auto.30411f36db60"),
                 capacity <= 0d ? 0d : total * 100d / capacity,
                 "%");
         }
@@ -673,7 +673,7 @@ public static class EntityMetricCatalog
         {
             Add(result, paths,
                 CargoProductPrefix + cargo.Product.Id.Value,
-                "Fracht: " + GetProductName(cargo.Product),
+                UnmaText.Get("auto.0bca4ba56a9f") + GetProductName(cargo.Product),
                 total,
                 "Einheiten",
                 CargoCapacityPath);
@@ -891,7 +891,7 @@ public static class EntityMetricCatalog
     {
         if (entity == null)
         {
-            return "Unbekannte Entität";
+            return UnmaText.Get("auto.cfa52542adb1");
         }
 
         var title = entity.DefaultTitle.Value;
