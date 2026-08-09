@@ -2879,32 +2879,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 candidate.Source,
                 "vanilla",
                 StringComparison.Ordinal);
-            var vanillaEnabled = !isVanilla ||
-                                 m_runtime.GetVanillaNotificationEnabled(
-                                     candidate.OverrideId);
 
             GUILayout.Label(
                 candidate.Name + "\n" + candidate.Detail,
                 m_labelStyle,
                 GUILayout.MinHeight(42f));
 
-            if (isVanilla && GUILayout.Button(
-                    vanillaEnabled
-                        ? UnmaText.Get(
-                            "sounds.override.global_enabled",
-                            UnmaText.Get("auto.953d260c4225"))
-                        : UnmaText.Get(
-                            "sounds.override.global_disabled",
-                            UnmaText.Get("auto.e5052e1d9cb3")),
-                    vanillaEnabled
-                        ? m_primaryButtonStyle
-                        : m_dangerButtonStyle,
-                    GUILayout.Height(30f),
-                    GUILayout.ExpandWidth(true)))
+            if (isVanilla)
             {
-                SaveVanillaNotificationEnabled(
-                    candidate.OverrideId,
-                    !vanillaEnabled);
+                DrawVanillaBehaviorControls(candidate);
             }
 
             GUILayout.BeginHorizontal();
@@ -2993,6 +2976,130 @@ public sealed class UnmaOverlayController : MonoBehaviour
             .All(token => haystack.IndexOf(
                 token,
                 StringComparison.CurrentCultureIgnoreCase) >= 0);
+    }
+
+    private void DrawVanillaBehaviorControls(AlarmView candidate)
+    {
+        if (candidate.EntityId >= 0)
+        {
+            DrawVanillaBehaviorRow(
+                candidate,
+                VanillaNotificationScope.Entity,
+                UnmaText.Get(
+                    "sounds.override.scope_entity",
+                    "NUR DIESES OBJEKT"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.EntityPrototypeId))
+        {
+            DrawVanillaBehaviorRow(
+                candidate,
+                VanillaNotificationScope.EntityPrototype,
+                UnmaText.Format(
+                    "sounds.override.scope_prototype",
+                    "ALLE GLEICHEN OBJEKTE ({0})",
+                    candidate.EntityPrototypeId));
+        }
+        else if (candidate.EntityId < 0)
+        {
+            DrawVanillaBehaviorRow(
+                candidate,
+                VanillaNotificationScope.NotificationType,
+                UnmaText.Get(
+                    "sounds.override.scope_notification",
+                    "DIESER MELDUNGSTYP"));
+        }
+    }
+
+    private void DrawVanillaBehaviorRow(
+        AlarmView candidate,
+        VanillaNotificationScope scope,
+        string scopeLabel)
+    {
+        var behavior = m_runtime.GetVanillaNotificationBehavior(
+            candidate.OverrideId,
+            scope,
+            candidate.EntityId,
+            candidate.EntityPrototypeId);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            scopeLabel,
+            m_smallLabelStyle,
+            GUILayout.MinWidth(190f),
+            GUILayout.ExpandWidth(true));
+        if (GUILayout.Button(
+                VanillaBehaviorLabel(behavior),
+                behavior == VanillaNotificationBehavior.Hidden
+                    ? m_dangerButtonStyle
+                    : behavior == VanillaNotificationBehavior.Silent
+                        ? m_buttonStyle
+                        : m_primaryButtonStyle,
+                GUILayout.Width(185f),
+                GUILayout.Height(30f)))
+        {
+            SaveVanillaNotificationBehavior(
+                candidate,
+                scope,
+                NextVanillaBehavior(behavior));
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private static VanillaNotificationBehavior NextVanillaBehavior(
+        VanillaNotificationBehavior behavior)
+    {
+        return behavior switch
+        {
+            VanillaNotificationBehavior.Normal =>
+                VanillaNotificationBehavior.Silent,
+            VanillaNotificationBehavior.Silent =>
+                VanillaNotificationBehavior.Hidden,
+            _ => VanillaNotificationBehavior.Normal,
+        };
+    }
+
+    private static string VanillaBehaviorLabel(
+        VanillaNotificationBehavior behavior)
+    {
+        return behavior switch
+        {
+            VanillaNotificationBehavior.Silent => UnmaText.Get(
+                "sounds.override.behavior_silent",
+                "LOGGEN · TON AUS"),
+            VanillaNotificationBehavior.Hidden => UnmaText.Get(
+                "sounds.override.behavior_hidden",
+                "LOGGEN · TON AUS · AUSBLENDEN"),
+            _ => UnmaText.Get(
+                "sounds.override.behavior_normal",
+                "NORMAL"),
+        };
+    }
+
+    private void SaveVanillaNotificationBehavior(
+        AlarmView candidate,
+        VanillaNotificationScope scope,
+        VanillaNotificationBehavior behavior)
+    {
+        if (m_runtime.SetVanillaNotificationBehavior(
+                candidate.OverrideId,
+                scope,
+                behavior,
+                candidate.EntityId,
+                candidate.EntityPrototypeId))
+        {
+            SetStatus(UnmaText.Format(
+                "sounds.override.status_behavior_saved",
+                "Regel gespeichert: {0} · {1}",
+                candidate.Name,
+                VanillaBehaviorLabel(behavior)));
+        }
+        else
+        {
+            SetStatus(UnmaText.Format(
+                "sounds.override.status_behavior_error",
+                "Regel konnte nicht gespeichert werden: {0}",
+                m_runtime.LastPersistenceError));
+        }
     }
 
     private void SaveVanillaNotificationEnabled(

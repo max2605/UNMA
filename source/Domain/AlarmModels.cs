@@ -36,6 +36,20 @@ public enum ConditionValueMode
     PercentOfReference = 1,
 }
 
+public enum VanillaNotificationBehavior
+{
+    Normal = 0,
+    Silent = 1,
+    Hidden = 2,
+}
+
+public enum VanillaNotificationScope
+{
+    NotificationType = 0,
+    EntityPrototype = 1,
+    Entity = 2,
+}
+
 [DataContract]
 public sealed class ConditionDefinition
 {
@@ -143,6 +157,16 @@ public sealed class AlarmSoundOverride
 }
 
 [DataContract]
+public sealed class VanillaNotificationRule
+{
+    [DataMember(Order = 1)] public string AlarmId = "";
+    [DataMember(Order = 2)] public VanillaNotificationScope Scope;
+    [DataMember(Order = 3)] public VanillaNotificationBehavior Behavior;
+    [DataMember(Order = 4)] public int EntityId = -1;
+    [DataMember(Order = 5)] public string EntityPrototypeId = "";
+}
+
+[DataContract]
 public sealed class AlarmMemoryDefinition
 {
     [DataMember(Order = 1)] public string Key = "";
@@ -164,6 +188,9 @@ public sealed class AlarmMemoryDefinition
     [DataMember(Order = 17)] public int OccurrencePriority;
     [DataMember(Order = 18)] public string SlotId = "";
     [DataMember(Order = 19)] public bool AutoAcknowledgeOnClear;
+    [DataMember(Order = 20)] public int EntityId = -1;
+    [DataMember(Order = 21)] public string EntityPrototypeId = "";
+    [DataMember(Order = 22)] public string EntityTitle = "";
 }
 
 [DataContract]
@@ -199,7 +226,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 12;
+    [DataMember(Order = 1)] public int SchemaVersion = 13;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -226,6 +253,8 @@ public sealed class UnmaConfiguration
     [DataMember(Order = 20)] public float EditorWindowY = 110f;
     [DataMember(Order = 21)] public float EditorWindowWidth = 1080f;
     [DataMember(Order = 22)] public float EditorWindowHeight = 720f;
+    [DataMember(Order = 23)]
+    public List<VanillaNotificationRule> VanillaNotificationRules = new();
 
     public static UnmaConfiguration CreateDefault()
     {
@@ -418,6 +447,7 @@ public sealed class UnmaConfiguration
         SystemAlarms ??= new List<SystemAlarmDefinition>();
         AlarmMemories ??= new List<AlarmMemoryDefinition>();
         AlarmHistory ??= new List<AlarmHistoryDefinition>();
+        VanillaNotificationRules ??= new List<VanillaNotificationRule>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -523,6 +553,32 @@ public sealed class UnmaConfiguration
                 : item.SoundId;
         }
 
+        VanillaNotificationRules.RemoveAll(rule =>
+            rule == null ||
+            !VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                rule.AlarmId) ||
+            !Enum.IsDefined(
+                typeof(VanillaNotificationScope),
+                rule.Scope) ||
+            !Enum.IsDefined(
+                typeof(VanillaNotificationBehavior),
+                rule.Behavior) ||
+            rule.Scope == VanillaNotificationScope.Entity &&
+            rule.EntityId < 0 ||
+            rule.Scope == VanillaNotificationScope.EntityPrototype &&
+            string.IsNullOrWhiteSpace(rule.EntityPrototypeId));
+        foreach (var rule in VanillaNotificationRules)
+        {
+            rule.AlarmId = rule.AlarmId.Trim();
+            rule.EntityPrototypeId = rule.EntityPrototypeId?.Trim() ?? "";
+        }
+        VanillaNotificationRules = VanillaNotificationRules
+            .GroupBy(
+                VanillaNotificationSuppressionPolicy.RuleIdentity,
+                StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .ToList();
+
         AlarmMemories.RemoveAll(item =>
             item == null ||
             string.IsNullOrWhiteSpace(item.Key) ||
@@ -599,7 +655,33 @@ public sealed class UnmaConfiguration
             SeedPanelSlots(includeMemories: true);
         }
         SynchronizeRuleSlots();
-        SchemaVersion = Math.Max(SchemaVersion, 12);
+        if (loadedSchemaVersion < 13)
+        {
+            foreach (var legacyOverride in SoundOverrides.Where(item =>
+                         item != null &&
+                         item.IsGloballyDisabled &&
+                         VanillaNotificationSuppressionPolicy
+                             .IsVanillaOverrideId(item.AlarmId)))
+            {
+                if (!VanillaNotificationRules.Any(rule =>
+                        rule.Scope ==
+                            VanillaNotificationScope.NotificationType &&
+                        string.Equals(
+                            rule.AlarmId,
+                            legacyOverride.AlarmId,
+                            StringComparison.Ordinal)))
+                {
+                    VanillaNotificationRules.Add(new VanillaNotificationRule
+                    {
+                        AlarmId = legacyOverride.AlarmId,
+                        Scope = VanillaNotificationScope.NotificationType,
+                        Behavior = VanillaNotificationBehavior.Hidden,
+                    });
+                }
+                legacyOverride.IsGloballyDisabled = false;
+            }
+        }
+        SchemaVersion = Math.Max(SchemaVersion, 13);
     }
 
     private static float NormalizeFinite(float value, float fallback)
@@ -1211,6 +1293,9 @@ public sealed class AlarmView
     public string OccurrenceId = "";
     public string SlotId = "";
     public int OccurrencePriority;
+    public int EntityId = -1;
+    public string EntityPrototypeId = "";
+    public string EntityTitle = "";
     public long Sequence;
     public AlarmSeverity Severity;
     public bool IsActive;

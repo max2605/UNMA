@@ -15,11 +15,12 @@ Zielversion: Captain of Industry **0.8.6c**.
 
 - Spiegelung aller aktiven Vanilla-Benachrichtigungen über den
   `INotificationsManager`.
-- Jeder bekannte Vanilla-Meldungstyp kann im **TÖNE**-Tab global für UNMA
-  ausgeschaltet werden. Die Einstellung gilt typweit für alle Gebäude und
-  Fahrzeuge, stoppt UNMA-Töne und blendet die zugehörigen festen Schlitze aus,
-  verändert aber nicht die Benachrichtigung des Spiels. Beim Wiedereinschalten
-  erscheinen gespeicherte Panelplätze und bereits anstehende Meldungen wieder.
+- Jeder bekannte Vanilla-Meldungstyp kann im **TÖNE**-Tab für genau ein Objekt
+  oder für alle Objekte desselben Prototyps auf `NORMAL`, `LOGGEN · TON AUS`
+  oder `LOGGEN · TON AUS · AUSBLENDEN` gestellt werden. Objektregeln haben
+  Vorrang vor Prototypregeln. Ausgeblendete Ereignisse fehlen in HOME und den
+  aktiven Zählern, bleiben aber vollständig im Verlauf; die Benachrichtigung
+  des Spiels selbst wird nicht verändert.
 - Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
   `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
   vollständig ausgeblendet.
@@ -143,7 +144,10 @@ Zielversion: Captain of Industry **0.8.6c**.
    anklicken, **AKTUELLE SPIEL-AUSWAHL ÜBERNEHMEN** drücken und die nächste
    Zeile hinzufügen; anschließend global UND oder ODER festlegen und speichern.
 9. Unter **TÖNE** können Ton und Verhalten beim Gehen für jede bereits
-   bekannte Vanilla-Meldung separat festgelegt werden.
+   bekannte Vanilla-Meldung separat festgelegt werden. Objektbezogene
+   Vanilla-Meldungen lassen sich dort nur für die konkrete Instanz oder für
+   alle Objekte desselben Prototyps lautlos beziehungsweise aus HOME
+   ausblenden; der Verlauf bleibt vollständig.
 10. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
    ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
    oder auf die Werkvorgabe zurückgesetzt werden.

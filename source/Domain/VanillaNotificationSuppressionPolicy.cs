@@ -86,6 +86,92 @@ public static class VanillaNotificationSuppressionPolicy
         return false;
     }
 
+    public static VanillaNotificationBehavior ResolveBehavior(
+        IEnumerable<VanillaNotificationRule> rules,
+        string alarmId,
+        int entityId = -1,
+        string entityPrototypeId = "")
+    {
+        if (rules == null || !IsVanillaOverrideId(alarmId))
+        {
+            return VanillaNotificationBehavior.Normal;
+        }
+
+        alarmId = alarmId.Trim();
+        entityPrototypeId = entityPrototypeId?.Trim() ?? "";
+        VanillaNotificationRule best = null;
+        var bestRank = -1;
+        foreach (var rule in rules)
+        {
+            if (rule == null ||
+                !string.Equals(rule.AlarmId?.Trim(), alarmId,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var rank = rule.Scope switch
+            {
+                VanillaNotificationScope.Entity
+                    when entityId >= 0 && rule.EntityId == entityId => 3,
+                VanillaNotificationScope.EntityPrototype
+                    when entityPrototypeId.Length > 0 && string.Equals(
+                        rule.EntityPrototypeId?.Trim(),
+                        entityPrototypeId,
+                        StringComparison.Ordinal) => 2,
+                VanillaNotificationScope.NotificationType => 1,
+                _ => -1,
+            };
+            if (rank > bestRank)
+            {
+                best = rule;
+                bestRank = rank;
+            }
+        }
+        return best?.Behavior ?? VanillaNotificationBehavior.Normal;
+    }
+
+    public static string RuleIdentity(VanillaNotificationRule rule)
+    {
+        if (rule == null)
+        {
+            return "";
+        }
+        return (rule.AlarmId?.Trim() ?? "") + "|" +
+               (int)rule.Scope + "|" +
+               (rule.Scope == VanillaNotificationScope.Entity
+                   ? rule.EntityId.ToString(
+                       System.Globalization.CultureInfo.InvariantCulture)
+                   : rule.Scope == VanillaNotificationScope.EntityPrototype
+                       ? rule.EntityPrototypeId?.Trim() ?? ""
+                       : "");
+    }
+
+    public static bool MatchesScope(
+        VanillaNotificationRule rule,
+        string alarmId,
+        VanillaNotificationScope scope,
+        int entityId,
+        string entityPrototypeId)
+    {
+        if (rule == null ||
+            rule.Scope != scope ||
+            !string.Equals(rule.AlarmId?.Trim(), alarmId?.Trim(),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+        return scope switch
+        {
+            VanillaNotificationScope.Entity => rule.EntityId == entityId,
+            VanillaNotificationScope.EntityPrototype => string.Equals(
+                rule.EntityPrototypeId?.Trim(),
+                entityPrototypeId?.Trim(),
+                StringComparison.Ordinal),
+            _ => true,
+        };
+    }
+
     private static int FirstMarkerIndex(int first, int second)
     {
         if (first < 0)

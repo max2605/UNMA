@@ -2,6 +2,15 @@
 
 ## 0.9.2 – 2026-08-09
 
+- Bestehende Vanilla-Meldungen lassen sich im TÖNE-Tab jetzt wahlweise nur für
+  das betroffene Objekt oder für alle Objekte desselben Prototyps behandeln.
+  Drei Zustände stehen bereit: normal, nur im Verlauf protokollieren und den
+  UNMA-Ton abschalten, oder zusätzlich aus HOME und den aktiven Zählern
+  ausblenden. Eine spezifische Objektregel übersteuert die Prototypregel.
+- Das Konfigurationsschema 13 speichert diese Regeln sowie Objekt-ID,
+  Objektprototyp und Titel an aktiven Vanilla-Zuständen. Frühere globale
+  Abschaltungen werden verlustfrei als ausgeblendete Meldungstyp-Regeln
+  migriert.
 - Der Abriss-Listener verwendet jetzt ausdrücklich die nicht speicherbare
   COI-Eventregistrierung. Autosaves versuchen dadurch nicht mehr,
   `UnmaRuntime` als Callback-Besitzer zu serialisieren und brechen nicht mehr

@@ -350,7 +350,7 @@ internal static class Program
             EditorWindowHeight = 780f,
         };
         configuration.Normalize();
-        AreEqual(12, configuration.SchemaVersion);
+        AreEqual(13, configuration.SchemaVersion);
         AreEqual("Lagerhaus III", entityPanel.OwnerEntityTitle);
         AreEqual("AirStorageT3", entityPanel.OwnerEntityPrototypeId);
         AreEqual(
@@ -866,6 +866,75 @@ internal static class Program
         IsFalse(VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
             new PanelSlotDefinition { AlarmId = entitySlotId },
             null));
+
+        var rules = new[]
+        {
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Hidden,
+            },
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "TruckT2",
+                Behavior = VanillaNotificationBehavior.Silent,
+            },
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.Entity,
+                EntityId = 17,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+        };
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                rules,
+                overrideId,
+                17,
+                "TruckT2"));
+        AreEqual(
+            VanillaNotificationBehavior.Silent,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                rules,
+                overrideId,
+                18,
+                "TruckT2"));
+        AreEqual(
+            VanillaNotificationBehavior.Hidden,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                rules,
+                overrideId,
+                18,
+                "TruckT3"));
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                rules,
+                "vanilla:Other",
+                17,
+                "TruckT2"));
+
+        var legacyConfig = UnmaConfiguration.CreateDefault();
+        legacyConfig.SchemaVersion = 12;
+        legacyConfig.SoundOverrides.Add(new AlarmSoundOverride
+        {
+            AlarmId = overrideId,
+            SoundId = "auto",
+            IsGloballyDisabled = true,
+        });
+        legacyConfig.Normalize();
+        AreEqual(13, legacyConfig.SchemaVersion);
+        IsFalse(legacyConfig.SoundOverrides.Last().IsGloballyDisabled);
+        AreEqual(
+            VanillaNotificationBehavior.Hidden,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                legacyConfig.VanillaNotificationRules,
+                overrideId));
     }
 
     private static void TestSystemAlarmSelection()
@@ -1505,6 +1574,14 @@ internal static class Program
             SoundId = "none",
             IsGloballyDisabled = true,
         });
+        configuration.VanillaNotificationRules.Add(
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:CannotFindPath",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "TruckT2",
+                Behavior = VanillaNotificationBehavior.Hidden,
+            });
         var editedSystemAlarm = configuration.SystemAlarms
             .Find(alarm => alarm.Id == "system:health");
         editedSystemAlarm.AutoAcknowledgeOnClear = true;
@@ -1581,6 +1658,9 @@ internal static class Program
             IsGoneUnacknowledged = true,
             AutoAcknowledgeOnClear = true,
             Sequence = 73,
+            EntityId = 17,
+            EntityPrototypeId = "TruckT2",
+            EntityTitle = "Truck 17",
         });
 
         var serializer = new DataContractJsonSerializer(
@@ -1609,7 +1689,14 @@ internal static class Program
         IsFalse(restoredSystemOverride.IsGloballyDisabled);
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
-        AreEqual(12, restored.SchemaVersion);
+        AreEqual(13, restored.SchemaVersion);
+        AreEqual(1, restored.VanillaNotificationRules.Count);
+        AreEqual(
+            VanillaNotificationBehavior.Hidden,
+            restored.VanillaNotificationRules[0].Behavior);
+        AreEqual(
+            "TruckT2",
+            restored.VanillaNotificationRules[0].EntityPrototypeId);
         IsTrue(restored.Panels[0].IsDashboard);
         IsFalse(restored.Panels[1].IsDashboard);
         AreEqual(
@@ -1644,6 +1731,9 @@ internal static class Program
         AreEqual(7.5d, restoredSystemStage.Conditions[0].Threshold);
         AreEqual(1, restored.AlarmMemories.Count);
         var restoredMemory = restored.AlarmMemories[0];
+        AreEqual(17, restoredMemory.EntityId);
+        AreEqual("TruckT2", restoredMemory.EntityPrototypeId);
+        AreEqual("Truck 17", restoredMemory.EntityTitle);
         AreEqual("vanilla:42", restoredMemory.Key);
         AreEqual("GEGANGENE MELDUNG", restoredMemory.Name);
         IsFalse(restoredMemory.IsActive);
@@ -1723,7 +1813,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(12, restored.SchemaVersion);
+        AreEqual(13, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -1759,7 +1849,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(12, oldConfiguration.SchemaVersion);
+        AreEqual(13, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(100, oldConfiguration.UiScalePercent);
@@ -1874,7 +1964,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(12, schemaSeven.SchemaVersion);
+        AreEqual(13, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -1952,7 +2042,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(12, legacy.SchemaVersion);
+        AreEqual(13, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -2004,7 +2094,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(12, versionFive.SchemaVersion);
+        AreEqual(13, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -2081,7 +2171,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(12, schemaEight.SchemaVersion);
+        AreEqual(13, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

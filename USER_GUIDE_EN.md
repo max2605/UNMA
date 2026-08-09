@@ -87,11 +87,12 @@ If an entity used by a multi-entity rule is permanently demolished or destroyed,
 
 Open **SOUNDS** (`TÖNE`) to configure known Vanilla and external-mod alarm types.
 
-- Turn an alarm type globally on or off for UNMA.
+- Set an object-bound Vanilla alarm to normal, silent, or hidden either for
+  only that object or for all objects of the same prototype.
 - Choose its UNMA sound.
 - Choose whether it is acknowledged automatically when it clears.
 
-Disabling a Vanilla alarm type hides its UNMA slots and stops its UNMA sound. It does **not** disable or modify the game's original notification.
+Silent alarms remain active and are logged without UNMA audio. Hidden alarms are also removed from HOME and active counters, while their history remains complete. Object-specific rules override prototype rules. These settings do **not** disable or modify the game's original notification.
 
 UNMA includes a warning bell, an industrial horn, a motor siren, and several synthesized signals. To add a custom sound, copy a PCM WAV or Ogg Vorbis file to:
 
@@ -133,7 +134,7 @@ If a configuration file is damaged, UNMA creates a backup and replaces it with s
 
 - **UNMA does not load:** Confirm that UNMA and MultiLangLib are both enabled and compatible with the supported game version.
 - **The launcher is missing:** Press **F8**. The launcher is hidden while the main UNMA window is open.
-- **An alarm type is missing:** Open **SOUNDS** and check whether the type is globally disabled. Some types appear only after UNMA has encountered them once.
+- **An alarm type is missing from HOME:** Open **SOUNDS** and check its object and prototype behavior. Some types appear in the list only after UNMA has encountered them once.
 - **A product metric is missing:** Product-specific metrics are discovered from products currently or previously present in the selected object. A completely unused empty object initially exposes only general quantity and fill metrics.
 - **A custom sound is missing:** Check that it is a supported PCM WAV or Ogg Vorbis file in `UNMA/Sounds`, then restart the game.
 - **A percentage rule never triggers:** Verify that its reference metric exists and is greater than zero.
