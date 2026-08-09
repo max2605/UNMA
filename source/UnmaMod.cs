@@ -5,6 +5,7 @@ using Mafi.Collections;
 using Mafi.Core;
 using Mafi.Core.Buildings.Settlements;
 using Mafi.Core.Entities;
+using Mafi.Core.Factory.Transports;
 using Mafi.Core.Game;
 using Mafi.Core.Mods;
 using Mafi.Core.Notifications;
@@ -56,6 +57,7 @@ public sealed class UnmaMod : IMod
         bool gameWasLoaded)
     {
         EntityMetricCatalog.ConfigureProducts(protosDb);
+        EntityVanillaNotificationCatalog.Configure(protosDb);
     }
 
     public void EarlyInit(DependencyResolver resolver)
@@ -71,6 +73,7 @@ public sealed class UnmaMod : IMod
         m_runtime = new UnmaRuntime(
             resolver.Resolve<INotificationsManager>(),
             resolver.Resolve<IEntitiesManager>(),
+            resolver.Resolve<TransportsManager>(),
             resolver.Resolve<IWorkersManager>(),
             resolver.Resolve<SettlementsManager>(),
             resolver.Resolve<PopsHealthManager>(),

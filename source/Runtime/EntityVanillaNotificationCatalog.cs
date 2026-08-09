@@ -1,19 +1,38 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using Mafi.Core;
 using Mafi.Core.Entities;
+using Mafi.Core.Entities.Static;
 using Mafi.Core.Notifications;
+using Mafi.Core.Prototypes;
 using UNMA.Domain;
 
 namespace UNMA.Runtime;
 
 public static class EntityVanillaNotificationCatalog
 {
+    private static readonly Dictionary<string, NotificationProto>
+        s_prototypes = new(StringComparer.Ordinal);
+
     private const BindingFlags DeclaredInstanceFields =
         BindingFlags.Instance |
         BindingFlags.Public |
         BindingFlags.NonPublic |
         BindingFlags.DeclaredOnly;
+
+    public static void Configure(ProtosDb protosDb)
+    {
+        s_prototypes.Clear();
+        if (protosDb == null)
+        {
+            return;
+        }
+        foreach (var prototype in protosDb.All<NotificationProto>())
+        {
+            s_prototypes[prototype.Id.Value] = prototype;
+        }
+    }
 
     public static IReadOnlyList<PanelSlotDefinition> DiscoverSlots(
         IEntity entity,
@@ -59,6 +78,27 @@ public static class EntityVanillaNotificationCatalog
                                   "#F0C541",
                 });
             }
+        }
+        if (entity is IStaticEntity &&
+            entity is not IEntityWithNoCollapse &&
+            s_prototypes.TryGetValue(
+                IdsCore.Notifications.EntityMayCollapseUnevenTerrain.Value,
+                out var collapsePrototype) &&
+            knownIds.Add(collapsePrototype.Id.Value))
+        {
+            var severity = SeverityFor(collapsePrototype);
+            slots.Add(new PanelSlotDefinition
+            {
+                AlarmId = "vanilla:" + collapsePrototype.Id.Value,
+                DisplayName = NotificationName(
+                    collapsePrototype,
+                    entityTitle),
+                Detail = collapsePrototype.Id.Value,
+                Source = "vanilla",
+                Severity = severity,
+                ActiveColor = colorForSeverity?.Invoke(severity) ??
+                              "#F0C541",
+            });
         }
         return slots;
     }

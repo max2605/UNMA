@@ -5,10 +5,13 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using Mafi;
+using Mafi.Collections;
 using Mafi.Core;
 using Mafi.Core.Buildings.Settlements;
 using Mafi.Core.Entities;
 using Mafi.Core.Entities.Static;
+using Mafi.Core.Entities.Static.Layout;
+using Mafi.Core.Factory.Transports;
 using Mafi.Core.Notifications;
 using Mafi.Core.Population;
 using Mafi.Core.Simulation;
@@ -131,8 +134,10 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_alarmPersistenceBatchGate = new();
     private readonly object m_externalDefinitionsGate = new();
     private readonly object m_removedEntitiesGate = new();
+    private readonly object m_notificationEntityAliasesGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
+    private readonly TransportsManager m_transportsManager;
     private readonly IEventNonSaveable<IEntity> m_entityRemovedEvent;
     private readonly IWorkersManager m_workersManager;
     private readonly SettlementsManager m_settlementsManager;
@@ -156,6 +161,17 @@ public sealed class UnmaRuntime : IDisposable
         m_missingStaticEntityTracker = new();
     private readonly Dictionary<string, bool> m_staticEntityTypeCache =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<int, Dictionary<int, NotificationEntityAlias>>
+        m_notificationOwnersByChild = new();
+    private readonly Dictionary<int, HashSet<int>>
+        m_notificationChildrenByOwner = new();
+
+    private sealed class NotificationEntityAlias
+    {
+        public int OwnerEntityId;
+        public string OwnerEntityPrototypeId = "";
+        public string OwnerEntityTitle = "";
+    }
 
     private long m_sequence;
     private long m_alarmHistoryRevision;
@@ -185,6 +201,7 @@ public sealed class UnmaRuntime : IDisposable
     public UnmaRuntime(
         INotificationsManager notificationsManager,
         IEntitiesManager entitiesManager,
+        TransportsManager transportsManager,
         IWorkersManager workersManager,
         SettlementsManager settlementsManager,
         PopsHealthManager healthManager,
@@ -195,6 +212,7 @@ public sealed class UnmaRuntime : IDisposable
     {
         m_notificationsManager = notificationsManager;
         m_entitiesManager = entitiesManager;
+        m_transportsManager = transportsManager;
         // Narrow the reference at construction time so saveable Add/Remove
         // are not even available to this runtime-only subscription.
         m_entityRemovedEvent = entitiesManager.EntityRemoved;
@@ -643,6 +661,124 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    private IEntity[] GetNotificationEntities(IEntity owner)
+    {
+        if (owner == null)
+        {
+            return Array.Empty<IEntity>();
+        }
+        var entities = new List<IEntity> { owner };
+        if (m_transportsManager == null)
+        {
+            return entities.ToArray();
+        }
+
+        var pillars = new Lyst<TransportPillar>();
+        if (owner is Transport transport)
+        {
+            m_transportsManager.FindAttachedPillars(transport, pillars);
+        }
+        else if (owner is LayoutEntity layoutEntity)
+        {
+            m_transportsManager.FindAttachedPillars(layoutEntity, pillars);
+        }
+        foreach (var pillar in pillars)
+        {
+            if (pillar != null &&
+                entities.All(entity => entity.Id != pillar.Id))
+            {
+                entities.Add(pillar);
+            }
+        }
+        return entities.ToArray();
+    }
+
+    private void RegisterNotificationEntityAliases(
+        int ownerEntityId,
+        string ownerEntityPrototypeId,
+        string ownerEntityTitle,
+        IEnumerable<IEntity> notificationEntities)
+    {
+        if (ownerEntityId <= 0)
+        {
+            return;
+        }
+        var childIds = new HashSet<int>(
+            (notificationEntities ?? Enumerable.Empty<IEntity>())
+            .Where(entity =>
+                entity != null && entity.Id.Value != ownerEntityId)
+            .Select(entity => entity.Id.Value));
+        lock (m_notificationEntityAliasesGate)
+        {
+            if (m_notificationChildrenByOwner.TryGetValue(
+                    ownerEntityId,
+                    out var previousChildIds))
+            {
+                foreach (var childId in previousChildIds)
+                {
+                    if (m_notificationOwnersByChild.TryGetValue(
+                            childId,
+                            out var owners))
+                    {
+                        owners.Remove(ownerEntityId);
+                        if (owners.Count == 0)
+                        {
+                            m_notificationOwnersByChild.Remove(childId);
+                        }
+                    }
+                }
+            }
+            m_notificationChildrenByOwner[ownerEntityId] = childIds;
+            foreach (var childId in childIds)
+            {
+                if (!m_notificationOwnersByChild.TryGetValue(
+                        childId,
+                        out var owners))
+                {
+                    owners = new Dictionary<int, NotificationEntityAlias>();
+                    m_notificationOwnersByChild[childId] = owners;
+                }
+                owners[ownerEntityId] = new NotificationEntityAlias
+                {
+                    OwnerEntityId = ownerEntityId,
+                    OwnerEntityPrototypeId =
+                        ownerEntityPrototypeId?.Trim() ?? "",
+                    OwnerEntityTitle = ownerEntityTitle?.Trim() ?? "",
+                };
+            }
+        }
+    }
+
+    private HashSet<int> GetNotificationChildIds(int ownerEntityId)
+    {
+        lock (m_notificationEntityAliasesGate)
+        {
+            return m_notificationChildrenByOwner.TryGetValue(
+                    ownerEntityId,
+                    out var childIds)
+                ? new HashSet<int>(childIds)
+                : new HashSet<int>();
+        }
+    }
+
+    private NotificationEntityAlias[] GetNotificationOwnerAliases(
+        int childEntityId)
+    {
+        lock (m_notificationEntityAliasesGate)
+        {
+            return m_notificationOwnersByChild.TryGetValue(
+                    childEntityId,
+                    out var owners)
+                ? owners.Values.Select(alias => new NotificationEntityAlias
+                {
+                    OwnerEntityId = alias.OwnerEntityId,
+                    OwnerEntityPrototypeId = alias.OwnerEntityPrototypeId,
+                    OwnerEntityTitle = alias.OwnerEntityTitle,
+                }).ToArray()
+                : Array.Empty<NotificationEntityAlias>();
+        }
+    }
+
     public PanelDefinition GetOrCreateEntityPanel(
         int entityId,
         string entityTitle,
@@ -656,14 +792,25 @@ public sealed class UnmaRuntime : IDisposable
 
         lock (m_persistenceGate)
         {
-            var definedVanillaSlots = TryGetLiveEntity(
+            var notificationEntities = TryGetLiveEntity(
                     entityId,
                     out var liveEntity)
-                ? EntityVanillaNotificationCatalog.DiscoverSlots(
-                    liveEntity,
-                    entityTitle,
-                    ColorFor)
-                : Array.Empty<PanelSlotDefinition>();
+                ? GetNotificationEntities(liveEntity)
+                : Array.Empty<IEntity>();
+            RegisterNotificationEntityAliases(
+                entityId,
+                entityPrototypeId,
+                entityTitle,
+                notificationEntities);
+            var relatedEntityIds = new HashSet<int>(
+                notificationEntities.Select(entity => entity.Id.Value));
+            var definedVanillaSlots = notificationEntities
+                .SelectMany(entity =>
+                    EntityVanillaNotificationCatalog.DiscoverSlots(
+                        entity,
+                        entityTitle,
+                        ColorFor))
+                .ToArray();
             PanelSlotDefinition[] runtimeVanillaSlots;
             lock (m_gate)
             {
@@ -674,7 +821,7 @@ public sealed class UnmaRuntime : IDisposable
                             view.Source,
                             "vanilla",
                             StringComparison.Ordinal) &&
-                        (view.EntityId == entityId ||
+                        (relatedEntityIds.Contains(view.EntityId) ||
                          !string.IsNullOrWhiteSpace(entityPrototypeId) &&
                          string.Equals(
                              view.EntityPrototypeId,
@@ -1125,16 +1272,51 @@ public sealed class UnmaRuntime : IDisposable
         var slotIds = new HashSet<string>(
             slots.Select(slot => slot.AlarmId),
             StringComparer.Ordinal);
+        var relatedEntityIds = PanelTopologyPolicy.IsEntityPanel(panel)
+            ? GetNotificationChildIds(panel.OwnerEntityId)
+            : new HashSet<int>();
         lock (m_gate)
         {
             candidates = m_alarms.Values
-                .Where(state => slotIds.Contains(
-                    PanelSlotProjection.StableAlarmId(state.View)) &&
+                .Where(state =>
+                    (slotIds.Contains(
+                         PanelSlotProjection.StableAlarmId(state.View)) ||
+                     string.Equals(
+                         state.View.Source,
+                         "vanilla",
+                         StringComparison.Ordinal) &&
+                     relatedEntityIds.Contains(state.View.EntityId)) &&
                     !IsVanillaAlarmHidden(state.View, vanillaRules))
-                .Select(state => Clone(state.View, state.Sequence))
+                .Select(state => ProjectAlarmForPanel(
+                    Clone(state.View, state.Sequence),
+                    panel,
+                    relatedEntityIds))
                 .ToArray();
         }
         return PanelSlotProjection.Project(slots, candidates);
+    }
+
+    private static AlarmView ProjectAlarmForPanel(
+        AlarmView view,
+        PanelDefinition panel,
+        IReadOnlyCollection<int> relatedEntityIds)
+    {
+        if (view == null ||
+            !PanelTopologyPolicy.IsEntityPanel(panel) ||
+            !string.Equals(view.Source, "vanilla", StringComparison.Ordinal) ||
+            relatedEntityIds == null ||
+            !relatedEntityIds.Contains(view.EntityId))
+        {
+            return view;
+        }
+        var overrideId = VanillaNotificationSuppressionPolicy
+            .GetOverrideIdForSlotId(
+                PanelSlotProjection.StableAlarmId(view));
+        view.SlotId = overrideId + ":entity:" + panel.OwnerEntityId;
+        view.EntityId = panel.OwnerEntityId;
+        view.EntityPrototypeId = panel.OwnerEntityPrototypeId;
+        view.EntityTitle = panel.OwnerEntityTitle;
+        return view;
     }
 
     public AlarmView GetAudibleAlarm()
@@ -2671,12 +2853,10 @@ public sealed class UnmaRuntime : IDisposable
                         pair.Value.View.Source,
                         "vanilla",
                         StringComparison.Ordinal) &&
-                    VanillaNotificationSuppressionPolicy.MatchesScope(
+                    MatchesVanillaScopeIncludingAliases(
                         targetRule,
-                        pair.Value.View.OverrideId,
                         scope,
-                        pair.Value.View.EntityId,
-                        pair.Value.View.EntityPrototypeId))
+                        pair.Value.View))
                 .ToArray();
             if (matchingStates.Length == 0)
             {
@@ -2695,6 +2875,33 @@ public sealed class UnmaRuntime : IDisposable
                 sequences.Contains(history.Sequence));
             m_alarmHistoryRevision++;
         }
+    }
+
+    private bool MatchesVanillaScopeIncludingAliases(
+        VanillaNotificationRule rule,
+        VanillaNotificationScope scope,
+        AlarmView view)
+    {
+        if (view == null)
+        {
+            return false;
+        }
+        if (VanillaNotificationSuppressionPolicy.MatchesScope(
+                rule,
+                view.OverrideId,
+                scope,
+                view.EntityId,
+                view.EntityPrototypeId))
+        {
+            return true;
+        }
+        return GetNotificationOwnerAliases(view.EntityId).Any(alias =>
+            VanillaNotificationSuppressionPolicy.MatchesScope(
+                rule,
+                view.OverrideId,
+                scope,
+                alias.OwnerEntityId,
+                alias.OwnerEntityPrototypeId));
     }
 
     public bool SetConfiguredSound(string alarmId, string soundId)
@@ -5053,7 +5260,7 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
-    private static VanillaNotificationBehavior
+    private VanillaNotificationBehavior
         ResolveVanillaNotificationBehavior(
             AlarmView view,
             IEnumerable<VanillaNotificationRule> rules)
@@ -5063,7 +5270,7 @@ public sealed class UnmaRuntime : IDisposable
         {
             return VanillaNotificationBehavior.Normal;
         }
-        return VanillaNotificationSuppressionPolicy.ResolveBehavior(
+        return ResolveVanillaNotificationBehavior(
             rules,
             view.OverrideId,
             view.EntityId,
@@ -5075,14 +5282,41 @@ public sealed class UnmaRuntime : IDisposable
         int entityId,
         string entityPrototypeId)
     {
-        return VanillaNotificationSuppressionPolicy.ResolveBehavior(
+        return ResolveVanillaNotificationBehavior(
             GetVanillaNotificationRulesSnapshot(),
             overrideId,
             entityId,
             entityPrototypeId);
     }
 
-    private static bool IsVanillaAlarmHidden(
+    private VanillaNotificationBehavior ResolveVanillaNotificationBehavior(
+        IEnumerable<VanillaNotificationRule> rules,
+        string overrideId,
+        int entityId,
+        string entityPrototypeId)
+    {
+        var behavior = VanillaNotificationSuppressionPolicy.ResolveBehavior(
+            rules,
+            overrideId,
+            entityId,
+            entityPrototypeId);
+        foreach (var alias in GetNotificationOwnerAliases(entityId))
+        {
+            var aliasBehavior = VanillaNotificationSuppressionPolicy
+                .ResolveBehavior(
+                    rules,
+                    overrideId,
+                    alias.OwnerEntityId,
+                    alias.OwnerEntityPrototypeId);
+            if ((int)aliasBehavior > (int)behavior)
+            {
+                behavior = aliasBehavior;
+            }
+        }
+        return behavior;
+    }
+
+    private bool IsVanillaAlarmHidden(
         AlarmView view,
         IEnumerable<VanillaNotificationRule> rules)
     {

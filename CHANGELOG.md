@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.8 – 2026-08-09
+
+- Terrain-Collapse-Warnungen von unsichtbaren konstruktiven Unterobjekten wie
+  Transportpfeilern werden jetzt dem zugehörigen sichtbaren Transport- oder
+  Layoutgebäude zugeordnet und in dessen Objektpanel angezeigt.
+- `EntityMayCollapseUnevenTerrain` wird für kollabierbare statische Objekte
+  vorsorglich als mögliche Vanilla-Meldung angeboten. Objekt- und
+  Objekttyp-Unterdrückung wirken auch auf angehängte Pfeiler.
+
 ## 0.9.7 – 2026-08-09
 
 - Objektpanels lesen die vom Spiel am konkreten Objekt registrierten
