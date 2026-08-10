@@ -41,6 +41,7 @@ internal static class Program
         TestWindowResizeMath();
         TestPanelTopologyPolicy();
         TestAlarmAreaPolicy();
+        TestAlarmIncidentPolicy();
         TestPanelClonePolicy();
         TestEntityVanillaSlotPolicy();
         TestCustomRuleLifecyclePolicy();
@@ -3174,6 +3175,445 @@ internal static class Program
         IsTrue(PanelTopologyPolicy.GetRulePanelIds(
             orphaned.Rules[0],
             orphaned.Panels).Count > 0);
+    }
+
+    private static void TestAlarmIncidentPolicy()
+    {
+        AreEqual(
+            GameTimeWindowPolicy.SimTicksPerDay * 2,
+            AlarmIncidentPolicy.DefaultBurstGapTicks);
+        AreEqual(
+            GameTimeWindowPolicy.SimTicksPerDay * 10,
+            AlarmIncidentPolicy.DefaultPressureWindowTicks);
+        AreEqual(4096, AlarmIncidentPolicy.MaximumActiveSamples);
+        AreEqual(8192, AlarmIncidentPolicy.MaximumOccurrenceSignals);
+        AreEqual(8192, AlarmIncidentPolicy.MaximumActiveInputScan);
+        AreEqual(16384, AlarmIncidentPolicy.MaximumOccurrenceInputScan);
+
+        var empty = AlarmIncidentPolicy.Analyze(null, null, 500d);
+        IsTrue(empty.IsTimeValid);
+        AreEqual(0, empty.ActiveAlarmCount);
+        AreEqual(0, empty.ActiveUnacknowledgedCount);
+        AreEqual(0, empty.RecentOccurrenceCount);
+        AreEqual(0, empty.RecentDistinctAlarmCount);
+        AreEqual(0, empty.AlarmPressure);
+        AreEqual(AlarmStormLevel.Normal, empty.StormLevel);
+        AreEqual(0, empty.Incidents.Count);
+
+        foreach (var invalidNow in new[]
+                 {
+                     -1d,
+                     double.NaN,
+                     double.PositiveInfinity,
+                     double.NegativeInfinity,
+                 })
+        {
+            var invalid = AlarmIncidentPolicy.Analyze(
+                new[] { IncidentSample("future", 10d) },
+                new[]
+                {
+                    new AlarmOccurrenceSignal(
+                        "future",
+                        AlarmSeverity.Emergency,
+                        1,
+                        10d),
+                },
+                invalidNow,
+                int.MinValue,
+                int.MaxValue);
+            IsFalse(invalid.IsTimeValid);
+            AreEqual(0, invalid.ActiveAlarmCount);
+            AreEqual(0, invalid.RecentOccurrenceCount);
+            AreEqual(
+                AlarmIncidentPolicy.DefaultBurstGapTicks,
+                invalid.BurstGapTicks);
+            AreEqual(
+                GameTimeWindowPolicy.MaximumWindowTicks,
+                invalid.PressureWindowTicks);
+        }
+
+        var clusteredInput = new[]
+        {
+            IncidentSample(
+                "b",
+                140d,
+                AlarmSeverity.Critical,
+                acknowledged: true,
+                sequence: 2),
+            IncidentSample(
+                "d",
+                181d,
+                AlarmSeverity.Emergency,
+                sequence: 4),
+            IncidentSample(
+                "a",
+                100d,
+                AlarmSeverity.Warning,
+                sequence: 1),
+            IncidentSample(
+                "c",
+                181d,
+                AlarmSeverity.Notice,
+                sequence: 3),
+        };
+        var clustered = AlarmIncidentPolicy.Analyze(
+            clusteredInput,
+            Array.Empty<AlarmOccurrenceSignal>(),
+            500d);
+        AreEqual(4, clustered.ActiveAlarmCount);
+        AreEqual(3, clustered.ActiveUnacknowledgedCount);
+        AreEqual(2, clustered.Incidents.Count);
+
+        // Results are newest-burst first; members and FIRST SIGNAL are
+        // chronological with severity/stable-ID tie breaks.
+        var newest = clustered.Incidents[0];
+        AreEqual(2, newest.MemberCount);
+        AreEqual(2, newest.UnacknowledgedCount);
+        AreEqual(AlarmSeverity.Emergency, newest.Severity);
+        AreEqual(181d, newest.FirstRaisedAtTicks);
+        AreEqual(181d, newest.LastRaisedAtTicks);
+        AreEqual("d", newest.FirstSignal.StableAlarmId);
+        AreEqual("d", newest.Members[0].StableAlarmId);
+        AreEqual("c", newest.Members[1].StableAlarmId);
+        var older = clustered.Incidents[1];
+        AreEqual(2, older.MemberCount);
+        AreEqual(1, older.UnacknowledgedCount);
+        AreEqual(100d, older.FirstRaisedAtTicks);
+        AreEqual(140d, older.LastRaisedAtTicks);
+        AreEqual("a", older.FirstSignal.StableAlarmId);
+
+        var reversed = AlarmIncidentPolicy.Analyze(
+            clusteredInput.Reverse().ToArray(),
+            Array.Empty<AlarmOccurrenceSignal>(),
+            500d);
+        AreEqual(
+            string.Join("|", clustered.Incidents.Select(IncidentSignature)),
+            string.Join("|", reversed.Incidents.Select(IncidentSignature)));
+
+        var splitAtBoundary = AlarmIncidentPolicy.Analyze(
+            new[]
+            {
+                IncidentSample("one", 10d),
+                IncidentSample("two", 50d),
+                IncidentSample("three", 90.000001d),
+            },
+            null,
+            100d);
+        AreEqual(2, splitAtBoundary.Incidents.Count);
+        AreEqual(1, splitAtBoundary.Incidents[0].MemberCount);
+        AreEqual(2, splitAtBoundary.Incidents[1].MemberCount);
+
+        var longText = new string('X',
+            AlarmIncidentPolicy.MaximumTextLength + 20);
+        var defensiveSamples = new AlarmIncidentActiveSample[]
+        {
+            IncidentSample(
+                "duplicate-late",
+                60d,
+                AlarmSeverity.Emergency,
+                acknowledged: false,
+                stableAlarmId: " duplicate ",
+                sequence: 20),
+            IncidentSample(
+                "duplicate-first",
+                50d,
+                AlarmSeverity.Warning,
+                acknowledged: true,
+                stableAlarmId: "duplicate",
+                name: "FIRST",
+                sequence: 10),
+            IncidentSample(
+                "slot-key",
+                70d,
+                stableAlarmId: " ",
+                slotId: " slot-stable "),
+            IncidentSample(
+                " key-fallback ",
+                80d,
+                stableAlarmId: " ",
+                slotId: " "),
+            IncidentSample(
+                "bad-severity",
+                90d,
+                (AlarmSeverity)999,
+                sequence: -50,
+                name: longText),
+            IncidentSample("future", 101d),
+            IncidentSample("negative", -1d),
+            IncidentSample("nan", double.NaN),
+            IncidentSample("infinity", double.PositiveInfinity),
+            IncidentSample(" ", 20d, stableAlarmId: " ", slotId: " "),
+            null,
+        };
+        var defensive = AlarmIncidentPolicy.Analyze(
+            defensiveSamples,
+            null,
+            100d);
+        AreEqual(4, defensive.ActiveAlarmCount);
+        var flattened = defensive.Incidents
+            .SelectMany(incident => incident.Members)
+            .ToArray();
+        var duplicate = flattened.Single(member =>
+            member.StableAlarmId == "duplicate");
+        AreEqual(50d, duplicate.RaisedAtTicks);
+        AreEqual("FIRST", duplicate.Name);
+        AreEqual(AlarmSeverity.Emergency, duplicate.Severity);
+        IsFalse(duplicate.IsAcknowledged);
+        AreEqual(
+            "slot-stable",
+            flattened.Single(member => member.Key == "slot-key")
+                .StableAlarmId);
+        IsTrue(flattened.Any(member =>
+            member.StableAlarmId == "key-fallback"));
+        var clamped = flattened.Single(member =>
+            member.StableAlarmId == "bad-severity");
+        AreEqual(AlarmSeverity.Emergency, clamped.Severity);
+        AreEqual(0L, clamped.Sequence);
+        AreEqual(AlarmIncidentPolicy.MaximumTextLength, clamped.Name.Length);
+
+        var rolledBack = AlarmIncidentPolicy.Analyze(
+            new[] { IncidentSample("not-yet", 51d) },
+            new[]
+            {
+                new AlarmOccurrenceSignal(
+                    "not-yet",
+                    AlarmSeverity.Emergency,
+                    1,
+                    51d),
+            },
+            50d);
+        IsTrue(rolledBack.IsTimeValid);
+        AreEqual(0, rolledBack.ActiveAlarmCount);
+        AreEqual(0, rolledBack.RecentOccurrenceCount);
+
+        var pressureSignals = new AlarmOccurrenceSignal[]
+        {
+            new("boundary", AlarmSeverity.Notice, 1, 100d),
+            new("duplicate", AlarmSeverity.Notice, 2, 150d),
+            new("duplicate", AlarmSeverity.Emergency, 2, 160d),
+            new("warning", AlarmSeverity.Warning, 3, 200d),
+            new("warning", AlarmSeverity.Warning, 9, 190d),
+            new("too-old", AlarmSeverity.Emergency, 4, 99.999d),
+            new("future", AlarmSeverity.Emergency, 5, 200.001d),
+            new("nan", AlarmSeverity.Emergency, 6, double.NaN),
+            new("infinity", AlarmSeverity.Emergency, 7,
+                double.PositiveInfinity),
+            new(" ", AlarmSeverity.Emergency, 8, 180d),
+            null,
+        };
+        var pressure = AlarmIncidentPolicy.Analyze(
+            null,
+            pressureSignals,
+            200d,
+            pressureWindowTicks: 100);
+        AreEqual(4, pressure.RecentOccurrenceCount);
+        AreEqual(3, pressure.RecentDistinctAlarmCount);
+        AreEqual(13, pressure.AlarmPressure);
+        AreEqual(AlarmStormLevel.Elevated, pressure.StormLevel);
+        var reversedPressure = AlarmIncidentPolicy.Analyze(
+            null,
+            pressureSignals.Reverse().ToArray(),
+            200d,
+            pressureWindowTicks: 100);
+        AreEqual(pressure.RecentOccurrenceCount,
+            reversedPressure.RecentOccurrenceCount);
+        AreEqual(pressure.RecentDistinctAlarmCount,
+            reversedPressure.RecentDistinctAlarmCount);
+        AreEqual(pressure.AlarmPressure, reversedPressure.AlarmPressure);
+        foreach (var pair in new[]
+                 {
+                     (Pressure: -1, Level: AlarmStormLevel.Normal),
+                     (Pressure: 7, Level: AlarmStormLevel.Normal),
+                     (Pressure: 8, Level: AlarmStormLevel.Elevated),
+                     (Pressure: 15, Level: AlarmStormLevel.Elevated),
+                     (Pressure: 16, Level: AlarmStormLevel.Storm),
+                     (Pressure: 31, Level: AlarmStormLevel.Storm),
+                     (Pressure: 32, Level: AlarmStormLevel.Severe),
+                     (Pressure: int.MaxValue, Level: AlarmStormLevel.Severe),
+                 })
+        {
+            AreEqual(
+                pair.Level,
+                AlarmIncidentPolicy.ResolveStormLevel(pair.Pressure));
+        }
+
+        var stormSignals = Enumerable.Range(0, 4)
+            .Select(index => new AlarmOccurrenceSignal(
+                "emergency-" + index,
+                AlarmSeverity.Emergency,
+                index,
+                200d))
+            .ToArray();
+        AreEqual(
+            AlarmStormLevel.Elevated,
+            AlarmIncidentPolicy.Analyze(
+                null,
+                stormSignals.Take(1).ToArray(),
+                200d).StormLevel);
+        AreEqual(
+            AlarmStormLevel.Storm,
+            AlarmIncidentPolicy.Analyze(
+                null,
+                stormSignals.Take(2).ToArray(),
+                200d).StormLevel);
+        AreEqual(
+            AlarmStormLevel.Severe,
+            AlarmIncidentPolicy.Analyze(
+                null,
+                stormSignals,
+                200d).StormLevel);
+
+        var boundedActive = Enumerable.Range(
+                0,
+                AlarmIncidentPolicy.MaximumActiveSamples + 1)
+            .Select(index => IncidentSample(
+                "bounded-active-" + index,
+                100d,
+                index == 0
+                    ? AlarmSeverity.Emergency
+                    : AlarmSeverity.Notice,
+                sequence: index))
+            .ToArray();
+        var boundedSignals = Enumerable.Range(
+                0,
+                AlarmIncidentPolicy.MaximumOccurrenceSignals + 1)
+            .Select(index => new AlarmOccurrenceSignal(
+                "bounded-signal-" + index,
+                AlarmSeverity.Emergency,
+                index,
+                200d))
+            .ToArray();
+        var bounded = AlarmIncidentPolicy.Analyze(
+            boundedActive,
+            boundedSignals,
+            200d,
+            int.MaxValue,
+            int.MaxValue);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumActiveSamples,
+            bounded.ActiveAlarmCount);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumOccurrenceSignals,
+            bounded.RecentOccurrenceCount);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumOccurrenceSignals,
+            bounded.RecentDistinctAlarmCount);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumOccurrenceSignals * 8,
+            bounded.AlarmPressure);
+        AreEqual(
+            GameTimeWindowPolicy.MaximumWindowTicks,
+            bounded.BurstGapTicks);
+        AreEqual(
+            GameTimeWindowPolicy.MaximumWindowTicks,
+            bounded.PressureWindowTicks);
+
+        var scanBoundedActive = Enumerable.Range(
+                0,
+                AlarmIncidentPolicy.MaximumActiveInputScan)
+            .Select(index => IncidentSample(
+                "scan-active-" + index,
+                100d,
+                AlarmSeverity.Notice,
+                sequence: index))
+            .ToList();
+        scanBoundedActive.Add(IncidentSample(
+            "beyond-active-scan",
+            200d,
+            AlarmSeverity.Emergency));
+        var scanBoundedSignals = Enumerable.Range(
+                0,
+                AlarmIncidentPolicy.MaximumOccurrenceInputScan)
+            .Select(index => new AlarmOccurrenceSignal(
+                "scan-signal-" + index,
+                AlarmSeverity.Notice,
+                index,
+                100d))
+            .ToList();
+        scanBoundedSignals.Add(new AlarmOccurrenceSignal(
+            "beyond-signal-scan",
+            AlarmSeverity.Emergency,
+            long.MaxValue,
+            200d));
+        var hardScanBounded = AlarmIncidentPolicy.Analyze(
+            scanBoundedActive,
+            scanBoundedSignals,
+            200d);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumActiveSamples,
+            hardScanBounded.ActiveAlarmCount);
+        IsFalse(hardScanBounded.Incidents
+            .SelectMany(incident => incident.Members)
+            .Any(member => member.StableAlarmId == "beyond-active-scan"));
+        AreEqual(
+            AlarmIncidentPolicy.MaximumOccurrenceSignals,
+            hardScanBounded.RecentOccurrenceCount);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumOccurrenceSignals,
+            hardScanBounded.RecentDistinctAlarmCount);
+        AreEqual(
+            AlarmIncidentPolicy.MaximumOccurrenceSignals,
+            hardScanBounded.AlarmPressure);
+
+        var maximumTick = AlarmIncidentPolicy.Analyze(
+            new[]
+            {
+                IncidentSample("maximum", double.MaxValue),
+            },
+            new[]
+            {
+                new AlarmOccurrenceSignal(
+                    "maximum",
+                    (AlarmSeverity)int.MaxValue,
+                    long.MinValue,
+                    double.MaxValue),
+            },
+            double.MaxValue);
+        IsTrue(maximumTick.IsTimeValid);
+        AreEqual(1, maximumTick.ActiveAlarmCount);
+        AreEqual(1, maximumTick.RecentOccurrenceCount);
+        AreEqual(1, maximumTick.RecentDistinctAlarmCount);
+        AreEqual(8, maximumTick.AlarmPressure);
+        AreEqual(AlarmStormLevel.Elevated, maximumTick.StormLevel);
+        IsTrue(maximumTick.Incidents is
+            System.Collections.ObjectModel.ReadOnlyCollection<AlarmIncident>);
+        IsTrue(maximumTick.Incidents[0].Members is
+            System.Collections.ObjectModel.ReadOnlyCollection<AlarmIncidentMember>);
+    }
+
+    private static AlarmIncidentActiveSample IncidentSample(
+        string key,
+        double raisedAtTicks,
+        AlarmSeverity severity = AlarmSeverity.Warning,
+        bool acknowledged = false,
+        string stableAlarmId = null,
+        string slotId = null,
+        string name = null,
+        long sequence = 1)
+    {
+        return new AlarmIncidentActiveSample(
+            key,
+            stableAlarmId ?? key,
+            name ?? key,
+            "DETAIL",
+            "custom",
+            "panel",
+            slotId ?? stableAlarmId ?? key,
+            42,
+            "prototype",
+            "ENTITY",
+            severity,
+            sequence,
+            raisedAtTicks,
+            acknowledged);
+    }
+
+    private static string IncidentSignature(AlarmIncident incident)
+    {
+        return incident.IncidentId + ":" + incident.Severity + ":" +
+               incident.UnacknowledgedCount + ":" +
+               string.Join(",", incident.Members.Select(member =>
+                   member.StableAlarmId + "@" + member.RaisedAtTicks));
     }
 
     private static void TestAlarmAreaPolicy()

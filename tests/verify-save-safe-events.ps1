@@ -22,6 +22,12 @@ $alarmAreaDefinitionTypeName = "UNMA.Domain.AlarmAreaDefinition"
 $alarmAreaFilterTypeName = "UNMA.Domain.AlarmAreaFilter"
 $alarmAreaFilterKindTypeName = "UNMA.Domain.AlarmAreaFilterKind"
 $alarmViewTypeName = "UNMA.Domain.AlarmView"
+$alarmHistoryTypeName = "UNMA.Domain.AlarmHistoryDefinition"
+$alarmIncidentPolicyTypeName = "UNMA.Domain.AlarmIncidentPolicy"
+$alarmIncidentActiveSampleTypeName =
+    "UNMA.Domain.AlarmIncidentActiveSample"
+$alarmOccurrenceSignalTypeName = "UNMA.Domain.AlarmOccurrenceSignal"
+$alarmIncidentSnapshotTypeName = "UNMA.Domain.AlarmIncidentSnapshot"
 $panelProjectionTypeName = "UNMA.Domain.PanelSlotProjection"
 $entityTypeName = "Mafi.Core.Entities.IEntity"
 $entitiesManagerTypeName = "Mafi.Core.Entities.IEntitiesManager"
@@ -374,6 +380,26 @@ $alarmViewType = $assembly.GetType(
     $alarmViewTypeName,
     $true,
     $false)
+$alarmHistoryType = $assembly.GetType(
+    $alarmHistoryTypeName,
+    $true,
+    $false)
+$alarmIncidentActiveSampleType = $assembly.GetType(
+    $alarmIncidentActiveSampleTypeName,
+    $true,
+    $false)
+$alarmOccurrenceSignalType = $assembly.GetType(
+    $alarmOccurrenceSignalTypeName,
+    $true,
+    $false)
+$alarmIncidentSnapshotType = $assembly.GetType(
+    $alarmIncidentSnapshotTypeName,
+    $true,
+    $false)
+$alarmIncidentPolicyType = $assembly.GetType(
+    $alarmIncidentPolicyTypeName,
+    $true,
+    $false)
 $bindingFlags = [System.Reflection.BindingFlags]::Instance -bor
     [System.Reflection.BindingFlags]::Static -bor
     [System.Reflection.BindingFlags]::Public -bor
@@ -409,6 +435,16 @@ $updatePanelSettings = @(
     $methods | Where-Object Name -eq "UpdatePanelSettings")
 $tryGetDashboardViews = @(
     $methods | Where-Object Name -eq "TryGetDashboardViews")
+$tryGetAlarmIncidentSnapshot = @(
+    $methods | Where-Object Name -eq "TryGetAlarmIncidentSnapshot")
+$createAlarmIncidentActiveSample = @(
+    $methods | Where-Object Name -eq "CreateAlarmIncidentActiveSample")
+$getAlarmIncidentHistoryCapture = @(
+    $methods |
+        Where-Object Name -eq "GetAlarmIncidentHistoryCapture")
+$buildAlarmIncidentHistoryCapture = @(
+    $methods |
+        Where-Object Name -eq "BuildAlarmIncidentHistoryCapture")
 $tryCaptureAlarmAreaProjection = @(
     $methods | Where-Object Name -eq "TryCaptureAlarmAreaProjection")
 $tryAcknowledgeDashboard = @(
@@ -462,6 +498,18 @@ Assert-Condition `
 Assert-Condition `
     ($tryGetDashboardViews.Count -eq 1) `
     "TryGetDashboardViews was not found exactly once."
+Assert-Condition `
+    ($tryGetAlarmIncidentSnapshot.Count -eq 1) `
+    "TryGetAlarmIncidentSnapshot was not found exactly once."
+Assert-Condition `
+    ($createAlarmIncidentActiveSample.Count -eq 1) `
+    "CreateAlarmIncidentActiveSample was not found exactly once."
+Assert-Condition `
+    ($getAlarmIncidentHistoryCapture.Count -eq 1) `
+    "GetAlarmIncidentHistoryCapture was not found exactly once."
+Assert-Condition `
+    ($buildAlarmIncidentHistoryCapture.Count -eq 1) `
+    "BuildAlarmIncidentHistoryCapture was not found exactly once."
 Assert-Condition `
     ($tryCaptureAlarmAreaProjection.Count -eq 1) `
     "TryCaptureAlarmAreaProjection was not found exactly once."
@@ -1107,6 +1155,310 @@ Assert-Condition `
     "Next alarm navigation must be a read-only view query."
 Write-Host `
     "UNMA alarm-area runtime IL/reflection regression passed."
+
+# Incident Lens is a read-only derivation over the exact dashboard scope and a
+# bounded history capture. Preserve its public query contract, exact sequence
+# join, fallback for active tiles without usable history time, lock boundary,
+# and absence of acknowledgement/persistence/game side effects.
+$incidentSnapshotParameters = @(
+    $tryGetAlarmIncidentSnapshot[0].GetParameters())
+Assert-Condition `
+    ($tryGetAlarmIncidentSnapshot[0].IsPublic -and
+        $tryGetAlarmIncidentSnapshot[0].ReturnType -eq [bool] -and
+        $incidentSnapshotParameters.Count -eq 2 -and
+        $incidentSnapshotParameters[0].ParameterType -eq
+            $alarmAreaFilterType -and
+        $incidentSnapshotParameters[1].IsOut -and
+        $incidentSnapshotParameters[1].ParameterType.IsByRef -and
+        $incidentSnapshotParameters[1].ParameterType.GetElementType() -eq
+            $alarmIncidentSnapshotType) `
+    "TryGetAlarmIncidentSnapshot public contract changed."
+
+$incidentInstructions = @(
+    Read-MethodInstructions $tryGetAlarmIncidentSnapshot[0])
+$incidentDashboardCalls = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $runtimeTypeName "TryGetDashboardViews"
+})
+$incidentClockCalls = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $runtimeTypeName "get_CurrentGameTicks"
+})
+$incidentCaptureCalls = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "GetAlarmIncidentHistoryCapture"
+})
+$incidentSampleCalls = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "CreateAlarmIncidentActiveSample"
+})
+$incidentAnalyzeCalls = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $alarmIncidentPolicyTypeName "Analyze"
+})
+Assert-Condition `
+    ($incidentDashboardCalls.Count -eq 1 -and
+        $incidentClockCalls.Count -eq 1 -and
+        $incidentCaptureCalls.Count -eq 1 -and
+        $incidentSampleCalls.Count -eq 1 -and
+        $incidentAnalyzeCalls.Count -eq 1) `
+    "Incident query must capture clock, scoped dashboard, history, members, and analysis exactly once."
+Assert-Condition `
+    ($incidentClockCalls[0].Offset -lt $incidentDashboardCalls[0].Offset) `
+    "Incident query must capture the game clock before taking UNMA snapshots."
+
+$incidentMonitorEnter = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Enter"
+})
+$incidentMonitorExit = @($incidentInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Exit"
+})
+$incidentAlarmGateLoads = @($incidentInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.FieldInfo] -and
+        (Test-SameField $_.Operand $alarmGateField)
+})
+$incidentConfigurationGateLoads = @($incidentInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.FieldInfo] -and
+        (Test-SameField $_.Operand $configurationGateField)
+})
+Assert-Condition `
+    ($incidentMonitorEnter.Count -eq 0 -and
+        $incidentMonitorExit.Count -eq 0 -and
+        $incidentAlarmGateLoads.Count -eq 0 -and
+        $incidentConfigurationGateLoads.Count -eq 0) `
+    "Incident query must delegate its cache monitor and never nest alarm/configuration locks."
+Assert-Condition `
+    ($incidentAnalyzeCalls[0].Offset -gt $incidentCaptureCalls[0].Offset) `
+    "Incident policy analysis must run only after the history cache query returns."
+
+$incidentCacheInstructions = @(
+    Read-MethodInstructions $getAlarmIncidentHistoryCapture[0])
+$incidentCacheMonitorEnter = @($incidentCacheInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Enter"
+})
+$incidentCacheMonitorExit = @($incidentCacheInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Exit"
+})
+$incidentCacheBuilderCalls = @($incidentCacheInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "BuildAlarmIncidentHistoryCapture"
+})
+Assert-Condition `
+    ($incidentCacheMonitorEnter.Count -eq 2 -and
+        $incidentCacheMonitorExit.Count -eq 2 -and
+        $incidentCacheBuilderCalls.Count -eq 2 -and
+        $incidentCacheBuilderCalls[0].Offset -gt
+            $incidentCacheMonitorExit[0].Offset -and
+        $incidentCacheBuilderCalls[0].Offset -lt
+            $incidentCacheMonitorEnter[1].Offset -and
+        $incidentCacheBuilderCalls[1].Offset -gt
+            $incidentCacheMonitorExit[1].Offset) `
+    "Incident cache must build outside locks and retain an unlocked bounded-retry fallback."
+$incidentCaptureAttemptLimitField = $runtimeType.GetField(
+    "MaximumAlarmIncidentHistoryCaptureAttempts",
+    $bindingFlags)
+Assert-Condition `
+    ($null -ne $incidentCaptureAttemptLimitField -and
+        $incidentCaptureAttemptLimitField.IsLiteral -and
+        [int]($incidentCaptureAttemptLimitField.GetRawConstantValue()) -eq 2) `
+    "Incident history capture must retain a hard two-attempt progress bound."
+$incidentCacheField = $runtimeType.GetField(
+    "m_alarmIncidentHistoryCapture",
+    $bindingFlags)
+$incidentCacheRevisionField = $runtimeType.GetField(
+    "m_alarmIncidentHistoryCaptureRevision",
+    $bindingFlags)
+foreach ($cacheField in @(
+        $incidentCacheField,
+        $incidentCacheRevisionField)) {
+    Assert-Condition ($null -ne $cacheField) "Incident cache field is missing."
+    $cacheWrites = @($incidentCacheInstructions | Where-Object {
+        $_.OpCode.Name -eq "stfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $cacheField)
+    })
+    Assert-Condition `
+        ($cacheWrites.Count -eq 1) `
+        "Incident cache may publish '$($cacheField.Name)' only on its guarded path."
+}
+
+$incidentForbiddenCalls = @($incidentInstructions | Where-Object {
+    if ($_.Operand -isnot [System.Reflection.MethodBase] -or
+        $null -eq $_.Operand.DeclaringType) {
+        return $false
+    }
+    $method = [System.Reflection.MethodBase]$_.Operand
+    if ($method.DeclaringType.FullName -eq $runtimeTypeName) {
+        return $method.Name -eq "SetAlarm" -or
+            $method.Name -like "Acknowledge*" -or
+            $method.Name -like "TryAcknowledge*" -or
+            $method.Name -like "Persist*" -or
+            $method.Name -like "Save*"
+    }
+    return $method.DeclaringType.FullName -eq $alarmHistoryTypeName -and
+        $method.Name -eq "SetState"
+})
+Assert-Condition `
+    ($incidentForbiddenCalls.Count -eq 0) `
+    "Incident query must not mutate alarms, acknowledgement, history, or persistence."
+foreach ($instruction in $incidentInstructions) {
+    if ($instruction.Operand -isnot [System.Reflection.MethodBase] -or
+        $null -eq $instruction.Operand.DeclaringType) {
+        continue
+    }
+    $declaringTypeName = $instruction.Operand.DeclaringType.FullName
+    Assert-Condition `
+        (-not ($declaringTypeName -like "Mafi*" -or
+            $declaringTypeName -like "UnityEngine*")) `
+        "Incident snapshot path must not directly call game or Unity APIs."
+}
+foreach ($readOnlyHelper in @(
+        $getAlarmIncidentHistoryCapture[0],
+        $buildAlarmIncidentHistoryCapture[0],
+        $createAlarmIncidentActiveSample[0])) {
+    foreach ($instruction in @(Read-MethodInstructions $readOnlyHelper)) {
+        if ($instruction.Operand -isnot [System.Reflection.MethodBase] -or
+            $null -eq $instruction.Operand.DeclaringType) {
+            continue
+        }
+        $method = [System.Reflection.MethodBase]$instruction.Operand
+        $declaringTypeName = $method.DeclaringType.FullName
+        Assert-Condition `
+            (-not ($declaringTypeName -like "Mafi*" -or
+                $declaringTypeName -like "UnityEngine*")) `
+            "$($readOnlyHelper.Name) must not call game or Unity APIs."
+        Assert-Condition `
+            (-not ($declaringTypeName -eq $runtimeTypeName -and
+                ($method.Name -eq "SetAlarm" -or
+                    $method.Name -like "Acknowledge*" -or
+                    $method.Name -like "TryAcknowledge*" -or
+                    $method.Name -like "Persist*" -or
+                    $method.Name -like "Save*"))) `
+            "$($readOnlyHelper.Name) must not reach an alarm or persistence mutation."
+        Assert-Condition `
+            (-not ($declaringTypeName -eq $alarmHistoryTypeName -and
+                $method.Name -eq "SetState")) `
+            "$($readOnlyHelper.Name) must not mutate history state."
+    }
+}
+
+$sampleView = [Activator]::CreateInstance($alarmViewType)
+$sampleView.Key = "incident-key"
+$sampleView.Name = "Incident name"
+$sampleView.Detail = "Incident detail"
+$sampleView.Source = "system"
+$sampleView.PanelId = "panel-a"
+$sampleView.SlotId = "stable-slot"
+$sampleView.Sequence = [long]41
+$sampleView.Severity = [Enum]::Parse(
+    $assembly.GetType("UNMA.Domain.AlarmSeverity", $true, $false),
+    "Critical")
+$sampleView.IsActive = $true
+$sampleView.IsAcknowledged = $false
+$exactSample = $createAlarmIncidentActiveSample[0].Invoke(
+    $null,
+    @($sampleView, [long]41, [double]123, [double]500))
+Assert-Condition `
+    ($null -ne $exactSample -and
+        $exactSample.Sequence -eq [long]41 -and
+        $exactSample.StableAlarmId -eq "stable-slot" -and
+        $exactSample.RaisedAtTicks -eq [double]123) `
+    "Incident active sample must use the exact matching history sequence and timestamp."
+$missingHistorySample = $createAlarmIncidentActiveSample[0].Invoke(
+    $null,
+    @($sampleView, [long]42, [double]123, [double]500))
+$futureHistorySample = $createAlarmIncidentActiveSample[0].Invoke(
+    $null,
+    @($sampleView, [long]41, [double]501, [double]500))
+Assert-Condition `
+    ($missingHistorySample.RaisedAtTicks -eq [double]500 -and
+        $futureHistorySample.RaisedAtTicks -eq [double]500) `
+    "Active tiles without an exact usable history timestamp must remain visible at the captured query tick."
+
+$maximumOccurrenceSignalsField = $alarmIncidentPolicyType.GetField(
+    "MaximumOccurrenceSignals",
+    [System.Reflection.BindingFlags]::Public -bor
+    [System.Reflection.BindingFlags]::Static)
+Assert-Condition `
+    ($null -ne $maximumOccurrenceSignalsField -and
+        $maximumOccurrenceSignalsField.IsLiteral) `
+    "AlarmIncidentPolicy.MaximumOccurrenceSignals must remain a public constant."
+$maximumOccurrenceSignals = [int](
+    $maximumOccurrenceSignalsField.GetRawConstantValue())
+$historyListType = [System.Collections.Generic.List``1].MakeGenericType(
+    @($alarmHistoryType))
+$historyList = [Activator]::CreateInstance($historyListType)
+$historyCount = $maximumOccurrenceSignals + 3
+for ($index = 1;
+     $index -le $historyCount;
+     $index++) {
+    # Intentionally interleave oldest/newest sequences. The cache must derive
+    # recency from Sequence rather than trusting persisted list order.
+    $sequence = if (($index % 2) -eq 1) {
+        [long](($index + 1) / 2)
+    } else {
+        [long]($historyCount - ($index / 2) + 1)
+    }
+    $historyItem = [Activator]::CreateInstance($alarmHistoryType)
+    $historyItem.Sequence = $sequence
+    $historyItem.AlarmKey = "history-$sequence"
+    $historyItem.RaisedAtTicks = [double]$sequence
+    [void]$historyList.Add($historyItem)
+}
+$cacheRuntime = [System.Runtime.Serialization.FormatterServices]::
+    GetUninitializedObject($runtimeType)
+$alarmHistoryField = $runtimeType.GetField("m_alarmHistory", $bindingFlags)
+$alarmHistoryRevisionField = $runtimeType.GetField(
+    "m_alarmHistoryRevision",
+    $bindingFlags)
+Assert-Condition `
+    ($null -ne $alarmGateField -and
+        $null -ne $alarmHistoryField -and
+        $null -ne $alarmHistoryRevisionField) `
+    "Incident cache runtime fields are missing."
+$alarmGateField.SetValue($cacheRuntime, (New-Object object))
+$alarmHistoryField.SetValue($cacheRuntime, $historyList)
+$alarmHistoryRevisionField.SetValue($cacheRuntime, [long]73)
+$historyCapture = $getAlarmIncidentHistoryCapture[0].Invoke(
+    $cacheRuntime,
+    [object[]]@())
+$reusedHistoryCapture = $getAlarmIncidentHistoryCapture[0].Invoke(
+    $cacheRuntime,
+    [object[]]@())
+$captureType = $historyCapture.GetType()
+$capturedSignals = $captureType.GetField(
+    "RecentSignals",
+    [System.Reflection.BindingFlags]::Instance -bor
+    [System.Reflection.BindingFlags]::Public).GetValue($historyCapture)
+$capturedRaisedAt = $captureType.GetField(
+    "RaisedAtTicksBySequence",
+    [System.Reflection.BindingFlags]::Instance -bor
+    [System.Reflection.BindingFlags]::Public).GetValue($historyCapture)
+Assert-Condition `
+    ([object]::ReferenceEquals(
+            $historyCapture,
+            $reusedHistoryCapture) -and
+        $capturedSignals.Count -eq $maximumOccurrenceSignals -and
+        $capturedSignals[0].Sequence -eq
+            [long]$historyCount -and
+        $capturedRaisedAt.ContainsKey([long]1) -and
+        $capturedRaisedAt[[long]1] -eq [double]1) `
+    "Incident history cache must reuse its revision, sort shuffled newest pressure, and retain old active timestamps."
+$alarmHistoryRevisionField.SetValue($cacheRuntime, [long]74)
+$rebuiltHistoryCapture = $getAlarmIncidentHistoryCapture[0].Invoke(
+    $cacheRuntime,
+    [object[]]@())
+Assert-Condition `
+    (-not [object]::ReferenceEquals(
+        $historyCapture,
+        $rebuiltHistoryCapture)) `
+    "Incident history cache must rebuild after the history revision changes."
+
+Write-Host `
+    "UNMA alarm-incident runtime IL/reflection regression passed."
 
 # Atomic configuration rollback must not silently miss a newly added
 # DataMember. Validate the compiled IL rather than maintaining a fragile

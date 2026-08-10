@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.26 – 2026-08-11
+
+- Die nur auf HOME sichtbare **INCIDENT-LINSE** gruppiert aktive Alarme anhand
+  ihrer Kommen-Zeitpunkte. Ein Abstand von höchstens zwei Spieltagen bildet
+  einen zeitlichen Cluster; **ERSTES SIGNAL** bezeichnet nur dessen früheste
+  Meldung und ausdrücklich keine bestätigte Ursache.
+- Cluster respektieren **ALLE**, **NICHT ZUGEORDNET** und konkrete
+  Betriebsbereiche. Der getrennte globale Alarmdruck gewichtet Vorkommen der
+  letzten zehn Spieltage nach Stufe und zeigt Anzahl sowie verschiedene Alarme
+  als **NORMAL**, **ERHÖHT**, **STURM** oder **SCHWER**.
+- Die erweiterte Ansicht zeigt höchstens sechs Incident-Karten mit je acht
+  Mitgliedern und weist auf weitere Einträge hin. **FOKUS** springt nur zu
+  einer noch sichtbaren Meldung beziehungsweise ihrem Objekt.
+- Analyse und Fokus quittieren, verbergen oder löschen keine Meldung, ändern
+  weder Ton noch Verlauf und führen keinerlei eigene Alarmzustände ein.
+- Ein revisionsgebundener, unveränderlich ersetzter History-Cache begrenzt den
+  globalen Druck auf die neuesten 8.192 Vorkommen. Sortierung und Analyse
+  laufen außerhalb des Alarm-Locks; unveränderte Frames scannen den Verlauf
+  nicht erneut. Bei dauerhaft wechselnder Revision liefert UNMA nach höchstens
+  zwei Versuchen einen konsistenten lokalen Snapshot, statt die UI zu blockieren.
+- Die Incident-Linse wird ausschließlich aus Laufzeit-Snapshots abgeleitet und
+  nicht gespeichert. 0.9.26 benötigt deshalb keine neue Schema-Migration.
+
 ## 0.9.25 – 2026-08-11
 
 - Benutzerdefinierte Betriebsbereiche gruppieren globale Panels, ohne

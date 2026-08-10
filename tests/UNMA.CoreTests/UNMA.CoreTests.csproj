@@ -35,6 +35,8 @@
              Link="Domain\PanelTopologyPolicy.cs" />
     <Compile Include="..\..\source\Domain\AlarmAreaPolicy.cs"
              Link="Domain\AlarmAreaPolicy.cs" />
+    <Compile Include="..\..\source\Domain\AlarmIncidentPolicy.cs"
+             Link="Domain\AlarmIncidentPolicy.cs" />
     <Compile Include="..\..\source\Domain\PanelClonePolicy.cs"
              Link="Domain\PanelClonePolicy.cs" />
     <Compile Include="..\..\source\Domain\EntityVanillaSlotPolicy.cs"

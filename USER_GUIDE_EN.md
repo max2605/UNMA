@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.25** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.26** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -154,6 +154,51 @@ Assign a global panel from its gear-button settings. A duplicated panel keeps
 the source panel's area. A new panel inherits the currently selected concrete
 area; when created under **ALL** or **UNASSIGNED**, it starts unassigned.
 Object panels and HOME are not assigned to areas.
+
+### Incident Lens
+
+The **INCIDENT LENS** appears only above the HOME dashboard. Its collapsed bar
+shows the global pressure level and counts; **EXPAND** opens a read-only view
+of temporal clusters among the active alarms in the current dashboard scope.
+It does not appear on permanent global or object panels.
+
+The grouping is deliberately a heuristic. Consecutive active alarm
+occurrences whose raise times are no more than two game days apart form one
+temporal incident cluster. **FIRST SIGNAL** is only the earliest observed
+member of that cluster. It is not a confirmed cause, root cause, or proof that
+one member triggered another.
+
+Cluster membership follows the selected **ALL**, **UNASSIGNED**, or concrete
+operational-area filter. The pressure indicator is intentionally global so an
+operator cannot hide an island-wide storm by narrowing the board. It examines
+the last ten game days and weights each occurrence by severity:
+
+| Severity | Weight |
+| --- | ---: |
+| Notice | 1 |
+| Warning | 2 |
+| Critical | 4 |
+| Emergency | 8 |
+
+Pressure below 8 is **NORMAL**, 8–15 is **ELEVATED**, 16–31 is **STORM**, and
+32 or more is **SEVERE**. The same summary reports both recent occurrences and
+distinct alarm IDs; repeated occurrences therefore increase the first count
+without pretending to be additional alarm types.
+
+The expanded view renders at most six incident cards and eight members per
+card. A `+ N MORE` line preserves the full counts when the display cap is
+reached. **FOCUS** navigates to a member that is still visible and, where
+available, its game object. Focus never acknowledges, hides, clears, deletes,
+or silences an alarm and never changes history or audio state.
+
+Incident snapshots are transient, derived results recalculated from the
+current alarm and history snapshots. They add no saved fields and require
+no new schema migration in 0.9.26. For performance, the UI requests at most
+one result per frame and filter. Runtime history is copied only when its
+revision changes, global pressure is bounded to the newest 8,192 occurrences,
+and sorting plus analysis run outside the alarm lock. If revisions keep
+changing, UNMA returns a coherent uncached result after at most two attempts
+instead of blocking the render path.
 
 ### Global panels
 
@@ -511,6 +556,8 @@ archive. The following survive saving and reloading:
 Schema 20 migrates configurations from earlier UNMA versions with every
 existing panel unassigned. Their previous **ALL** board behavior therefore
 remains unchanged until areas are deliberately created and assigned.
+The Incident Lens stores no configuration or result of its own, so 0.9.26
+does not introduce another schema migration.
 
 If a configuration file is damaged, UNMA creates a backup and replaces it with
 safe defaults.

@@ -1,3 +1,13 @@
+v0.9.26 | 2026-08-11
+Incident Lens and alarm pressure
+* Added a dashboard-only Incident Lens that groups active alarms by a two-game-day temporal burst heuristic.
+* Labeled the earliest member as FIRST SIGNAL without claiming a confirmed cause or root cause.
+* Kept incident clusters within ALL, UNASSIGNED, or the selected operational area while deriving one global ten-game-day weighted pressure level: NORMAL, ELEVATED, STORM, or SEVERE.
+* Added recent-occurrence and distinct-alarm counts plus an expanded view capped at six incident cards and eight visible members per card.
+* Made member focus a read-only navigation action with no acknowledgement, hiding, audio, history, or alarm-state mutation.
+* Added a revision-bound immutable history cache over the newest 8,192 occurrences; unchanged frames do not rescan history, sorting plus analysis run outside the alarm lock, and continuous revisions fall back to a coherent uncached snapshot after at most two attempts.
+* Kept every result transient and derived from current snapshots, with no persisted result fields or new schema migration.
+
 v0.9.25 | 2026-08-11
 Operational alarm areas
 * Added user-defined areas that group global panels without changing alarm state, history, historian data, or audio behavior.

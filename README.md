@@ -36,6 +36,22 @@ Zielversion: Captain of Industry **0.8.6c**.
   **ALLES QUITTIEREN** bleibt global. Quittiert wird immer der gemeinsame
   Alarmzustand: Ist derselbe Alarm in mehreren Bereichen sichtbar, erscheint
   die Quittierung deshalb überall und erzeugt keinen zweiten Verlauf.
+- Die ausschließlich auf HOME sichtbare **INCIDENT-LINSE** gruppiert aktive
+  Meldungen als zeitliche Heuristik: Liegen aufeinanderfolgende Kommen-Zeitpunkte
+  höchstens zwei Spieltage auseinander, gehören sie zu einem Cluster.
+  **ERSTES SIGNAL** ist nur dessen früheste Meldung und keine bestätigte
+  Ursache oder Ursachenanalyse.
+- Incident-Cluster respektieren **ALLE**, **NICHT ZUGEORDNET** und konkrete
+  Betriebsbereiche. Der davon unabhängige globale Druck zählt Vorkommen der
+  letzten zehn Spieltage mit den Gewichten Hinweis 1, Warnung 2, Kritisch 4
+  und Notfall 8. Unter 8 ist er **NORMAL**, ab 8 **ERHÖHT**, ab 16 **STURM**
+  und ab 32 **SCHWER**; zusätzlich erscheinen Vorkommen und verschiedene
+  Alarmkennungen.
+- Die erweiterte Linse zeigt höchstens sechs Incident-Karten und acht
+  Mitglieder pro Karte; weitere bleiben gezählt. **FOKUS** navigiert nur zu
+  einer noch sichtbaren Meldung beziehungsweise ihrem Objekt. Dabei wird
+  nichts quittiert, versteckt oder gelöscht; Ton und Verlauf bleiben
+  unverändert.
 - Dauerhaft feste Meldeschlitze je Fachpanel: Eine stabile Alarm-ID behält ihren
   Platz auch zwischen `NORMAL`, `KOMMT`, `STEHT` und `GEGANGEN`. Wiederholte
   Vanilla-Ereignisse derselben Meldungsart und Entität erscheinen genau einmal;
@@ -157,7 +173,15 @@ Zielversion: Captain of Industry **0.8.6c**.
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
   Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern
   und Neuladen. Schema 20 übernimmt ältere Konfigurationen mit unzugeordneten
-  Panels und unverändertem **ALLE**-Verhalten.
+  Panels und unverändertem **ALLE**-Verhalten. Die Incident-Linse bleibt ein
+  vorübergehender, aus aktuellen Alarm- und Verlaufssnapshots abgeleiteter
+  Zustand und benötigt in 0.9.26 weder neue Speicherfelder noch eine weitere
+  Schema-Migration. Ein revisionsgebundener
+  Verlaufscache wird nur bei Änderungen neu aufgebaut und begrenzt den
+  globalen Druck auf die neuesten 8.192 Vorkommen; Sortierung und Analyse
+  laufen außerhalb des Alarm-Locks. Wechselt die Revision fortlaufend, liefert
+  UNMA nach höchstens zwei Versuchen einen konsistenten lokalen Snapshot, statt
+  den Renderpfad zu blockieren.
 - Beim endgültigen Abriss beziehungsweise Zerstören einer überwachten Entity
   löscht UNMA deren eigene Regel samt festem Schlitz und aktivem Zustand
   automatisch. Bei einer Sammelmeldung wird die ganze UND-/ODER-Regel entfernt,
@@ -175,7 +199,9 @@ Zielversion: Captain of Industry **0.8.6c**.
    gespeichert.
 3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Über **ALLE**,
    **NICHT ZUGEORDNET** oder einen Betriebsbereich Panelleiste und HOME
-   eingrenzen; für die dauerhaft definierte Schlitztafel ein Fachpanel wählen.
+   eingrenzen. Die **INCIDENT-LINSE** bei Bedarf erweitern, um die zeitlichen
+   Cluster dieses Bereichs zu prüfen; für die dauerhaft definierte
+   Schlitztafel ein Fachpanel wählen.
 4. Mit `Q` nur einen Schlitz, mit `PANEL QUITTIEREN` die sichtbare Tafel oder
    mit **BEREICH QUITT.** den ausgewählten Bereich oder mit `ALLES QUITTIEREN`
    sämtliche kommenden und gegangenen Meldungen quittieren. **BEREICH

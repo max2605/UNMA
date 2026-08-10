@@ -1,41 +1,45 @@
-# UNMA v0.9.25 – Operational alarm areas
+# UNMA v0.9.26 – Incident Lens and alarm pressure
 
-UNMA v0.9.25 adds user-defined operational areas for large annunciator setups.
-Areas organize global panels and provide focused HOME, acknowledgement, and
-next-alarm workflows without duplicating or changing alarm, history, historian,
-or audio state.
+UNMA v0.9.26 adds a dashboard-only Incident Lens for recognizing temporal
+alarm bursts without inventing a root cause. It combines scope-aware active
+clusters with a deliberately separate global pressure indicator, and every
+result remains read-only.
 
-## What changed in v0.9.25
+## What changed in v0.9.26
 
-- Select **ALL**, **UNASSIGNED**, or a named area above the panel bar.
-- A filtered HOME collects active alarms from the area's member panels and
-  deduplicates them into one tile per underlying alarm.
-- The selected area chip reports panel, active-alarm, and unacknowledged-alarm
-  counts.
-- **AREA ACK** and **AREA NEXT** stay inside the selected view, while
-  **MASTER ACK** remains an explicit global action.
-- Acknowledgement remains global alarm state. If the same alarm is visible in
-  several areas, acknowledging it in one area acknowledges it everywhere
-  without creating another occurrence or history event.
-- **MANAGE AREAS** creates, renames, reorders, and deletes areas through one
-  atomic draft. Deleting an area only moves its panels to **UNASSIGNED**.
-- Panel settings assign an area directly. Panel clones inherit their source
-  area; new panels inherit a concrete current area and otherwise start
-  unassigned.
-- Unsaved panel and area drafts are protected before closing or switching.
-  Narrow windows and 200-percent content scale use stacked, scrollable layouts
-  so the required controls remain reachable.
+- Active alarms whose raise times are no more than two game days apart are
+  grouped into a temporal incident cluster.
+- **FIRST SIGNAL** means only the earliest observed member. Temporal
+  correlation is not a confirmed cause, root cause, or dependency.
+- Clusters respect **ALL**, **UNASSIGNED**, and every operational-area filter.
+- Global pressure covers the last ten game days regardless of the selected
+  scope. Notice, Warning, Critical, and Emergency occurrences contribute 1,
+  2, 4, and 8 points respectively.
+- Pressure is **NORMAL** below 8, **ELEVATED** from 8, **STORM** from 16, and
+  **SEVERE** from 32. The summary also separates recent occurrences from
+  distinct alarm IDs.
+- **EXPAND** shows up to six incident cards and eight members per card while
+  retaining counts for additional results.
+- **FOCUS** navigates only to a still-visible member and its object where
+  available. It never acknowledges, hides, clears, deletes, or silences an
+  alarm and never changes history or audio state.
 
-## Compatibility and safety
+## Performance and safety
 
+- Incident results are transient derivations from current alarm and history
+  snapshots. No result or new configuration field is persisted.
+- The UI requests at most one snapshot per frame and filter.
+- A revision-bound immutable cache prevents unchanged frames from rescanning
+  history. Global pressure uses at most the newest 8,192 occurrences, while
+  sorting and analysis run outside the alarm lock. Continuous revisions fall
+  back to a coherent uncached result after at most two attempts so rendering
+  always progresses.
 - Captain of Industry: **0.8.6c**
-- UNMA: **0.9.25**
+- UNMA: **0.9.26**
 - Required dependency: **MultiLangLib 0.1.0 or newer**
 - Optional dependency: **Keybind Framework 2.0.2 or newer**
 - Can be added to or removed from existing saves.
-- Schema 20 migrates every existing panel as **UNASSIGNED** and preserves the
-  previous **ALL** behavior. Areas never duplicate alarm state, history, or
-  audio.
+- No new schema migration is required for 0.9.26.
 
 ## Download and documentation
 
@@ -46,4 +50,4 @@ and back up `Mods/UNMA` before updating.
 - [English User Guide](https://coigame.com/Topic/1926/User-Guide)
 - [Deutsche Benutzeranleitung](https://coigame.com/Topic/1927/Benutzeranleitung)
 
-One alarm state, many useful operating views.
+Correlate the timeline, keep causality honest, and leave alarm state untouched.

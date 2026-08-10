@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -171,6 +172,32 @@ public sealed class UnmaRuntime : IDisposable
         public long Sequence;
     }
 
+    private sealed class AlarmIncidentHistoryCapture
+    {
+        public IReadOnlyDictionary<long, double> RaisedAtTicksBySequence;
+        public IReadOnlyList<AlarmOccurrenceSignal> RecentSignals;
+    }
+
+    private readonly struct AlarmIncidentHistoryRow
+    {
+        public string Key { get; }
+        public AlarmSeverity Severity { get; }
+        public long Sequence { get; }
+        public double RaisedAtTicks { get; }
+
+        public AlarmIncidentHistoryRow(
+            string key,
+            AlarmSeverity severity,
+            long sequence,
+            double raisedAtTicks)
+        {
+            Key = key;
+            Severity = severity;
+            Sequence = sequence;
+            RaisedAtTicks = raisedAtTicks;
+        }
+    }
+
     private static readonly string[] s_emergencyNotificationTokens =
     {
         "meltdown",
@@ -281,6 +308,7 @@ public sealed class UnmaRuntime : IDisposable
     private double m_lastInstrumentCaptureTimestampTicks;
 
     private const int MaximumInstrumentHistorySamples = 100000;
+    private const int MaximumAlarmIncidentHistoryCaptureAttempts = 2;
     private const double InstrumentHistorySampleIntervalTicks =
         GameTimeWindowPolicy.SimTicksPerDay;
 
@@ -323,6 +351,8 @@ public sealed class UnmaRuntime : IDisposable
 
     private long m_sequence;
     private long m_alarmHistoryRevision;
+    private long m_alarmIncidentHistoryCaptureRevision = -1;
+    private AlarmIncidentHistoryCapture m_alarmIncidentHistoryCapture;
     private long m_nextEvaluationTimestamp;
     private long m_nextEvaluationErrorLogTimestamp;
     private long m_externalDefinitionRevision;
@@ -1764,6 +1794,180 @@ public sealed class UnmaRuntime : IDisposable
                 panel,
                 vanillaRules))));
         return true;
+    }
+
+    public bool TryGetAlarmIncidentSnapshot(
+        AlarmAreaFilter filter,
+        out AlarmIncidentSnapshot snapshot)
+    {
+        snapshot = null;
+
+        // Read the game clock exactly once before taking any UNMA monitor.
+        // The pure policy can then reject an invalid or rolled-back timeline
+        // without reaching back into Mafi while snapshots are being analyzed.
+        var currentGameTick = CurrentGameTicks;
+        if (!TryGetDashboardViews(filter, out var scopedViews))
+        {
+            return false;
+        }
+
+        var activeSamples = new List<AlarmIncidentActiveSample>(
+            Math.Min(
+                scopedViews.Count,
+                AlarmIncidentPolicy.MaximumActiveSamples));
+        var historyCapture = GetAlarmIncidentHistoryCapture();
+
+        foreach (var view in scopedViews)
+        {
+            if (view == null)
+            {
+                continue;
+            }
+            var historyRaisedAtTicks = 0d;
+            var hasExactHistory = view.Sequence > 0 &&
+                historyCapture.RaisedAtTicksBySequence.TryGetValue(
+                    view.Sequence,
+                    out historyRaisedAtTicks);
+            var activeSample = CreateAlarmIncidentActiveSample(
+                view,
+                hasExactHistory ? view.Sequence : 0L,
+                historyRaisedAtTicks,
+                currentGameTick);
+            if (activeSample != null)
+            {
+                activeSamples.Add(activeSample);
+            }
+        }
+
+        snapshot = AlarmIncidentPolicy.Analyze(
+            activeSamples,
+            historyCapture.RecentSignals,
+            currentGameTick);
+        return true;
+    }
+
+    private static AlarmIncidentActiveSample
+        CreateAlarmIncidentActiveSample(
+            AlarmView view,
+            long historySequence,
+            double historyRaisedAtTicks,
+            double currentGameTick)
+    {
+        if (view == null)
+        {
+            return null;
+        }
+        var hasExactHistory = view.Sequence > 0 &&
+            view.Sequence == historySequence &&
+            !double.IsNaN(historyRaisedAtTicks) &&
+            !double.IsInfinity(historyRaisedAtTicks) &&
+            historyRaisedAtTicks >= 0d &&
+            historyRaisedAtTicks <= currentGameTick;
+        var raisedAtTicks = hasExactHistory
+            ? historyRaisedAtTicks
+            : currentGameTick;
+        return new AlarmIncidentActiveSample(
+            view.Key,
+            PanelSlotProjection.StableAlarmId(view),
+            view.Name,
+            view.Detail,
+            view.Source,
+            view.PanelId,
+            view.SlotId,
+            view.EntityId,
+            view.EntityPrototypeId,
+            view.EntityTitle,
+            view.Severity,
+            view.Sequence,
+            raisedAtTicks,
+            view.IsAcknowledged);
+    }
+
+    private AlarmIncidentHistoryCapture GetAlarmIncidentHistoryCapture()
+    {
+        AlarmIncidentHistoryCapture latestCapture = null;
+        for (var attempt = 0;
+             attempt < MaximumAlarmIncidentHistoryCaptureAttempts;
+             attempt++)
+        {
+            long revision;
+            AlarmIncidentHistoryRow[] rows;
+            lock (m_gate)
+            {
+                if (m_alarmIncidentHistoryCapture != null &&
+                    m_alarmIncidentHistoryCaptureRevision ==
+                    m_alarmHistoryRevision)
+                {
+                    return m_alarmIncidentHistoryCapture;
+                }
+                revision = m_alarmHistoryRevision;
+                rows = m_alarmHistory
+                    .Where(item => item != null)
+                    .Select(item => new AlarmIncidentHistoryRow(
+                        item.AlarmKey,
+                        item.Severity,
+                        item.Sequence,
+                        item.RaisedAtTicks))
+                    .ToArray();
+            }
+
+            // Sorting and immutable-map construction are deliberately outside
+            // the alarm monitor. A racing history mutation changes the
+            // revision and causes this optimistic capture to retry at most
+            // once. A second race returns the coherent local result without
+            // caching it so the render path always makes progress.
+            latestCapture = BuildAlarmIncidentHistoryCapture(rows);
+            lock (m_gate)
+            {
+                if (revision != m_alarmHistoryRevision)
+                {
+                    continue;
+                }
+                m_alarmIncidentHistoryCapture = latestCapture;
+                m_alarmIncidentHistoryCaptureRevision = revision;
+                return latestCapture;
+            }
+        }
+        return latestCapture ?? BuildAlarmIncidentHistoryCapture(
+            Array.Empty<AlarmIncidentHistoryRow>());
+    }
+
+    private static AlarmIncidentHistoryCapture
+        BuildAlarmIncidentHistoryCapture(
+            IReadOnlyList<AlarmIncidentHistoryRow> rows)
+    {
+        var raisedAtTicksBySequence = new Dictionary<long, double>();
+        if (rows != null)
+        {
+            for (var index = 0; index < rows.Count; index++)
+            {
+                var row = rows[index];
+                if (row.Sequence > 0 &&
+                    !raisedAtTicksBySequence.ContainsKey(row.Sequence))
+                {
+                    raisedAtTicksBySequence.Add(
+                        row.Sequence,
+                        row.RaisedAtTicks);
+                }
+            }
+        }
+        var recentSignals = (rows ??
+                Array.Empty<AlarmIncidentHistoryRow>())
+            .OrderByDescending(row => row.Sequence)
+            .Take(AlarmIncidentPolicy.MaximumOccurrenceSignals)
+            .Select(row => new AlarmOccurrenceSignal(
+                row.Key,
+                row.Severity,
+                row.Sequence,
+                row.RaisedAtTicks))
+            .ToArray();
+        return new AlarmIncidentHistoryCapture
+        {
+            RaisedAtTicksBySequence =
+                new ReadOnlyDictionary<long, double>(
+                    raisedAtTicksBySequence),
+            RecentSignals = Array.AsReadOnly(recentSignals),
+        };
     }
 
     private bool TryCaptureAlarmAreaProjection(

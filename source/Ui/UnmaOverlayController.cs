@@ -48,6 +48,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
     private const int MaximumAlarmAreas = 64;
+    private const int MaximumIncidentCards = 6;
+    private const int MaximumIncidentMembersPerCard = 8;
     private static readonly float[] s_instrumentPreviewSamples =
     {
         0.12f, 0.18f, 0.24f, 0.22f, 0.36f, 0.48f, 0.45f, 0.61f,
@@ -130,6 +132,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private IReadOnlyList<AlarmView> m_alarmAreaViewCache =
         Array.Empty<AlarmView>();
     private bool m_alarmAreaViewCacheSucceeded;
+    private int m_incidentSnapshotCacheFrame = -1;
+    private AlarmAreaFilter m_incidentSnapshotCacheFilter =
+        AlarmAreaFilter.All;
+    private AlarmIncidentSnapshot m_incidentSnapshotCache;
+    private bool m_incidentSnapshotCacheSucceeded;
     private readonly Dictionary<string, List<float>> m_instrumentSamples =
         new(StringComparer.Ordinal);
     private readonly List<InstrumentHistoryBucket>
@@ -157,6 +164,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Rect m_lastPersistedEditorWindowRect;
     private Vector2 m_boardScroll;
     private Vector2 m_boardActionsScroll;
+    private Vector2 m_incidentLensStatsScroll;
+    private Vector2 m_incidentLensScroll;
     private Vector2 m_panelTabsScroll;
     private Vector2 m_alarmAreaTabsScroll;
     private Vector2 m_panelSettingsAreaScroll;
@@ -177,6 +186,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private float m_nextPanelSlotCandidateRefresh;
     private float m_nextInstrumentRefresh;
     private bool m_isOpen;
+    private bool m_incidentLensExpanded;
     private bool m_entityAlarmWindowOpen;
     private bool m_editorClosePromptOpen;
     private EditorWindowMode m_editorWindowMode;
@@ -1106,15 +1116,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var activeCount = alarms.Count(alarm => alarm.IsActive);
         var unacknowledgedCount = alarms.Count(alarm =>
             alarm.RequiresAcknowledgement);
+        var incidentLensAvailable = false;
+        var incidentLensHeight = panel.IsDashboard
+            ? DrawIncidentLens(panel, alarms, out incidentLensAvailable)
+            : 0f;
         var compactActions = m_windowRect.width < 760f;
         NativeGUILayout.Space(6f);
         NativeGUILayout.BeginHorizontal();
-        NativeGUILayout.Label(
-            UnmaText.Get("auto.397544fe1d24") + activeCount +
-            UnmaText.Get("auto.ac9ef4c5783a") + unacknowledgedCount,
-            m_sectionStyle,
-            NativeGUILayout.Height(34f));
-        if (compactActions)
+        var showBoardCountLabel = !panel.IsDashboard ||
+                                  !incidentLensAvailable;
+        if (showBoardCountLabel)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get("auto.397544fe1d24") + activeCount +
+                UnmaText.Get("auto.ac9ef4c5783a") + unacknowledgedCount,
+                m_sectionStyle,
+                NativeGUILayout.Height(34f));
+        }
+        if (compactActions && showBoardCountLabel)
         {
             NativeGUILayout.EndHorizontal();
             NativeGUILayout.BeginHorizontal();
@@ -1206,7 +1225,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_windowRect.height < 360f ? 32f : 220f,
                 m_windowRect.height -
                 (isEntityPanel ? 190f : 232f) -
-                (compactActions ? 42f : 0f)),
+                (compactActions
+                    ? panel.IsDashboard && incidentLensAvailable
+                        ? 8f
+                        : 42f
+                    : 0f) -
+                incidentLensHeight),
             panel.IsDashboard ? null : panel,
             panel,
             m_entityAssignmentPending && !panel.IsDashboard,
@@ -1215,6 +1239,441 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 : UnmaText.Get("auto.e8bad0a4452b"),
             !panel.IsDashboard);
         NativeGUILayout.EndScrollView();
+    }
+
+    private float DrawIncidentLens(
+        PanelDefinition dashboard,
+        IReadOnlyList<AlarmView> visibleAlarms,
+        out bool hasSnapshot)
+    {
+        const float barHeight = 42f;
+        var filter = NormalizeAlarmAreaFilter();
+        var available = TryGetCachedAlarmIncidentSnapshot(
+            filter,
+            out var snapshot) &&
+                        snapshot?.IsTimeValid == true;
+        hasSnapshot = available;
+        var compact = m_windowRect.width < 760f;
+
+        NativeGUILayout.Space(4f);
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.incident.title", "INCIDENT LENS"),
+            m_sectionStyle,
+            NativeGUILayout.Width(compact ? 96f : 125f),
+            NativeGUILayout.Height(34f));
+        if (available)
+        {
+            NativeGUILayout.Label(
+                StormLevelLabel(snapshot.StormLevel),
+                IncidentStormStyle(snapshot.StormLevel),
+                NativeGUILayout.Width(compact ? 84f : 105f),
+                NativeGUILayout.Height(34f));
+            var pressureText = UnmaText.Format(
+                "ui.incident.pressure_summary",
+                "READ-ONLY · GLOBAL PRESSURE {0} · RECENT {1}: " +
+                "{2} OCCURRENCES · {3} DISTINCT ALARMS · " +
+                "SCOPE {4}: {5} ACTIVE · {6} UNACK",
+                snapshot.AlarmPressure,
+                FormatIncidentDuration(snapshot.PressureWindowTicks),
+                snapshot.RecentOccurrenceCount,
+                snapshot.RecentDistinctAlarmCount,
+                GetAlarmAreaFilterName(filter),
+                snapshot.ActiveAlarmCount,
+                snapshot.ActiveUnacknowledgedCount);
+            m_incidentLensStatsScroll = NativeGUILayout.BeginScrollView(
+                m_incidentLensStatsScroll,
+                false,
+                false,
+                NativeGUILayout.Height(36f),
+                NativeGUILayout.ExpandWidth(true));
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                pressureText,
+                m_smallLabelStyle,
+                NativeGUILayout.Width(Mathf.Clamp(
+                    pressureText.Length * 7f + 20f,
+                    360f,
+                    820f)),
+                NativeGUILayout.Height(30f));
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.EndScrollView();
+        }
+        else
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.incident.unavailable",
+                    "INCIDENT ANALYSIS UNAVAILABLE"),
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.Height(34f));
+        }
+
+        var guiWasEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = guiWasEnabled && available;
+        if (NativeGUILayout.Button(
+                m_incidentLensExpanded
+                    ? UnmaText.Get("ui.incident.collapse", "COLLAPSE")
+                    : UnmaText.Get("ui.incident.expand", "EXPAND"),
+                m_incidentLensExpanded
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                NativeGUILayout.Width(compact ? 92f : 112f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_incidentLensExpanded = !m_incidentLensExpanded;
+            m_incidentLensScroll = Vector2.zero;
+        }
+        NativeGUI.enabled = guiWasEnabled;
+        NativeGUILayout.EndHorizontal();
+
+        if (!available || !m_incidentLensExpanded)
+        {
+            return barHeight;
+        }
+
+        var detailHeight = Mathf.Clamp(
+            m_windowRect.height * 0.32f,
+            72f,
+            300f);
+        m_incidentLensScroll = NativeGUILayout.BeginScrollView(
+            m_incidentLensScroll,
+            NativeGUILayout.Height(detailHeight),
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.incident.heuristic_hint",
+                "READ-ONLY HEURISTIC · Temporal correlation is not a confirmed cause."),
+            m_warningBannerStyle,
+            NativeGUILayout.Height(42f));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.incident.focus_hint",
+                "Member controls only focus visible alarms. They never acknowledge, hide, or silence alarms."),
+            m_smallLabelStyle);
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "ui.incident.scope_summary",
+                "SCOPE {0} · {1} ACTIVE · {2} UNACK · {3} INCIDENTS",
+                GetAlarmAreaFilterName(filter),
+                snapshot.ActiveAlarmCount,
+                snapshot.ActiveUnacknowledgedCount,
+                snapshot.Incidents?.Count ?? 0),
+            m_smallLabelStyle);
+        NativeGUILayout.Space(4f);
+
+        var incidents = snapshot.Incidents ?? Array.Empty<AlarmIncident>();
+        if (incidents.Count == 0)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.incident.none",
+                    "No active temporal incident clusters in this scope."),
+                m_labelStyle);
+        }
+        var incidentCount = Math.Min(MaximumIncidentCards, incidents.Count);
+        for (var index = 0; index < incidentCount; index++)
+        {
+            DrawIncidentCard(
+                index,
+                incidents[index],
+                snapshot,
+                dashboard,
+                visibleAlarms);
+        }
+        if (incidents.Count > incidentCount)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Format(
+                    "ui.incident.more_incidents",
+                    "+ {0} MORE INCIDENTS",
+                    incidents.Count - incidentCount),
+                m_smallLabelStyle);
+        }
+        NativeGUILayout.EndScrollView();
+        return barHeight + detailHeight + 4f;
+    }
+
+    private void DrawIncidentCard(
+        int index,
+        AlarmIncident incident,
+        AlarmIncidentSnapshot snapshot,
+        PanelDefinition dashboard,
+        IReadOnlyList<AlarmView> visibleAlarms)
+    {
+        if (incident == null)
+        {
+            return;
+        }
+
+        NativeGUILayout.Space(6f);
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "ui.incident.card_title",
+                "INCIDENT {0} · {1}",
+                index + 1,
+                SeverityLabel(incident.Severity)),
+            IncidentSeverityStyle(incident.Severity),
+            NativeGUILayout.Height(30f));
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "ui.incident.card_stats",
+                "{0} MEMBERS · {1} UNACK · AGE {2} · SPAN {3}",
+                incident.MemberCount,
+                incident.UnacknowledgedCount,
+                FormatIncidentDuration(
+                    snapshot.CurrentGameTick - incident.FirstRaisedAtTicks),
+                FormatIncidentDuration(
+                    incident.LastRaisedAtTicks - incident.FirstRaisedAtTicks)),
+            m_smallLabelStyle);
+
+        var compactCard = m_windowRect.width < 760f;
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.incident.first_signal", "FIRST SIGNAL"),
+            m_labelStyle,
+            NativeGUILayout.Width(compactCard ? 112f : 145f));
+        if (compactCard)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
+        if (incident.FirstSignal != null &&
+            NativeGUILayout.Button(
+                IncidentMemberLabel(
+                    incident.FirstSignal,
+                    snapshot.CurrentGameTick),
+                m_primaryButtonStyle,
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.Height(30f)))
+        {
+            FocusIncidentMember(
+                dashboard,
+                incident.FirstSignal,
+                visibleAlarms);
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.incident.members", "MEMBERS"),
+            m_smallLabelStyle);
+        var members = incident.Members ?? Array.Empty<AlarmIncidentMember>();
+        var memberCount = Math.Min(
+            MaximumIncidentMembersPerCard,
+            members.Count);
+        for (var memberIndex = 0;
+             memberIndex < memberCount;
+             memberIndex++)
+        {
+            var member = members[memberIndex];
+            if (member == null)
+            {
+                continue;
+            }
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                (memberIndex + 1) + ".",
+                m_smallLabelStyle,
+                NativeGUILayout.Width(28f));
+            if (NativeGUILayout.Button(
+                    IncidentMemberLabel(member, snapshot.CurrentGameTick),
+                    m_buttonStyle,
+                    NativeGUILayout.ExpandWidth(true),
+                    NativeGUILayout.Height(30f)))
+            {
+                FocusIncidentMember(dashboard, member, visibleAlarms);
+            }
+            NativeGUILayout.EndHorizontal();
+        }
+        if (members.Count > memberCount)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Format(
+                    "ui.incident.more_members",
+                    "+ {0} MORE MEMBERS",
+                    members.Count - memberCount),
+                m_smallLabelStyle);
+        }
+    }
+
+    private bool TryGetCachedAlarmIncidentSnapshot(
+        AlarmAreaFilter filter,
+        out AlarmIncidentSnapshot snapshot)
+    {
+        if (m_incidentSnapshotCacheFrame == Time.frameCount &&
+            AlarmAreaFiltersEqual(m_incidentSnapshotCacheFilter, filter))
+        {
+            snapshot = m_incidentSnapshotCache;
+            return m_incidentSnapshotCacheSucceeded;
+        }
+
+        m_incidentSnapshotCacheFrame = Time.frameCount;
+        m_incidentSnapshotCacheFilter = filter;
+        m_incidentSnapshotCacheSucceeded =
+            m_runtime.TryGetAlarmIncidentSnapshot(filter, out snapshot);
+        m_incidentSnapshotCache = snapshot;
+        return m_incidentSnapshotCacheSucceeded;
+    }
+
+    private void FocusIncidentMember(
+        PanelDefinition dashboard,
+        AlarmIncidentMember member,
+        IReadOnlyList<AlarmView> visibleAlarms)
+    {
+        if (dashboard?.IsDashboard != true || member == null)
+        {
+            return;
+        }
+        var visible = visibleAlarms ?? Array.Empty<AlarmView>();
+        var alarm = visible.FirstOrDefault(candidate =>
+                        candidate != null &&
+                        candidate.Sequence == member.Sequence &&
+                        string.Equals(
+                            PanelSlotProjection.StableAlarmId(candidate),
+                            member.StableAlarmId,
+                            StringComparison.Ordinal)) ??
+                    visible.FirstOrDefault(candidate =>
+                        candidate != null && string.Equals(
+                            PanelSlotProjection.StableAlarmId(candidate),
+                            member.StableAlarmId,
+                            StringComparison.Ordinal));
+        if (alarm == null)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.incident.focus_unavailable",
+                "This incident member is no longer visible."));
+            return;
+        }
+
+        m_lastNavigatedAlarmSlotId =
+            PanelSlotProjection.StableAlarmId(alarm);
+        SelectMainTab(TabBoard);
+        m_isOpen = true;
+        SelectGlobalPanel(dashboard, true);
+        var alarmIndex = visible.ToList().FindIndex(candidate =>
+            candidate != null &&
+            candidate.Sequence == alarm.Sequence &&
+            string.Equals(
+                PanelSlotProjection.StableAlarmId(candidate),
+                m_lastNavigatedAlarmSlotId,
+                StringComparison.Ordinal));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, dashboard.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (TileHeight + 6f) - 12f);
+        }
+        if (m_runtime.TryResolveNavigationEntity(
+                dashboard,
+                alarm,
+                out var entity))
+        {
+            NavigateToEntity(entity);
+        }
+        SetStatus(UnmaText.Format(
+            "ui.incident.focused",
+            "Focused incident member: {0}",
+            alarm.Name ?? UnmaText.Get("ui.common.alarm", "ALARM")));
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeLauncher();
+    }
+
+    private static string IncidentMemberLabel(
+        AlarmIncidentMember member,
+        double currentGameTick)
+    {
+        if (member == null)
+        {
+            return "";
+        }
+        return UnmaText.Get("ui.incident.focus", "FOCUS") + " · " +
+               SeverityLabel(member.Severity) + " · " +
+               (string.IsNullOrWhiteSpace(member.Name)
+                   ? UnmaText.Get("ui.common.alarm", "ALARM")
+                   : member.Name) + " · " +
+               (member.RequiresAcknowledgement
+                   ? UnmaText.Get("ui.incident.unack", "UNACK")
+                   : UnmaText.Get("ui.incident.ack", "ACK")) + " · " +
+               UnmaText.Format(
+                   "ui.incident.member_age",
+                   "AGE {0}",
+                   FormatIncidentDuration(
+                       currentGameTick - member.RaisedAtTicks));
+    }
+
+    private static string FormatIncidentDuration(double ticks)
+    {
+        if (double.IsNaN(ticks) || double.IsInfinity(ticks))
+        {
+            return UnmaText.Get("ui.incident.time_unavailable", "N/A");
+        }
+        ticks = Math.Max(0d, ticks);
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerYear)
+        {
+            return UnmaText.Format(
+                "ui.incident.duration_years",
+                "{0} YEARS",
+                Math.Max(1, (int)Math.Floor(
+                    ticks / GameTimeWindowPolicy.SimTicksPerYear)));
+        }
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerMonth)
+        {
+            return UnmaText.Format(
+                "ui.incident.duration_months",
+                "{0} MONTHS",
+                Math.Max(1, (int)Math.Floor(
+                    ticks / GameTimeWindowPolicy.SimTicksPerMonth)));
+        }
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerDay)
+        {
+            return UnmaText.Format(
+                "ui.incident.duration_days",
+                "{0} DAYS",
+                Math.Max(1, (int)Math.Floor(
+                    ticks / GameTimeWindowPolicy.SimTicksPerDay)));
+        }
+        return UnmaText.Format(
+            "ui.incident.duration_ticks",
+            "{0} TICKS",
+            Math.Max(0, (int)Math.Floor(ticks)));
+    }
+
+    private static string StormLevelLabel(AlarmStormLevel level)
+    {
+        return level switch
+        {
+            AlarmStormLevel.Severe => UnmaText.Get(
+                "ui.incident.level_severe",
+                "SEVERE"),
+            AlarmStormLevel.Storm => UnmaText.Get(
+                "ui.incident.level_storm",
+                "STORM"),
+            AlarmStormLevel.Elevated => UnmaText.Get(
+                "ui.incident.level_elevated",
+                "ELEVATED"),
+            _ => UnmaText.Get("ui.incident.level_normal", "NORMAL"),
+        };
+    }
+
+    private GUIStyle IncidentStormStyle(AlarmStormLevel level)
+    {
+        return level == AlarmStormLevel.Storm ||
+               level == AlarmStormLevel.Severe
+            ? m_dangerButtonStyle
+            : level == AlarmStormLevel.Elevated
+                ? m_primaryButtonStyle
+                : m_buttonStyle;
+    }
+
+    private GUIStyle IncidentSeverityStyle(AlarmSeverity severity)
+    {
+        return severity >= AlarmSeverity.Critical
+            ? m_dangerButtonStyle
+            : severity >= AlarmSeverity.Warning
+                ? m_primaryButtonStyle
+                : m_buttonStyle;
     }
 
     private void DrawAlarmAreaFilter()
@@ -1340,6 +1799,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         m_lastNavigatedAlarmSlotId = "";
         m_boardScroll = Vector2.zero;
+        m_incidentLensScroll = Vector2.zero;
     }
 
     private void SelectGlobalPanel(

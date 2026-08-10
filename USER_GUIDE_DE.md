@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.25** und
+Diese Anleitung gilt für **UNMA 0.9.26** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -175,6 +175,56 @@ Zahnrad-Einstellungen. Ein dupliziertes Panel übernimmt den Bereich seiner
 Quelle. Ein neues Panel übernimmt nur den konkret ausgewählten Bereich; unter
 **ALLE** oder **NICHT ZUGEORDNET** beginnt es unzugeordnet. Objektpanels und
 HOME werden keinem Bereich zugewiesen.
+
+### Incident-Linse
+
+Die **INCIDENT-LINSE** erscheint ausschließlich über dem HOME-Dashboard. Ihre
+eingeklappte Leiste zeigt globalen Alarmdruck und Zähler; **ERWEITERN** öffnet
+eine nur lesende Ansicht zeitlicher Cluster unter den aktiven Alarmen des
+aktuellen Dashboard-Bereichs. Auf festen globalen oder Objektpanels erscheint
+die Linse nicht.
+
+Die Gruppierung ist bewusst eine Heuristik. Aufeinanderfolgende aktive
+Alarmvorkommen bilden einen zeitlichen Incident-Cluster, wenn zwischen ihren
+Kommen-Zeitpunkten höchstens zwei Spieltage liegen. **ERSTES SIGNAL** ist nur
+das früheste beobachtete Mitglied dieses Clusters. Es ist weder eine
+bestätigte Ursache oder Grundursache noch ein Beweis dafür, dass eine Meldung
+eine andere ausgelöst hat.
+
+Die Cluster-Mitgliedschaft folgt dem gewählten Filter **ALLE**, **NICHT
+ZUGEORDNET** oder einem konkreten Betriebsbereich. Die Druckanzeige bleibt
+absichtlich global, damit ein enger Filter einen inselweiten Alarmsturm nicht
+unsichtbar macht. Sie betrachtet die letzten zehn Spieltage und gewichtet
+jedes Vorkommen nach Alarmstufe:
+
+| Alarmstufe | Gewicht |
+| --- | ---: |
+| Hinweis | 1 |
+| Warnung | 2 |
+| Kritisch | 4 |
+| Notfall | 8 |
+
+Ein Druck unter 8 ist **NORMAL**, 8–15 ist **ERHÖHT**, 16–31 ist **STURM**
+und ab 32 **SCHWER**. Dieselbe Übersicht nennt die letzten Vorkommen und die
+Zahl verschiedener Alarmkennungen. Wiederholungen erhöhen damit den ersten
+Zähler, ohne als zusätzliche Alarmart ausgegeben zu werden.
+
+Die erweiterte Ansicht stellt höchstens sechs Incident-Karten und acht
+Mitglieder je Karte dar. Eine Zeile `+ N WEITERE` erhält bei Erreichen dieser
+Anzeigegrenze die vollständigen Zähler. **FOKUS** springt zu einem weiterhin
+sichtbaren Mitglied und, soweit verfügbar, zu seinem Spielobjekt. Der Fokus
+quittiert, verbirgt oder löscht keine Meldung, schaltet sie nicht stumm und
+verändert weder Verlauf noch Audiostatus.
+
+Incident-Snapshots sind vorübergehende, aus den aktuellen Alarm- und
+Verlaufssnapshots abgeleitete Ergebnisse. Sie fügen keine Speicherfelder
+hinzu und benötigen in 0.9.26 keine neue Schema-Migration. Für sichere
+Performance fragt die UI höchstens einmal je Frame und Filter ab. Der
+Laufzeitverlauf wird nur bei geänderter Revision neu kopiert, der globale
+Druck ist auf die neuesten 8.192 Vorkommen begrenzt, und Sortierung sowie
+Analyse laufen außerhalb des Alarm-Locks. Bei fortlaufenden Änderungen liefert
+UNMA nach höchstens zwei Versuchen ein konsistentes ungecachtes Ergebnis,
+statt den Renderpfad zu blockieren.
 
 ### Globale Panels
 
@@ -556,6 +606,8 @@ Schema 20 übernimmt Konfigurationen früherer UNMA-Versionen mit allen
 vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
 **ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
 zugewiesen werden.
+Die Incident-Linse speichert weder Konfiguration noch Ergebnis und führt in
+0.9.26 deshalb keine weitere Schema-Migration ein.
 
 Ist eine Konfigurationsdatei beschädigt, legt UNMA eine Sicherung an und ersetzt
 sie durch sichere Vorgaben.
