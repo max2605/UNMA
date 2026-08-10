@@ -1524,6 +1524,239 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public bool AcknowledgeAlarm(string panelId, string slotId)
+    {
+        if (string.IsNullOrWhiteSpace(slotId))
+        {
+            return false;
+        }
+        return AcknowledgeVisible(panelId, new[] { slotId }) > 0;
+    }
+
+    public int AcknowledgePanel(string panelId)
+    {
+        var panel = FindPanel(panelId);
+        return panel == null
+            ? 0
+            : AcknowledgeProjectedSlots(panel, null);
+    }
+
+    public int AcknowledgeVisible(
+        string panelId,
+        IEnumerable<string> slotIds)
+    {
+        if (slotIds == null)
+        {
+            return 0;
+        }
+        var targets = new HashSet<string>(
+            slotIds
+                .Where(slotId => !string.IsNullOrWhiteSpace(slotId))
+                .Select(slotId => slotId.Trim()),
+            StringComparer.Ordinal);
+        if (targets.Count == 0)
+        {
+            return 0;
+        }
+
+        var panel = FindPanel(panelId);
+        return panel == null
+            ? 0
+            : AcknowledgeProjectedSlots(panel, targets);
+    }
+
+    public AlarmView GetNextUnacknowledged(
+        string panelId,
+        string afterSlotId = null)
+    {
+        var panel = FindPanel(panelId);
+        if (panel == null)
+        {
+            return null;
+        }
+
+        var views = GetViews(panel);
+        if (views.Count == 0)
+        {
+            return null;
+        }
+
+        var startIndex = -1;
+        if (!string.IsNullOrWhiteSpace(afterSlotId))
+        {
+            var normalizedAfterSlotId = afterSlotId.Trim();
+            for (var index = 0; index < views.Count; index++)
+            {
+                if (string.Equals(
+                        PanelSlotProjection.StableAlarmId(views[index]),
+                        normalizedAfterSlotId,
+                        StringComparison.Ordinal))
+                {
+                    startIndex = index;
+                    break;
+                }
+            }
+        }
+
+        for (var offset = 1; offset <= views.Count; offset++)
+        {
+            var candidate = views[(startIndex + offset) % views.Count];
+            if (candidate.RequiresAcknowledgement)
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private PanelDefinition FindPanel(string panelId)
+    {
+        if (string.IsNullOrWhiteSpace(panelId))
+        {
+            return null;
+        }
+        var normalizedPanelId = panelId.Trim();
+        lock (m_configurationGate)
+        {
+            return Configuration.Panels.FirstOrDefault(panel =>
+                panel != null && string.Equals(
+                    panel.Id,
+                    normalizedPanelId,
+                    StringComparison.Ordinal));
+        }
+    }
+
+    private int AcknowledgeProjectedSlots(
+        PanelDefinition panel,
+        ISet<string> targetSlotIds)
+    {
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
+        var vanillaRules = GetVanillaNotificationRulesSnapshot();
+        HashSet<string> panelSlotIds = null;
+        HashSet<int> relatedEntityIds = null;
+        if (!panel.IsDashboard)
+        {
+            lock (m_configurationGate)
+            {
+                panelSlotIds = new HashSet<string>(
+                    (panel.Slots ?? new List<PanelSlotDefinition>())
+                    .Where(slot =>
+                        slot != null &&
+                        IsPersistedSlotAllowedOnPanelLocked(panel, slot) &&
+                        !VanillaNotificationSuppressionPolicy
+                            .IsSlotSuppressed(
+                                slot,
+                                disabledVanillaOverrideIds))
+                    .Select(slot => slot.AlarmId),
+                    StringComparer.Ordinal);
+            }
+            relatedEntityIds = PanelTopologyPolicy.IsEntityPanel(panel)
+                ? GetNotificationChildIds(panel.OwnerEntityId)
+                : new HashSet<int>();
+        }
+
+        var acknowledgedCount = 0;
+        lock (m_gate)
+        {
+            foreach (var alarm in m_alarms.Values)
+            {
+                if (!alarm.View.RequiresAcknowledgement)
+                {
+                    continue;
+                }
+
+                AlarmView projected;
+                if (panel.IsDashboard)
+                {
+                    if (!alarm.View.IsActive ||
+                        IsSuppressedVanillaAlarm(
+                            alarm.View,
+                            disabledVanillaOverrideIds) ||
+                        IsVanillaAlarmHidden(alarm.View, vanillaRules))
+                    {
+                        continue;
+                    }
+                    projected = alarm.View;
+                }
+                else
+                {
+                    var stableAlarmId =
+                        PanelSlotProjection.StableAlarmId(alarm.View);
+                    var belongsToPanel = panelSlotIds.Contains(stableAlarmId) ||
+                        string.Equals(
+                            alarm.View.Source,
+                            "vanilla",
+                            StringComparison.Ordinal) &&
+                        relatedEntityIds.Contains(alarm.View.EntityId);
+                    if (!belongsToPanel ||
+                        IsVanillaAlarmHiddenOnPanel(
+                            alarm.View,
+                            vanillaRules,
+                            panel,
+                            relatedEntityIds))
+                    {
+                        continue;
+                    }
+                    projected = ProjectAlarmForPanel(
+                        Clone(alarm.View, alarm.Sequence),
+                        panel,
+                        relatedEntityIds);
+                    if (!panelSlotIds.Contains(
+                            PanelSlotProjection.StableAlarmId(projected)))
+                    {
+                        continue;
+                    }
+                }
+
+                var projectedSlotId =
+                    PanelSlotProjection.StableAlarmId(projected);
+                if (targetSlotIds != null &&
+                    !targetSlotIds.Contains(projectedSlotId))
+                {
+                    continue;
+                }
+
+                if (AcknowledgeAlarmStateLocked(alarm))
+                {
+                    acknowledgedCount++;
+                }
+            }
+            if (acknowledgedCount > 0)
+            {
+                m_alarmHistoryRevision++;
+            }
+        }
+
+        var prunedExternal = PruneRetiredExternalAlarms();
+        if (acknowledgedCount > 0 || prunedExternal)
+        {
+            PruneInactiveVanillaHistory(500);
+            PersistAlarmState();
+        }
+        return acknowledgedCount;
+    }
+
+    private bool AcknowledgeAlarmStateLocked(AlarmState alarm)
+    {
+        if (alarm == null || !alarm.View.RequiresAcknowledgement)
+        {
+            return false;
+        }
+
+        if (alarm.View.IsGoneUnacknowledged)
+        {
+            UpdateHistoryFromStateLocked(alarm, true, true);
+            alarm.View.IsGoneUnacknowledged = false;
+            alarm.View.IsAcknowledged = false;
+            return true;
+        }
+
+        alarm.View.IsAcknowledged = true;
+        UpdateHistoryFromStateLocked(alarm, false, true);
+        return true;
+    }
+
     public void AcknowledgeAll()
     {
         var changed = false;

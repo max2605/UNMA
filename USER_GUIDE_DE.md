@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.18** und
+Diese Anleitung gilt für **UNMA 0.9.19** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -10,6 +10,9 @@ Spielwerte und ermöglicht eigene Meldungsregeln für Spielobjekte oder globale
 Variablen.
 
 Benötigte Abhängigkeit: **MultiLangLib 0.1.0 oder neuer**.
+Optionale Abhängigkeit: **Keybind Framework 2.0.2 oder neuer** für frei
+konfigurierbare primäre und sekundäre Tastenkürzel. Ohne das Framework bleibt
+UNMA vollständig bedienbar.
 
 ## Installation und Aktualisierung
 
@@ -38,9 +41,23 @@ werden.
 2. Alternativ den frei schwebenden Launcher verwenden, der zunächst nahe am
    linken Bildschirmrand liegt.
 3. Unter **MELDETAFEL** befinden sich HOME und die dauerhaft angelegten Panels.
-4. **MASTER QUIT / QUITTIEREN** quittiert alle neuen sowie bereits gegangenen,
-   aber noch nicht quittierten Meldungen und beendet deren Ton.
-5. Unter **VERLAUF** lassen sich frühere Meldungsereignisse einsehen.
+4. Mit **Q** nur einen Schlitz, mit **PANEL QUITTIEREN** die angezeigte Tafel
+   oder mit **ALLES QUITTIEREN** sämtliche neuen und gegangenen Meldungen
+   quittieren.
+5. **NÄCHSTER ALARM** oder **Umschalt links + F8** durchläuft die
+   unquittierten Meldungen des Panels und fokussiert, soweit möglich, das
+   betroffene Spielobjekt.
+6. Unter **VERLAUF** lassen sich frühere Meldungsereignisse einsehen.
+
+### Konfigurierbare Tastenkürzel
+
+Ist das optionale **Keybind Framework 2.0.2+** aktiv, bietet dessen
+Einstellungsseite primäre und sekundäre Belegungen für das UNMA-Fenster, die
+globale Quittierung, den nächsten unquittierten Alarm und eine fünfminütige
+Stummschaltung des Alarmtons. Eingebaute Rückfalltasten sind **F8** für das
+Hauptfenster und **Umschalt links + F8** für den nächsten Alarm; die beiden
+potenziell störenden Aktionen sind zunächst unbelegt. Die Stummschaltung
+quittiert oder löscht niemals eine Meldung.
 
 ### Launcher und native Fenster
 
@@ -134,6 +151,11 @@ eigenes dauerhaftes Panel.
 
 Der kleine Pfeil in einem objektbezogenen Meldeschlitz zentriert die Kamera auf
 das Objekt und öffnet seinen Inspector.
+
+Die Taste **Q** quittiert nur den sichtbaren Schlitz. **PANEL QUITTIEREN**
+quittiert alle auf der aktuellen Tafel dargestellten Zustände, einschließlich
+aller in einem Objektschlitz zusammengefassten Ereignisse. **ALLES
+QUITTIEREN** bleibt die ausdrückliche globale Aktion.
 
 Ein Doppelklick auf einen eigenen Meldeschlitz öffnet die zugehörige Regel
 direkt im Editor.

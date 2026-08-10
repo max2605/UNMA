@@ -1,0 +1,38 @@
+name: Core tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Synchronize language fallbacks
+        shell: powershell
+        run: >-
+          .\tests\sync-language-fallbacks.ps1
+
+      - name: Require synchronized language catalogs
+        shell: powershell
+        run: >-
+          git diff --exit-code -- lang
+
+      - name: Run dependency-free core tests
+        shell: powershell
+        run: >-
+          dotnet run --project .\tests\UNMA.CoreTests\UNMA.CoreTests.csproj
+          --configuration Release

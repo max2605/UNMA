@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.18** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.19** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -8,6 +8,8 @@ history, monitors important settlement values, and lets you build custom alarm
 rules for game objects or global game variables.
 
 Required dependency: **MultiLangLib 0.1.0 or newer**.
+Optional dependency: **Keybind Framework 2.0.2 or newer** for configurable
+primary and secondary shortcuts. UNMA remains fully usable without it.
 
 ## Installation and updates
 
@@ -33,9 +35,20 @@ UNMA can be added to or removed from an existing save.
 1. Press **F8** to open or close the main UNMA window.
 2. Alternatively, use the floating launcher, which starts near the left edge.
 3. Open **ANNUNCIATOR** to see HOME and your permanent panels.
-4. Press **MASTER QUIT / ACKNOWLEDGE** to acknowledge all new and
-   cleared-but-unacknowledged alarms and silence their sounds.
-5. Open **HISTORY** to inspect previous alarm events.
+4. Use the **Q** button on one slot, **PANEL ACK** for the displayed panel, or
+   **MASTER ACK** for every new and cleared-but-unacknowledged alarm.
+5. Press **NEXT ALARM** or **Left Shift + F8** to cycle through the panel's
+   unacknowledged alarms and focus their game object where available.
+6. Open **HISTORY** to inspect previous alarm events.
+
+### Configurable shortcuts
+
+When the optional **Keybind Framework 2.0.2+** is active, its settings page
+offers primary and secondary bindings for opening UNMA, acknowledging all
+alarms, selecting the next unacknowledged alarm, and muting alarm audio for
+five real-time minutes. The built-in fallbacks are **F8** for the main window
+and **Left Shift + F8** for the next alarm; the two potentially disruptive
+actions start unbound. Muting audio never acknowledges or clears an alarm.
 
 ### Launcher and native windows
 
@@ -123,6 +136,11 @@ panel.
 
 The small arrow on an object-bound alarm slot centers the camera on its object
 and opens the corresponding inspector.
+
+The **Q** button acknowledges only that visible slot. **PANEL ACK** acknowledges
+all unacknowledged states represented by the current panel, including every
+underlying event combined into an object slot. **MASTER ACK** remains the
+explicit global action.
 
 Double-click a custom alarm slot to open its rule directly in the editor.
 

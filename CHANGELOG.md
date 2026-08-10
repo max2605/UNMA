@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.19 – 2026-08-10
+
+- Meldungen lassen sich jetzt einzeln am Schlitz, panelweise oder weiterhin
+  global quittieren. Aggregierte Objektmeldungen quittieren dabei zuverlässig
+  alle zugrunde liegenden Ereignisse samt Verlauf.
+- **NÄCHSTER ALARM** springt zyklisch zur nächsten unquittierten Meldung,
+  scrollt sie ins Sichtfeld und öffnet nach Möglichkeit das betroffene Objekt.
+- Das optionale Keybind Framework 2.0.2 bindet Fenster, Master-Quittierung,
+  Alarmnavigation und fünfminütige Tonstummschaltung mit primärer und
+  sekundärer Belegung ein; ohne Framework gelten sichere Standardtasten.
+- Eine fünfminütige Stummschaltung pausiert nur die Audioausgabe, ohne
+  Meldungen zu quittieren oder ihren Zustand zu verändern.
+- Entity-Metadaten bleiben beim Zusammenfassen von Meldeschlitzen erhalten,
+  sodass Navigation auch aus projizierten Panels das richtige Ziel findet.
+- Reproduzierbare Paketskripte, vollständige Release-Prüfungen und ein
+  GitHub-Coretest-Workflow verhindern versehentliches Deployment in die aktive
+  Mod-Installation und prüfen Sprachkataloge automatisch.
+
 ## 0.9.18 – 2026-08-10
 
 - Launcher, Hauptfenster, Meldungseditor, abgetrennte Panels, Formulare und

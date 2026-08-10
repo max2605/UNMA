@@ -1,3 +1,14 @@
+v0.9.19 | 2026-08-10
+Operator controls
+* Added per-slot, per-panel, and global acknowledgement without mutating projected UI copies.
+* Added cyclic next-alarm navigation with panel scrolling and object focus where available.
+* Added optional Keybind Framework 2.0.2 integration for primary and secondary shortcuts.
+* Added a five-minute audio mute that preserves alarm and acknowledgement state.
+
+Fixes and tooling
+* Preserved entity metadata while aggregating panel slots so navigation resolves the correct object.
+* Added deterministic, non-deploying package and release-verification scripts plus automated core tests.
+
 v0.9.18 | 2026-08-10
 Native game UI
 * Moved all visible UNMA launcher, window, editor, detached-panel, form, and instrument rendering into Captain of Industry's native UI hierarchy.

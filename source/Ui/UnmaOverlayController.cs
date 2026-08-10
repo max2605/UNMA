@@ -14,6 +14,7 @@ using Mafi.Unity.UiToolkit;
 using UnityEngine;
 using UNMA.Audio;
 using UNMA.Domain;
+using UNMA.Integration;
 using UNMA.Localization;
 using UNMA.Runtime;
 
@@ -186,6 +187,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_draftTargetPanelId = "";
     private string m_lastAlarmTileClickId = "";
     private float m_lastAlarmTileClickAt;
+    private string m_lastNavigatedAlarmSlotId = "";
+    private float m_audioMutedUntil;
     private string m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     private string m_panelSlotFilter = "";
     private string m_soundOverrideFilter = "";
@@ -431,14 +434,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 Time.realtimeSinceStartup + 1f;
         }
 
-        if (!m_isUiSuppressedByMenu && Input.GetKeyDown(KeyCode.F8))
+        if (!m_isUiSuppressedByMenu &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.ToggleWindowId,
+                KeybindFrameworkBridge.ToggleWindowDefault))
         {
             m_isOpen = !m_isOpen;
             SynchronizeNativeWindowVisibility();
             SynchronizeNativeLauncher();
         }
 
-        var audible = m_testAlarm != null &&
+        if (!m_isUiSuppressedByMenu &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.AcknowledgeAllId,
+                KeybindFrameworkBridge.AcknowledgeAllDefault))
+        {
+            AcknowledgeAllAlarms();
+        }
+
+        if (!m_isUiSuppressedByMenu &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.NextUnacknowledgedAlarmId,
+                KeybindFrameworkBridge.NextUnacknowledgedAlarmDefault))
+        {
+            NavigateToNextUnacknowledgedAlarm(CurrentPanel);
+        }
+
+        if (!m_isUiSuppressedByMenu &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.MuteAudioFiveMinutesId,
+                KeybindFrameworkBridge.MuteAudioFiveMinutesDefault))
+        {
+            m_audioMutedUntil = Time.realtimeSinceStartup + 300f;
+            m_audio.StopAlarm();
+            SetStatus(UnmaText.Get(
+                "audio.muted_five_minutes",
+                "Alarm audio muted for five minutes."));
+        }
+
+        var audible = Time.realtimeSinceStartup < m_audioMutedUntil
+            ? null
+            : m_testAlarm != null &&
                       Time.realtimeSinceStartup < m_testAlarmUntil
             ? m_testAlarm
             : m_runtime.GetAudibleAlarm();
@@ -970,12 +1006,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         DrawEntityAssignmentBanner(panel);
         var alarms = GetPanelViews(panel);
-        var activeCount = panel.IsDashboard
-            ? alarms.Count
-            : m_runtime.ActiveCount;
-        var unacknowledgedCount = panel.IsDashboard
-            ? alarms.Count(alarm => !alarm.IsAcknowledged)
-            : m_runtime.UnacknowledgedCount;
+        var activeCount = alarms.Count(alarm => alarm.IsActive);
+        var unacknowledgedCount = alarms.Count(alarm =>
+            alarm.RequiresAcknowledgement);
         NativeGUILayout.Space(6f);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
@@ -984,15 +1017,31 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_sectionStyle,
             NativeGUILayout.Height(34f));
         if (NativeGUILayout.Button(
-                UnmaText.Get("auto.e47523e046af"),
+                UnmaText.Get("board.acknowledge_panel", "PANEL ACK"),
                 m_dangerButtonStyle,
-                NativeGUILayout.Width(245f),
+                NativeGUILayout.Width(160f),
                 NativeGUILayout.Height(34f)))
         {
-            m_runtime.AcknowledgeAll();
-            m_audio.StopAlarm();
-            SetStatus(
-                UnmaText.Get("auto.dc2bb45a2f14"));
+            AcknowledgePanelAlarms(panel);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("board.next_alarm", "NEXT ALARM"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(150f),
+                NativeGUILayout.Height(34f)))
+        {
+            NavigateToNextUnacknowledgedAlarm(panel);
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get("board.acknowledge_master", "MASTER ACK"),
+                m_dangerButtonStyle,
+                NativeGUILayout.Width(160f),
+                NativeGUILayout.Height(34f)))
+        {
+            AcknowledgeAllAlarms();
         }
         if (NativeGUILayout.Button(
                 UnmaText.Get("auto.c70a06d3a782"),
@@ -5925,24 +5974,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
         PanelDefinition panel)
     {
         var alarms = GetPanelViews(panel);
-        var activeCount = panel.IsDashboard
-            ? alarms.Count
-            : m_runtime.ActiveCount;
-        var unacknowledgedCount = panel.IsDashboard
-            ? alarms.Count(alarm => !alarm.IsAcknowledged)
-            : m_runtime.UnacknowledgedCount;
+        var activeCount = alarms.Count(alarm => alarm.IsActive);
+        var unacknowledgedCount = alarms.Count(alarm =>
+            alarm.RequiresAcknowledgement);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
             UnmaText.Get("auto.397544fe1d24") + activeCount +
             UnmaText.Get("auto.ddc0834bf463") + unacknowledgedCount,
             m_smallLabelStyle);
         if (NativeGUILayout.Button(
-                UnmaText.Get("auto.77be2ec4ae31"),
+                UnmaText.Get("board.acknowledge_panel", "PANEL ACK"),
                 m_dangerButtonStyle,
                 NativeGUILayout.Width(130f)))
         {
-            m_runtime.AcknowledgeAll();
-            m_audio.StopAlarm();
+            AcknowledgePanelAlarms(panel);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("board.next_alarm", "NEXT ALARM"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(120f)))
+        {
+            NavigateToNextUnacknowledgedAlarm(panel);
         }
         if (!panel.IsDashboard && NativeGUILayout.Button(
                 UnmaText.Get("auto.d5302ca93907"),
@@ -6070,7 +6122,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                 displayPanel,
                                 alarms[index]);
                         var tileClickRect =
-                            TryGetNavigationEntityId(
+                            m_runtime.TryResolveNavigationEntity(
+                                displayPanel,
                                 alarms[index],
                                 out _)
                                 ? new Rect(
@@ -6094,8 +6147,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         }
                         if (!hasEntityVanillaControls)
                         {
-                            DrawAlarmNavigationButton(rect, alarms[index]);
+                            DrawAlarmNavigationButton(
+                                rect,
+                                alarms[index],
+                                displayPanel);
                         }
+                        DrawAlarmAcknowledgeButton(
+                            rect,
+                            alarms[index],
+                            displayPanel);
                     }
                 }
                 else if (showCreationTarget && index == alarms.Count)
@@ -6280,12 +6340,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             badge += UnmaText.Get("auto.70ab47b6f195");
         }
+        var acknowledgementInset = alarm.RequiresAcknowledgement ? 32f : 0f;
         NativeGUI.Label(
-            new Rect(inner.x + 7f, inner.y + 5f, inner.width - 14f, 18f),
+            new Rect(
+                inner.x + 7f,
+                inner.y + 5f,
+                inner.width - 14f - acknowledgementInset,
+                18f),
             badge + " · " + SeverityLabel(alarm.Severity),
             m_tileDetailStyle);
         NativeGUI.Label(
-            new Rect(inner.x + 7f, inner.y + 24f, inner.width - 14f, 48f),
+            new Rect(
+                inner.x + 7f,
+                inner.y + 24f,
+                inner.width - 14f - acknowledgementInset,
+                48f),
             (alarm.Name ?? UnmaText.Get(
                 "ui.common.alarm",
                 "ALARM")).ToUpperInvariant(),
@@ -6408,9 +6477,122 @@ public sealed class UnmaOverlayController : MonoBehaviour
         };
     }
 
-    private void DrawAlarmNavigationButton(Rect tileRect, AlarmView alarm)
+    private void AcknowledgeAllAlarms()
     {
-        if (!TryGetNavigationEntityId(alarm, out var entityId))
+        var count = m_runtime.UnacknowledgedCount;
+        m_runtime.AcknowledgeAll();
+        m_audio.StopAlarm();
+        SetStatus(count > 0
+            ? UnmaText.Format(
+                "board.acknowledged_count",
+                "Acknowledged {0} alarm(s).",
+                count)
+            : UnmaText.Get(
+                "board.no_unacknowledged",
+                "No unacknowledged alarms."));
+    }
+
+    private void AcknowledgePanelAlarms(PanelDefinition panel)
+    {
+        if (panel == null)
+        {
+            return;
+        }
+
+        var count = m_runtime.AcknowledgePanel(panel.Id);
+        if (count > 0)
+        {
+            m_audio.StopAlarm();
+        }
+        SetStatus(count > 0
+            ? UnmaText.Format(
+                "board.acknowledged_count",
+                "Acknowledged {0} alarm(s).",
+                count)
+            : UnmaText.Get(
+                "board.no_unacknowledged",
+                "No unacknowledged alarms."));
+    }
+
+    private void NavigateToNextUnacknowledgedAlarm(PanelDefinition panel)
+    {
+        if (panel == null)
+        {
+            SetStatus(UnmaText.Get(
+                "board.no_unacknowledged",
+                "No unacknowledged alarms."));
+            return;
+        }
+
+        var alarm = m_runtime.GetNextUnacknowledged(
+            panel.Id,
+            m_lastNavigatedAlarmSlotId);
+        if (alarm == null)
+        {
+            m_lastNavigatedAlarmSlotId = "";
+            SetStatus(UnmaText.Get(
+                "board.no_unacknowledged",
+                "No unacknowledged alarms."));
+            return;
+        }
+
+        m_lastNavigatedAlarmSlotId =
+            PanelSlotProjection.StableAlarmId(alarm);
+        m_tab = TabBoard;
+        m_isOpen = true;
+        if (PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            m_activeEntityPanelId = panel.Id;
+        }
+        else
+        {
+            m_activeEntityPanelId = "";
+            var panelIndex = GlobalPanels.FindIndex(candidate =>
+                string.Equals(candidate.Id, panel.Id, StringComparison.Ordinal));
+            if (panelIndex >= 0)
+            {
+                m_currentPanelIndex = panelIndex;
+            }
+        }
+
+        var visible = GetPanelViews(panel);
+        var alarmIndex = visible.ToList().FindIndex(candidate =>
+            string.Equals(
+                PanelSlotProjection.StableAlarmId(candidate),
+                m_lastNavigatedAlarmSlotId,
+                StringComparison.Ordinal));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, panel.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (TileHeight + 6f) - 12f);
+        }
+
+        if (m_runtime.TryResolveNavigationEntity(
+                panel,
+                alarm,
+                out var entity))
+        {
+            NavigateToEntity(entity);
+        }
+        SetStatus(UnmaText.Format(
+            "board.next_alarm_selected",
+            "Selected: {0}",
+            alarm.Name ?? UnmaText.Get("ui.common.alarm", "ALARM")));
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeLauncher();
+    }
+
+    private void DrawAlarmNavigationButton(
+        Rect tileRect,
+        AlarmView alarm,
+        PanelDefinition panel)
+    {
+        if (!m_runtime.TryResolveNavigationEntity(
+                panel,
+                alarm,
+                out var entity))
         {
             return;
         }
@@ -6425,58 +6607,54 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "↗",
                 m_primaryButtonStyle))
         {
-            NavigateToEntity(entityId);
+            NavigateToEntity(entity);
         }
     }
 
-    private bool TryGetNavigationEntityId(
+    private void DrawAlarmAcknowledgeButton(
+        Rect tileRect,
         AlarmView alarm,
-        out int entityId)
+        PanelDefinition panel)
     {
-        entityId = -1;
-        if (alarm == null)
+        if (alarm?.RequiresAcknowledgement != true || panel == null)
         {
-            return false;
+            return;
         }
 
-        if (PanelSlotProjection.TryGetCustomRuleId(alarm, out var ruleId))
+        var buttonRect = new Rect(
+            tileRect.xMax - 31f,
+            tileRect.y + 4f,
+            27f,
+            27f);
+        if (NativeGUI.Button(
+                buttonRect,
+                UnmaText.Get("alarm_tile.acknowledge", "Q"),
+                m_dangerButtonStyle) &&
+            m_runtime.AcknowledgeAlarm(
+                panel.Id,
+                PanelSlotProjection.StableAlarmId(alarm)))
         {
-            var rule = m_runtime.Configuration.Rules.FirstOrDefault(candidate =>
-                string.Equals(candidate.Id, ruleId, StringComparison.Ordinal));
-            if (rule != null)
-            {
-                var ownerPanel = m_runtime.Configuration.Panels
-                    .FirstOrDefault(panel => string.Equals(
-                        panel.Id,
-                        rule.PanelId,
-                        StringComparison.Ordinal));
-                if (PanelTopologyPolicy.IsEntityPanel(ownerPanel))
-                {
-                    entityId = ownerPanel.OwnerEntityId;
-                    return entityId > 0;
-                }
-
-                entityId = rule.Conditions.FirstOrDefault()?.EntityId ?? -1;
-                return entityId > 0;
-            }
+            m_audio.StopAlarm();
+            SetStatus(UnmaText.Get(
+                "board.acknowledged_one",
+                "Alarm acknowledged."));
         }
-
-        var slotId = alarm.SlotId ?? "";
-        var marker = slotId.LastIndexOf(
-            ":entity:",
-            StringComparison.Ordinal);
-        return marker >= 0 &&
-               int.TryParse(
-                   slotId.Substring(marker + 8),
-                   NumberStyles.Integer,
-                   CultureInfo.InvariantCulture,
-                   out entityId) &&
-               entityId > 0;
     }
 
     private void NavigateToEntity(int entityId)
     {
         if (!m_runtime.TryGetLiveEntity(entityId, out var entity))
+        {
+            SetStatus(UnmaText.Get("auto.28a2ba9ec3eb"));
+            return;
+        }
+
+        NavigateToEntity(entity);
+    }
+
+    private void NavigateToEntity(IEntity entity)
+    {
+        if (entity == null || entity.IsDestroyed)
         {
             SetStatus(UnmaText.Get("auto.28a2ba9ec3eb"));
             return;

@@ -8,11 +8,12 @@
     <RootNamespace>UNMA</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>0.9.18</Version>
-    <FileVersion>0.9.18.0</FileVersion>
+    <Version>0.9.19</Version>
+    <FileVersion>0.9.19.0</FileVersion>
     <!-- Keep the public V1 extension ABI bindable across UNMA 0.x updates. -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <Deterministic>true</Deterministic>
+    <DeployToModRoot Condition="'$(DeployToModRoot)' == ''">false</DeployToModRoot>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -99,7 +100,7 @@
   <Target
     Name="DeployReleaseDllToModRoot"
     AfterTargets="Build"
-    Condition="'$(Configuration)' == 'Release' and '$(DesignTimeBuild)' != 'true'">
+    Condition="'$(Configuration)' == 'Release' and '$(DesignTimeBuild)' != 'true' and '$(DeployToModRoot)' == 'true'">
     <Copy
       SourceFiles="$(TargetPath)"
       DestinationFiles="$(MSBuildProjectDirectory)\..\UNMA.dll" />

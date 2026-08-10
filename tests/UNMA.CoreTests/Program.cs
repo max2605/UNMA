@@ -1808,6 +1808,9 @@ internal static class Program
                 Severity = AlarmSeverity.Critical,
                 IsActive = true,
                 Sequence = 42,
+                EntityId = 17,
+                EntityPrototypeId = "AirStorageT3",
+                EntityTitle = "Kapitansburo II",
             },
         };
 
@@ -1828,6 +1831,9 @@ internal static class Program
             projected[2].SlotId);
         AreEqual("vanilla:42", projected[2].Key);
         IsTrue(projected[2].RequiresAcknowledgement);
+        AreEqual(17, projected[2].EntityId);
+        AreEqual("AirStorageT3", projected[2].EntityPrototypeId);
+        AreEqual("Kapitansburo II", projected[2].EntityTitle);
 
         candidates[2].IsActive = false;
         candidates[2].IsGoneUnacknowledged = true;

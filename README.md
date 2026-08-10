@@ -138,9 +138,12 @@ Zielversion: Captain of Industry **0.8.6c**.
    gespeichert.
 3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Für die dauerhaft
    definierte Schlitztafel ein Fachpanel wählen.
-4. `MASTER QUIT · QUITTIEREN` quittiert alle kommenden und bereits gegangenen
-   Meldungen und stoppt deren Ton. Bei einer weiterhin anstehenden Meldung
-   bleibt die Aktivfarbe sichtbar, bis die Ursache verschwindet.
+4. Mit `Q` nur einen Schlitz, mit `PANEL QUITTIEREN` die sichtbare Tafel oder
+   mit `ALLES QUITTIEREN` sämtliche kommenden und gegangenen Meldungen
+   quittieren. `NÄCHSTER ALARM` beziehungsweise standardmäßig
+   `Umschalt links + F8` springt zyklisch durch unquittierte Meldungen.
+   Bei einer weiterhin anstehenden Meldung bleibt die Aktivfarbe sichtbar,
+   bis die Ursache verschwindet.
 5. In **VERLAUF** zeigt eine eigene Zeile je Alarmereignis den Zustand `K`,
    `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
    gespeichert, bis sie dort ausdrücklich gelöscht werden.
@@ -266,15 +269,22 @@ Voraussetzungen:
 
 - Captain of Industry 0.8.6c;
 - MultiLangLib 0.1.0 oder neuer als aktivierte Mod-Abhängigkeit;
+- optional Keybind Framework 2.0.2 oder neuer für frei konfigurierbare primäre
+  und sekundäre Tastenkürzel;
 - .NET Framework 4.8 Reference Assemblies;
 - Visual Studio Build Tools 2022 oder `dotnet` mit passenden Referenzen.
 
 ```powershell
 $env:COI_ROOT = 'C:\Program Files (x86)\Steam\steamapps\common\Captain of Industry'
-dotnet build .\source\UNMA.csproj -c Release
+.\build.ps1 -Configuration Release
 ```
 
-Der Release-Build kopiert `UNMA.dll` automatisch in den Mod-Stammordner.
+Der normale Release-Build schreibt ausschließlich nach
+`source\bin\Release\UNMA.dll`. Erst `build.ps1 -Deploy` kopiert die geprüfte
+DLL ausdrücklich in den aktiven Mod-Stamm; dieser Schalter darf nur bei
+geschlossenem Captain of Industry verwendet werden. `package.ps1` erzeugt
+anschließend ein reproduzierbares Archiv, `tests\verify-release.ps1` prüft
+Versionskonsistenz, Inhalt und SHA-256-Werte.
 
 ## Lizenz
 
