@@ -157,9 +157,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   Klicks, Drags und Mausradbewegungen werden nur innerhalb der sichtbaren
   UNMA-Rahmen abgefangen. Außerhalb bleiben Gebäudeauswahl, Kartenbewegung und
   Zoom auch bei geöffnetem UNMA-Fenster verfügbar. Schmale beziehungsweise
-  auf 200 Prozent skalierte Panel- und Bereichseinstellungen stapeln ihre
-  Bedienelemente; ungespeicherte Entwürfe werden vor Schließen oder Wechseln
-  ausdrücklich geschützt.
+  auf 200 Prozent skalierte Fenster vergrößern ihre Mindestarbeitsfläche im
+  verfügbaren Viewport; Panel- und Bereichseinstellungen stapeln zusätzlich
+  ihre Bedienelemente. Ungespeicherte Entwürfe werden vor Schließen oder
+  Wechseln ausdrücklich geschützt.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
@@ -175,8 +176,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   und Neuladen. Schema 20 übernimmt ältere Konfigurationen mit unzugeordneten
   Panels und unverändertem **ALLE**-Verhalten. Die Incident-Linse bleibt ein
   vorübergehender, aus aktuellen Alarm- und Verlaufssnapshots abgeleiteter
-  Zustand und benötigt in 0.9.26 weder neue Speicherfelder noch eine weitere
-  Schema-Migration. Ein revisionsgebundener
+  Zustand und benötigt in 0.10.0 weder neue Speicherfelder noch eine weitere
+  Schema-Migration. Eine erkannte Konfiguration aus einem neueren Schema bleibt
+  bytegenau unangetastet; UNMA arbeitet dann mit sicheren Vorgaben und sperrt
+  Schreibvorgänge für die Sitzung. Ein revisionsgebundener
   Verlaufscache wird nur bei Änderungen neu aufgebaut und begrenzt den
   globalen Druck auf die neuesten 8.192 Vorkommen; Sortierung und Analyse
   laufen außerhalb des Alarm-Locks. Wechselt die Revision fortlaufend, liefert

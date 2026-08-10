@@ -414,7 +414,10 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 20;
+    public const int CurrentSchemaVersion = 20;
+
+    [DataMember(Order = 1)]
+    public int SchemaVersion = CurrentSchemaVersion;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -626,6 +629,13 @@ public sealed class UnmaConfiguration
     public void Normalize()
     {
         var loadedSchemaVersion = SchemaVersion;
+        if (loadedSchemaVersion > CurrentSchemaVersion)
+        {
+            throw new SerializationException(
+                "UNMA configuration schema " + loadedSchemaVersion +
+                " is newer than supported schema " +
+                CurrentSchemaVersion + ".");
+        }
         if (SchemaVersion < 3)
         {
             LauncherX = -1f;
@@ -1173,7 +1183,7 @@ public sealed class UnmaConfiguration
                 legacyOverride.IsGloballyDisabled = false;
             }
         }
-        SchemaVersion = Math.Max(SchemaVersion, 20);
+        SchemaVersion = CurrentSchemaVersion;
     }
 
     private static float NormalizeFinite(float value, float fallback)

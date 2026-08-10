@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.10.0 – 2026-08-11
+
+- 0.10.0 bündelt und stabilisiert die vollständige Ausbaureihe 0.9.19 bis
+  0.9.26: Bediener-Keybinds, Verlaufssuche und -export, atomare Panelkopien,
+  spielzeitpersistente Verzögerungen und Hysterese, schlitzbezogene Tonpause,
+  Eskalation und sichere Operatoraktionen, Historian mit Prognose,
+  Betriebsbereiche sowie die nur lesende Incident-Linse.
+- Alle Belegungen des optionalen Keybind Frameworks werden nun unterdrückt,
+  solange ein natives UNMA-Textfeld Fokus besitzt. Neu belegte Buchstabentasten
+  können beim Schreiben damit keine Quittierung oder andere Aktion auslösen.
+- Hauptfenster, Editor und abgekoppelte Panels verwenden viewportbegrenzte,
+  skalenabhängige Mindestgrößen. Die nutzbare logische Arbeitsfläche bleibt
+  dadurch auch bei 200 Prozent erhalten.
+- Konfigurationen aus Schema 21 oder höher werden vor vollständiger
+  Deserialisierung erkannt. UNMA lässt Hauptdatei, Backup-, Temp- und
+  Broken-Artefakte unangetastet und sperrt weitere Schreibvorgänge für die
+  Sitzung, statt unbekannte Felder mit dem Schema-20-Modell zu verlieren.
+- Das öffentliche Erweiterungs-API und die Assembly-Bindung bleiben auf V1;
+  das Persistenzschema bleibt 20. Für 0.10.0 ist keine neue Migration nötig.
+- Release-Build, 125.569 Core-Assertions sowie alle IL-/Reflection-,
+  Lokalisierungs-, Rollback- und Paketprüfungen wurden erfolgreich ausgeführt.
+- Die Versionsfolge springt bewusst von 0.9.26 auf 0.10.0; 0.9.27 wurde nicht
+  veröffentlicht.
+
 ## 0.9.26 – 2026-08-11
 
 - Die nur auf HOME sichtbare **INCIDENT-LINSE** gruppiert aktive Alarme anhand

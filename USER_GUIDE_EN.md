@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.26** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.0** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -50,6 +50,9 @@ alarms, selecting the next unacknowledged alarm, and muting alarm audio for
 five real-time minutes. The built-in fallbacks are **F8** for the main window
 and **Left Shift + F8** for the next alarm; the two potentially disruptive
 actions start unbound. Muting audio never acknowledges or clears an alarm.
+UNMA suppresses all four bindings while any native UNMA text field owns
+keyboard focus, so a rebound letter key cannot trigger an operator action
+while text is being entered.
 
 ### Launcher and native windows
 
@@ -193,7 +196,7 @@ or silences an alarm and never changes history or audio state.
 
 Incident snapshots are transient, derived results recalculated from the
 current alarm and history snapshots. They add no saved fields and require
-no new schema migration in 0.9.26. For performance, the UI requests at most
+no new schema migration in 0.10.0. For performance, the UI requests at most
 one result per frame and filter. Runtime history is copied only when its
 revision changes, global pressure is bounded to the newest 8,192 occurrences,
 and sorting plus analysis run outside the alarm lock. If revisions keep
@@ -483,8 +486,9 @@ content scale.
 - Scale the content inside the main, editor, and detached windows from 75 to
   200 percent in 25-percent steps, or reset it to 100 percent. Native COI
   frames, navigation chrome, and the launcher continue to follow the game's
-  own UI scale. Panel and area settings stack their controls in narrow windows
-  and at 200 percent so required actions remain reachable by scrolling.
+  own UI scale. Window minimums grow with the selected content scale within
+  the available viewport; panel and area settings also stack their controls
+  so required actions remain reachable at 200 percent.
 - Edit and save the Warning, Critical, and Emergency colors.
 - View the custom-sound directory and re-read supported WAV and Ogg files
   without restarting the game.
@@ -556,8 +560,11 @@ archive. The following survive saving and reloading:
 Schema 20 migrates configurations from earlier UNMA versions with every
 existing panel unassigned. Their previous **ALL** board behavior therefore
 remains unchanged until areas are deliberately created and assigned.
-The Incident Lens stores no configuration or result of its own, so 0.9.26
-does not introduce another schema migration.
+The Incident Lens stores no configuration or result of its own, so 0.10.0
+remains on schema 20. If a configuration from a newer UNMA schema is found,
+this version leaves the main file and its backup artifacts byte-for-byte
+untouched, uses safe defaults, and blocks configuration writes for the session
+instead of discarding unknown future fields.
 
 If a configuration file is damaged, UNMA creates a backup and replaces it with
 safe defaults.

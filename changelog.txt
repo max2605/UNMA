@@ -1,3 +1,13 @@
+v0.10.0 | 2026-08-11
+Consolidated operations release
+* Consolidated and stabilized the complete 0.9.19 through 0.9.26 feature line: operator keybinds, history search/export, atomic panel cloning, persistent timing and hysteresis, per-slot audio snooze, escalation and safe operator attention, Historian forecasting, operational areas, and the read-only Incident Lens.
+* Suppressed every optional Keybind Framework action while a native UNMA text field owns focus, preventing rebound letter keys from triggering operator actions during text entry.
+* Added viewport-bounded scale-aware minimum sizes for the main window, editor, and detached panels so their usable logical workspace remains intact at 200 percent.
+* Added a fail-safe for schema 21 or newer: the main configuration plus backup, temporary, and broken-file artifacts remain untouched, and writes stay blocked for the session instead of dropping unknown future fields.
+* Kept the public extension API and assembly binding on V1 and the persistence model on schema 20; no migration is required for 0.10.0.
+* Passed the warning-free Release build, 125,569 core assertions, and all IL/reflection, localization, rollback, and package checks.
+* Intentionally advanced directly from 0.9.26 to 0.10.0; no 0.9.27 release was published.
+
 v0.9.26 | 2026-08-11
 Incident Lens and alarm pressure
 * Added a dashboard-only Incident Lens that groups active alarms by a two-game-day temporal burst heuristic.

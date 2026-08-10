@@ -51,6 +51,8 @@
              Link="Audio\MechanicalSirenSynth.cs" />
     <Compile Include="..\..\source\Runtime\SystemMetricCatalog.cs"
              Link="Runtime\SystemMetricCatalog.cs" />
+    <Compile Include="..\..\source\Runtime\UnmaStateStore.cs"
+             Link="Runtime\UnmaStateStore.cs" />
     <Compile Include="..\..\source\Ui\WindowResizeMath.cs"
              Link="Ui\WindowResizeMath.cs" />
     <Compile Include="..\..\source\Api\ExternalApiModels.cs"

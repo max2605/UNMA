@@ -415,6 +415,10 @@ public sealed class UnmaRuntime : IDisposable
             .ToArray();
         m_settings = settings ?? new UnmaSettings();
         Configuration = store.Load();
+        if (store.IsWriteBlocked)
+        {
+            LastPersistenceError = store.WriteBlockReason;
+        }
         RefreshDisabledVanillaOverrideIds();
         RestoreAlarmHistory();
         RestoreAlarmMemories();

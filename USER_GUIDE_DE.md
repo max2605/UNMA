@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.26** und
+Diese Anleitung gilt für **UNMA 0.10.0** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -60,6 +60,9 @@ Stummschaltung des Alarmtons. Eingebaute Rückfalltasten sind **F8** für das
 Hauptfenster und **Umschalt links + F8** für den nächsten Alarm; die beiden
 potenziell störenden Aktionen sind zunächst unbelegt. Die Stummschaltung
 quittiert oder löscht niemals eine Meldung.
+Solange ein natives UNMA-Textfeld den Tastaturfokus besitzt, unterdrückt UNMA
+alle vier Belegungen. Dadurch kann auch eine neu belegte Buchstabentaste beim
+Schreiben keine Operatoraktion auslösen.
 
 ### Launcher und native Fenster
 
@@ -218,7 +221,7 @@ verändert weder Verlauf noch Audiostatus.
 
 Incident-Snapshots sind vorübergehende, aus den aktuellen Alarm- und
 Verlaufssnapshots abgeleitete Ergebnisse. Sie fügen keine Speicherfelder
-hinzu und benötigen in 0.9.26 keine neue Schema-Migration. Für sichere
+hinzu und benötigen in 0.10.0 keine neue Schema-Migration. Für sichere
 Performance fragt die UI höchstens einmal je Frame und Filter ab. Der
 Laufzeitverlauf wird nur bei geänderter Revision neu kopiert, der globale
 Druck ist auf die neuesten 8.192 Vorkommen begrenzt, und Sortierung sowie
@@ -527,9 +530,10 @@ das Fenster klein oder die Inhaltsskalierung groß ist.
 - Die Inhalte von Hauptfenster, Editor und abgekoppelten Tafeln in
   25-Prozent-Schritten von 75 bis 200 Prozent skalieren oder auf 100 Prozent
   zurücksetzen. Native COI-Rahmen, Hauptnavigation und Launcher behalten die
-  vom Spiel vorgegebene UI-Skalierung. Panel- und Bereichseinstellungen
-  stapeln ihre Bedienelemente in schmalen Fenstern und bei 200 Prozent, damit
-  alle notwendigen Aktionen per Scrollen erreichbar bleiben.
+  vom Spiel vorgegebene UI-Skalierung. Die Mindestgrößen der Fenster wachsen
+  innerhalb des verfügbaren Bildschirms mit; Panel- und Bereichseinstellungen
+  stapeln ihre Bedienelemente, damit alle notwendigen Aktionen auch bei
+  200 Prozent erreichbar bleiben.
 - Warn-, Kritisch- und Notfallfarbe bearbeiten und speichern.
 - Den Ordner für eigene Töne anzeigen und unterstützte WAV- und Ogg-Dateien
   ohne Neustart neu einlesen.
@@ -606,8 +610,11 @@ Schema 20 übernimmt Konfigurationen früherer UNMA-Versionen mit allen
 vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
 **ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
 zugewiesen werden.
-Die Incident-Linse speichert weder Konfiguration noch Ergebnis und führt in
-0.9.26 deshalb keine weitere Schema-Migration ein.
+Die Incident-Linse speichert weder Konfiguration noch Ergebnis; 0.10.0 bleibt
+daher bei Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
+UNMA-Schema, lässt sie Hauptdatei und Sicherungsartefakte bytegenau unangetastet,
+verwendet sichere Vorgaben und sperrt Konfigurationsschreibvorgänge für die
+laufende Sitzung, statt unbekannte Zukunftsfelder zu verwerfen.
 
 Ist eine Konfigurationsdatei beschädigt, legt UNMA eine Sicherung an und ersetzt
 sie durch sichere Vorgaben.

@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $runtimeTypeName = "UNMA.Runtime.UnmaRuntime"
+$stateStoreTypeName = "UNMA.Runtime.UnmaStateStore"
 $configurationTypeName = "UNMA.Domain.UnmaConfiguration"
 $timingMemoryPolicyTypeName = "UNMA.Domain.AlarmTimingMemoryPolicy"
 $escalationPolicyTypeName = "UNMA.Domain.AlarmEscalationPolicy"
@@ -352,6 +353,10 @@ if (Test-Path -LiteralPath $multiLangLibPath -PathType Leaf) {
 $assembly = [System.Reflection.Assembly]::Load(
     [System.IO.File]::ReadAllBytes($resolvedAssemblyPath))
 $runtimeType = $assembly.GetType($runtimeTypeName, $true, $false)
+$stateStoreType = $assembly.GetType(
+    $stateStoreTypeName,
+    $true,
+    $false)
 $configurationType = $assembly.GetType(
     $configurationTypeName,
     $true,
@@ -1459,6 +1464,92 @@ Assert-Condition `
 
 Write-Host `
     "UNMA alarm-incident runtime IL/reflection regression passed."
+
+# A configuration created by a newer UNMA version must never be normalized
+# and written back through the current DataContract. The functional core test
+# verifies byte-for-byte file preservation; keep the compiled guard contract
+# and runtime diagnostic hand-off visible here as an additional regression.
+$currentSchemaVersionField = $configurationType.GetField(
+    "CurrentSchemaVersion",
+    $bindingFlags)
+$isWriteBlockedProperty = $stateStoreType.GetProperty(
+    "IsWriteBlocked",
+    $bindingFlags)
+$writeBlockReasonProperty = $stateStoreType.GetProperty(
+    "WriteBlockReason",
+    $bindingFlags)
+$stateStoreLoad = @($stateStoreType.GetMethods($bindingFlags) |
+    Where-Object Name -eq "Load")
+$stateStoreSave = @($stateStoreType.GetMethods($bindingFlags) |
+    Where-Object Name -eq "Save")
+$readStoredSchemaVersion = @($stateStoreType.GetMethods($bindingFlags) |
+    Where-Object Name -eq "ReadStoredSchemaVersion")
+$tryReadFutureSchemaVersion = @($stateStoreType.GetMethods($bindingFlags) |
+    Where-Object Name -eq "TryReadFutureSchemaVersion")
+$blockWritesForFutureSchema = @($stateStoreType.GetMethods($bindingFlags) |
+    Where-Object Name -eq "BlockWritesForFutureSchema")
+Assert-Condition `
+    ($null -ne $currentSchemaVersionField -and
+        $currentSchemaVersionField.IsLiteral -and
+        [int]$currentSchemaVersionField.GetRawConstantValue() -eq 20) `
+    "CurrentSchemaVersion must remain a public literal with value 20."
+Assert-Condition `
+    ($null -ne $isWriteBlockedProperty -and
+        $isWriteBlockedProperty.PropertyType -eq [bool] -and
+        $isWriteBlockedProperty.GetMethod.IsPublic) `
+    "UnmaStateStore.IsWriteBlocked contract is missing."
+Assert-Condition `
+    ($null -ne $writeBlockReasonProperty -and
+        $writeBlockReasonProperty.PropertyType -eq [string] -and
+        $writeBlockReasonProperty.GetMethod.IsPublic) `
+    "UnmaStateStore.WriteBlockReason contract is missing."
+Assert-Condition `
+    ($stateStoreLoad.Count -eq 1 -and
+        $stateStoreSave.Count -eq 1 -and
+        $readStoredSchemaVersion.Count -eq 1 -and
+        $tryReadFutureSchemaVersion.Count -eq 1 -and
+        $blockWritesForFutureSchema.Count -eq 1) `
+    "Future-schema store guards are incomplete."
+$loadGuardCalls = @(Read-MethodInstructions $stateStoreLoad[0] |
+    Where-Object {
+        ($_.OpCode.Name -eq "call" -or
+            $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq $stateStoreTypeName -and
+        ($_.Operand.Name -eq "ReadStoredSchemaVersion" -or
+            $_.Operand.Name -eq "BlockWritesForFutureSchema")
+    })
+$saveGuardCalls = @(Read-MethodInstructions $stateStoreSave[0] |
+    Where-Object {
+        ($_.OpCode.Name -eq "call" -or
+            $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq $stateStoreTypeName -and
+        ($_.Operand.Name -eq "TryReadFutureSchemaVersion" -or
+            $_.Operand.Name -eq "BlockWritesForFutureSchema")
+    })
+Assert-Condition `
+    ($loadGuardCalls.Count -eq 2 -and $saveGuardCalls.Count -eq 3) `
+    "Load and Save must retain their future-schema write guards."
+$runtimeInstanceConstructors = @($constructors | Where-Object {
+    -not $_.IsStatic
+})
+Assert-Condition `
+    ($runtimeInstanceConstructors.Count -eq 1) `
+    "UnmaRuntime must expose exactly one instance constructor."
+$constructorInstructions = @(
+    Read-MethodInstructions $runtimeInstanceConstructors[0])
+$storeDiagnosticCalls = @($constructorInstructions | Where-Object {
+    ($_.OpCode.Name -eq "call" -or $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq $stateStoreTypeName -and
+        ($_.Operand.Name -eq "get_IsWriteBlocked" -or
+            $_.Operand.Name -eq "get_WriteBlockReason")
+})
+Assert-Condition `
+    ($storeDiagnosticCalls.Count -eq 2) `
+    "Runtime constructor must surface the store's future-schema diagnostic."
+Write-Host "UNMA future-schema store IL regression passed."
 
 # Atomic configuration rollback must not silently miss a newly added
 # DataMember. Validate the compiled IL rather than maintaining a fragile

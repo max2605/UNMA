@@ -1,53 +1,61 @@
-# UNMA v0.9.26 – Incident Lens and alarm pressure
+# UNMA v0.10.0 – Consolidated operations release
 
-UNMA v0.9.26 adds a dashboard-only Incident Lens for recognizing temporal
-alarm bursts without inventing a root cause. It combines scope-aware active
-clusters with a deliberately separate global pressure indicator, and every
-result remains read-only.
+UNMA v0.10.0 is the stable consolidation of the operator-focused 0.9.19
+through 0.9.26 development line. It brings the complete workflow together in
+one release while retaining public API V1 and persistence schema 20.
 
-## What changed in v0.9.26
+## Included workflows
 
-- Active alarms whose raise times are no more than two game days apart are
-  grouped into a temporal incident cluster.
-- **FIRST SIGNAL** means only the earliest observed member. Temporal
-  correlation is not a confirmed cause, root cause, or dependency.
-- Clusters respect **ALL**, **UNASSIGNED**, and every operational-area filter.
-- Global pressure covers the last ten game days regardless of the selected
-  scope. Notice, Warning, Critical, and Emergency occurrences contribute 1,
-  2, 4, and 8 points respectively.
-- Pressure is **NORMAL** below 8, **ELEVATED** from 8, **STORM** from 16, and
-  **SEVERE** from 32. The summary also separates recent occurrences from
-  distinct alarm IDs.
-- **EXPAND** shows up to six incident cards and eight members per card while
-  retaining counts for additional results.
-- **FOCUS** navigates only to a still-visible member and its object where
-  available. It never acknowledges, hides, clears, deletes, or silences an
-  alarm and never changes history or audio state.
+- Optional Keybind Framework 2.0.2+ integration for primary and secondary
+  shortcuts, with safe built-in fallbacks and text-field focus protection.
+- Per-slot, panel, and global acknowledgement plus cyclic alarm navigation.
+- Searchable alarm history with state/severity filters, game-time timestamps,
+  RFC 4180 CSV export, and JSON export.
+- Atomic global-panel duplication with deep-copied, deliberately disabled
+  custom rules.
+- Game-time activation/reset delays, minimum active time, per-condition
+  hysteresis, persisted timing state, and per-slot audio snooze.
+- One-shot escalation and bounded operator attention that only opens and
+  focuses UNMA state.
+- A shared instrument Historian with statistics, linear trend quality, and
+  directed ETA.
+- Operational alarm areas with scoped dashboard, acknowledgement, and next
+  navigation while the underlying acknowledgement state stays global.
+- A read-only Incident Lens with scoped temporal clusters and separately
+  labeled global alarm pressure.
 
-## Performance and safety
+## Final stabilization
 
-- Incident results are transient derivations from current alarm and history
-  snapshots. No result or new configuration field is persisted.
-- The UI requests at most one snapshot per frame and filter.
-- A revision-bound immutable cache prevents unchanged frames from rescanning
-  history. Global pressure uses at most the newest 8,192 occurrences, while
-  sorting and analysis run outside the alarm lock. Continuous revisions fall
-  back to a coherent uncached result after at most two attempts so rendering
-  always progresses.
+- Native text-field focus suppresses all UNMA shortcut actions, including
+  rebound letter keys.
+- Scale-aware minimum sizes preserve the logical workspace of the main window,
+  editor, and detached panels up to 200 percent within the available viewport.
+- Configuration schema 21 or newer is detected before full deserialization.
+  UNMA leaves the original configuration and backup artifacts untouched and
+  blocks writes for that session rather than dropping unknown future fields.
+- Public extension API and assembly binding remain V1; schema remains 20 and
+  no migration is required from 0.9.26.
+- Release build: zero warnings and zero errors.
+- Automated verification: 125,569 core assertions plus all IL/reflection,
+  localization, rollback, and deterministic-package checks.
+- The release sequence intentionally moves directly from 0.9.26 to 0.10.0;
+  no 0.9.27 package was published.
+
+## Compatibility
+
 - Captain of Industry: **0.8.6c**
-- UNMA: **0.9.26**
+- UNMA: **0.10.0**
 - Required dependency: **MultiLangLib 0.1.0 or newer**
 - Optional dependency: **Keybind Framework 2.0.2 or newer**
 - Can be added to or removed from existing saves.
-- No new schema migration is required for 0.9.26.
 
 ## Download and documentation
 
-Download the current package from the
+Download the package from the
 [UNMA releases page](https://github.com/max2605/UNMA/releases). Close the game
 and back up `Mods/UNMA` before updating.
 
 - [English User Guide](https://coigame.com/Topic/1926/User-Guide)
 - [Deutsche Benutzeranleitung](https://coigame.com/Topic/1927/Benutzeranleitung)
 
-Correlate the timeline, keep causality honest, and leave alarm state untouched.
+One board, one history, one coherent operating picture.

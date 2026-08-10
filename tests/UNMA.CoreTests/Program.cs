@@ -49,6 +49,7 @@ internal static class Program
         TestConfigurationRoundTrip();
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
+        TestStateStoreFutureSchemaProtection();
         TestMechanicalSiren();
         TestLocalizationCoverage();
         TestExternalRegistryValidationAndSnapshots();
@@ -7083,6 +7084,143 @@ internal static class Program
         persistedSchemaNine.Normalize();
         IsTrue(persistedSchemaNine
             .LegacySustainedAlarmReconciliationPending);
+    }
+
+    private static void TestStateStoreFutureSchemaProtection()
+    {
+        AreEqual(20, UnmaConfiguration.CurrentSchemaVersion);
+
+        var futureConfiguration = UnmaConfiguration.CreateDefault();
+        futureConfiguration.SchemaVersion =
+            UnmaConfiguration.CurrentSchemaVersion + 1;
+        futureConfiguration.UiScalePercent = 777;
+        var futurePanels = futureConfiguration.Panels;
+        Throws<System.Runtime.Serialization.SerializationException>(
+            futureConfiguration.Normalize);
+        AreEqual(
+            UnmaConfiguration.CurrentSchemaVersion + 1,
+            futureConfiguration.SchemaVersion);
+        AreEqual(777, futureConfiguration.UiScalePercent);
+        IsTrue(ReferenceEquals(futurePanels, futureConfiguration.Panels));
+
+        var testDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "UNMA-CoreTests-StateStore-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDirectory);
+        try
+        {
+            const long futureGameId = 1L;
+            var futurePath = Path.Combine(
+                testDirectory,
+                "unma-world-0000000000000001.json");
+            var futureJson =
+                "{\"SchemaVersion\":21," +
+                "\"FutureOnly\":{\"token\":\"KEEP-ME\"}," +
+                "\"Panels\":[],\"Rules\":[]}";
+            File.WriteAllText(futurePath, futureJson);
+            File.WriteAllText(futurePath + ".bak", "KEEP-BACKUP");
+            File.WriteAllText(futurePath + ".tmp", "KEEP-TEMP");
+            File.WriteAllText(
+                futurePath + ".broken-existing",
+                "KEEP-BROKEN");
+            var beforeFiles = Directory.GetFiles(testDirectory)
+                .ToDictionary(
+                    Path.GetFileName,
+                    File.ReadAllBytes,
+                    StringComparer.Ordinal);
+
+            Mafi.Log.Warnings.Clear();
+            var futureStore = new UnmaStateStore(
+                testDirectory,
+                futureGameId);
+            var safeConfiguration = futureStore.Load();
+            IsTrue(futureStore.IsWriteBlocked);
+            IsTrue(futureStore.WriteBlockReason.Contains(
+                "schema 21",
+                StringComparison.Ordinal));
+            IsTrue(futureStore.WriteBlockReason.Contains(
+                "schema 20",
+                StringComparison.Ordinal));
+            IsTrue(futureStore.WriteBlockReason.Contains(
+                "left unchanged",
+                StringComparison.Ordinal));
+            AreEqual(
+                UnmaConfiguration.CurrentSchemaVersion,
+                safeConfiguration.SchemaVersion);
+            IsTrue(Mafi.Log.Warnings.Any(message => message.Contains(
+                futureStore.WriteBlockReason,
+                StringComparison.Ordinal)));
+
+            safeConfiguration.UiScalePercent = 777;
+            IsFalse(futureStore.Save(safeConfiguration, out var firstError));
+            AreEqual(futureStore.WriteBlockReason, firstError);
+            AreEqual(777, safeConfiguration.UiScalePercent);
+            IsFalse(futureStore.Save(safeConfiguration, out var secondError));
+            AreEqual(firstError, secondError);
+            AssertDirectoryBytesEqual(testDirectory, beforeFiles);
+
+            const long directFutureGameId = 2L;
+            var directFutureStore = new UnmaStateStore(
+                testDirectory,
+                directFutureGameId);
+            var directFuture = UnmaConfiguration.CreateDefault();
+            directFuture.SchemaVersion =
+                UnmaConfiguration.CurrentSchemaVersion + 1;
+            directFuture.UiScalePercent = 777;
+            IsFalse(directFutureStore.Save(directFuture, out var directError));
+            IsTrue(directFutureStore.IsWriteBlocked);
+            AreEqual(directFutureStore.WriteBlockReason, directError);
+            AreEqual(777, directFuture.UiScalePercent);
+            IsFalse(File.Exists(Path.Combine(
+                testDirectory,
+                "unma-world-0000000000000002.json")));
+
+            const long legacyGameId = 3L;
+            var legacyStore = new UnmaStateStore(
+                testDirectory,
+                legacyGameId);
+            var legacyConfiguration = UnmaConfiguration.CreateDefault();
+            legacyConfiguration.SchemaVersion = 19;
+            legacyConfiguration.WarningColor = "#123456";
+            IsTrue(legacyStore.Save(legacyConfiguration, out var legacyError));
+            AreEqual("", legacyError);
+            IsFalse(legacyStore.IsWriteBlocked);
+            AreEqual(
+                UnmaConfiguration.CurrentSchemaVersion,
+                legacyConfiguration.SchemaVersion);
+            legacyConfiguration.WarningColor = "#654321";
+            IsTrue(legacyStore.Save(legacyConfiguration, out legacyError));
+            AreEqual("", legacyError);
+            var legacyPath = Path.Combine(
+                testDirectory,
+                "unma-world-0000000000000003.json");
+            IsTrue(File.Exists(legacyPath));
+            IsTrue(File.Exists(legacyPath + ".bak"));
+            var restoredLegacy = legacyStore.Load();
+            IsFalse(legacyStore.IsWriteBlocked);
+            AreEqual("#654321", restoredLegacy.WarningColor);
+        }
+        finally
+        {
+            DeleteTemporaryTestDirectory(testDirectory);
+        }
+    }
+
+    private static void AssertDirectoryBytesEqual(
+        string directory,
+        IReadOnlyDictionary<string, byte[]> expectedFiles)
+    {
+        var actualFiles = Directory.GetFiles(directory)
+            .ToDictionary(
+                Path.GetFileName,
+                File.ReadAllBytes,
+                StringComparer.Ordinal);
+        AreEqual(expectedFiles.Count, actualFiles.Count);
+        foreach (var expected in expectedFiles)
+        {
+            IsTrue(actualFiles.TryGetValue(expected.Key, out var actual));
+            IsTrue(expected.Value.SequenceEqual(actual));
+        }
     }
 
     private static void TestMechanicalSiren()

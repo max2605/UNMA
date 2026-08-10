@@ -453,6 +453,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         m_isUiSuppressedByMenu = !IsGameplayActive();
+        // Read native focus before polling UNMA's reflection-based shortcuts.
+        // COI's input controller blocks game shortcuts while a TextField owns
+        // focus, but UNMA polls its configurable bindings directly and must
+        // therefore honor the same capture explicitly.
+        var nativeTextInputFocused = IsNativeTextInputFocused();
+        m_inputBlocker?.SetKeyboardCaptured(nativeTextInputFocused);
         var pointerOverUnma = !m_isUiSuppressedByMenu &&
                               IsPointerOverAnyUnmaSurface();
         m_inputBlocker?.SetBlockingEnabled(!m_isUiSuppressedByMenu);
@@ -514,6 +520,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
             KeybindFrameworkBridge.IsPressed(
                 KeybindFrameworkBridge.ToggleWindowId,
                 KeybindFrameworkBridge.ToggleWindowDefault))
@@ -524,6 +531,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
             KeybindFrameworkBridge.IsPressed(
                 KeybindFrameworkBridge.AcknowledgeAllId,
                 KeybindFrameworkBridge.AcknowledgeAllDefault))
@@ -532,6 +540,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
             KeybindFrameworkBridge.IsPressed(
                 KeybindFrameworkBridge.NextUnacknowledgedAlarmId,
                 KeybindFrameworkBridge.NextUnacknowledgedAlarmDefault))
@@ -540,6 +549,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
             KeybindFrameworkBridge.IsPressed(
                 KeybindFrameworkBridge.MuteAudioFiveMinutesId,
                 KeybindFrameworkBridge.MuteAudioFiveMinutesDefault))
@@ -589,13 +599,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         EnsureStyles();
+        var scale = UiScale;
         if (m_isOpen && m_nativeWindowShell?.IsOpen == true)
         {
-            m_nativeWindowShell.RenderBody(RenderMainBodyContent, UiScale);
+            m_nativeWindowShell.SetContentScale(scale);
+            var currentSize = m_nativeWindowShell.CurrentSize;
+            m_windowRect.width = currentSize.x;
+            m_windowRect.height = currentSize.y;
+            m_nativeWindowShell.RenderBody(RenderMainBodyContent, scale);
         }
         if (m_entityAlarmWindowOpen && m_nativeEditorShell?.IsOpen == true)
         {
-            m_nativeEditorShell.RenderBody(RenderEditorBodyContent, UiScale);
+            m_nativeEditorShell.SetContentScale(scale);
+            var currentSize = m_nativeEditorShell.CurrentSize;
+            m_entityAlarmWindowRect.width = currentSize.x;
+            m_entityAlarmWindowRect.height = currentSize.y;
+            m_nativeEditorShell.RenderBody(RenderEditorBodyContent, scale);
         }
         foreach (var detached in m_detachedPanels)
         {
@@ -611,9 +630,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 continue;
             }
 
+            detached.NativeShell.SetContentScale(scale);
+            var currentSize = detached.NativeShell.CurrentSize;
+            detached.Rect.width = currentSize.x;
+            detached.Rect.height = currentSize.y;
             detached.NativeShell.RenderBody(
                 () => RenderDetachedBodyContent(detached, panel),
-                UiScale);
+                scale);
         }
 
         if (!m_nativeOverlayDrawLogged)
@@ -692,12 +715,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void UpdateNativeKeyboardInputCapture()
     {
-        var textInputFocused =
+        m_inputBlocker?.SetKeyboardCaptured(IsNativeTextInputFocused());
+    }
+
+    private bool IsNativeTextInputFocused()
+    {
+        return
             m_nativeWindowShell?.IsBodyKeyboardCaptured == true ||
             m_nativeEditorShell?.IsBodyKeyboardCaptured == true ||
             m_detachedPanels.Any(panel =>
                 panel.NativeShell?.IsBodyKeyboardCaptured == true);
-        m_inputBlocker?.SetKeyboardCaptured(textInputFocused);
     }
 
 
