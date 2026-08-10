@@ -33,6 +33,7 @@ internal static class Program
         TestGlobalRuleMetricPaths();
         TestWindowResizeMath();
         TestPanelTopologyPolicy();
+        TestPanelClonePolicy();
         TestEntityVanillaSlotPolicy();
         TestCustomRuleLifecyclePolicy();
         TestPanelSlotProjection();
@@ -1332,6 +1333,447 @@ internal static class Program
         IsTrue(PanelTopologyPolicy.GetRulePanelIds(
             orphaned.Rules[0],
             orphaned.Panels).Count > 0);
+    }
+
+    private static void TestPanelClonePolicy()
+    {
+        var source = new PanelDefinition
+        {
+            Id = "source-panel",
+            Name = " SUPPLY ",
+            Columns = 5,
+            IncludeVanilla = false,
+            IncludeSystem = true,
+            NotificationFilter = "food, workers",
+            Slots = new List<PanelSlotDefinition>
+            {
+                new()
+                {
+                    AlarmId = "system:food",
+                    DisplayName = "FOOD",
+                    Detail = "12 months",
+                    Source = "system",
+                    Severity = AlarmSeverity.Warning,
+                    ActiveColor = "#AA5500",
+                },
+                new()
+                {
+                    AlarmId = "rule:primary-rule",
+                    DisplayName = "STALE PRIMARY SLOT",
+                    Detail = "stale",
+                    Source = "custom",
+                    Severity = AlarmSeverity.Notice,
+                    ActiveColor = "#000000",
+                },
+                new()
+                {
+                    AlarmId = "external:weather",
+                    DisplayName = "WEATHER",
+                    Detail = "storm",
+                    Source = "external",
+                    Severity = AlarmSeverity.Critical,
+                    ActiveColor = "#334455",
+                },
+                new()
+                {
+                    AlarmId = "rule:linked-rule",
+                    DisplayName = "STALE LINKED SLOT",
+                    Source = "custom",
+                },
+                new()
+                {
+                    AlarmId = "rule:missing-rule",
+                    DisplayName = "ORPHAN",
+                    Source = "custom",
+                },
+                new()
+                {
+                    AlarmId = "rule:primary-rule",
+                    DisplayName = "DUPLICATE",
+                    Source = "custom",
+                },
+                new()
+                {
+                    AlarmId = "rule:   ",
+                    DisplayName = "MALFORMED",
+                    Source = "custom",
+                },
+                null,
+            },
+            ExcludedAlarmIds = new List<string>
+            {
+                " system:workers ",
+                "system:workers",
+                "rule:primary-rule",
+                "rule:missing-rule",
+                " ",
+            },
+        };
+        var copyOne = new PanelDefinition
+        {
+            Id = "copy-one",
+            Name = "SUPPLY COPY",
+        };
+        var copyTwo = new PanelDefinition
+        {
+            Id = "copy-two",
+            Name = "supply copy 2",
+        };
+        var other = new PanelDefinition
+        {
+            Id = "other-panel",
+            Name = "OTHER",
+        };
+        var primaryRule = new AlarmRuleDefinition
+        {
+            Id = "primary-rule",
+            PanelId = source.Id,
+            Name = "PRIMARY LOW",
+            Severity = AlarmSeverity.Emergency,
+            Logic = AlarmLogic.Any,
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    EntityId = 42,
+                    EntityTitle = "Storage 42",
+                    EntityType = "Storage",
+                    MetricPath = "products.amount",
+                    MetricLabel = "Amount",
+                    Comparison = ComparisonOperator.LessOrEqual,
+                    Threshold = 12.5d,
+                    ExpectedProductId = "AirSeparator",
+                    EntityPrototypeId = "AirStorageT3",
+                    ValueMode = ConditionValueMode.PercentOfReference,
+                    ReferenceMetricPath = "products.capacity",
+                    ReferenceMetricLabel = "Capacity",
+                    InstrumentId = "instrument-7",
+                    TrendMode = InstrumentTrendMode.DecreasePercent,
+                    WindowSeconds = 720,
+                    DeltaThreshold = 4.25d,
+                    WindowAmount = 3,
+                    WindowUnit = GameTimeUnit.Year,
+                },
+            },
+            ActiveColor = "#CC2200",
+            SoundId = "mechanical-siren",
+            Enabled = true,
+            AutoAcknowledgeOnClear = true,
+            LinkedPanelIds = new List<string> { other.Id },
+        };
+        var linkedRule = new AlarmRuleDefinition
+        {
+            Id = "linked-rule",
+            PanelId = other.Id,
+            Name = "LINKED HIGH",
+            Severity = AlarmSeverity.Critical,
+            Logic = AlarmLogic.All,
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    MetricPath = "health.value",
+                    Comparison = ComparisonOperator.Greater,
+                    Threshold = 90d,
+                },
+            },
+            ActiveColor = "#FF4400",
+            SoundId = "bell",
+            Enabled = true,
+            LinkedPanelIds = new List<string> { " source-panel " },
+        };
+        var missingSlotRule = new AlarmRuleDefinition
+        {
+            Id = "missing-slot-rule",
+            PanelId = source.Id,
+            Name = "APPENDED RULE",
+            Severity = AlarmSeverity.Notice,
+            Enabled = true,
+        };
+        var unrelatedRule = new AlarmRuleDefinition
+        {
+            Id = "unrelated-rule",
+            PanelId = other.Id,
+            Name = "UNRELATED",
+            LinkedPanelIds = new List<string>(),
+        };
+        var panels = new[] { source, copyOne, copyTwo, other };
+        var rules = new[]
+        {
+            primaryRule,
+            linkedRule,
+            missingSlotRule,
+            unrelatedRule,
+        };
+
+        IsTrue(PanelClonePolicy.CanClone(source));
+        IsFalse(PanelClonePolicy.CanClone(null));
+        IsFalse(PanelClonePolicy.CanClone(new PanelDefinition
+        {
+            Id = "dashboard",
+            IsDashboard = true,
+        }));
+        IsFalse(PanelClonePolicy.CanClone(new PanelDefinition
+        {
+            Id = "entity-panel",
+            OwnerEntityId = 7,
+        }));
+        AreEqual("SUPPLY COPY 3", PanelClonePolicy.CreateCopyName(
+            source,
+            panels));
+        AreEqual("PANEL COPY", PanelClonePolicy.CreateCopyName(
+            " ",
+            Array.Empty<PanelDefinition>()));
+
+        var generatedIds = new Queue<string>(new[]
+        {
+            " source-panel ",
+            " ",
+            " clone-panel ",
+            "primary-rule",
+            "clone-primary",
+            "clone-linked",
+            "clone-appended",
+        });
+        IsTrue(PanelClonePolicy.TryCreatePlan(
+            source,
+            panels,
+            rules,
+            () => generatedIds.Dequeue(),
+            out var plan,
+            out var failure));
+        AreEqual(PanelCloneFailure.None, failure);
+        IsTrue(plan != null);
+        AreEqual("clone-panel", plan.Panel.Id);
+        AreEqual("SUPPLY COPY 3", plan.Panel.Name);
+        AreEqual(5, plan.Panel.Columns);
+        IsFalse(plan.Panel.IncludeVanilla);
+        IsTrue(plan.Panel.IncludeSystem);
+        AreEqual("food, workers", plan.Panel.NotificationFilter);
+        IsFalse(plan.Panel.IsDashboard);
+        AreEqual(-1, plan.Panel.OwnerEntityId);
+        AreEqual("", plan.Panel.OwnerEntityTitle);
+        AreEqual("", plan.Panel.OwnerEntityPrototypeId);
+        AreEqual("", plan.Panel.OwnerEntityType);
+        AreEqual(3, plan.SkippedRuleSlotCount);
+        AreEqual(3, plan.OrphanRuleSlotCount);
+        AreEqual(3, plan.Rules.Count);
+        AreEqual(3, plan.RuleIdMap.Count);
+        AreEqual("clone-primary", plan.RuleIdMap["primary-rule"]);
+        AreEqual("clone-linked", plan.RuleIdMap["linked-rule"]);
+        AreEqual("clone-appended", plan.RuleIdMap["missing-slot-rule"]);
+        IsFalse(plan.RuleIdMap.ContainsKey("unrelated-rule"));
+
+        AreEqual(5, plan.Panel.Slots.Count);
+        AreEqual("system:food", plan.Panel.Slots[0].AlarmId);
+        AreEqual("rule:clone-primary", plan.Panel.Slots[1].AlarmId);
+        AreEqual("PRIMARY LOW", plan.Panel.Slots[1].DisplayName);
+        AreEqual(AlarmSeverity.Emergency, plan.Panel.Slots[1].Severity);
+        AreEqual("#CC2200", plan.Panel.Slots[1].ActiveColor);
+        AreEqual("external:weather", plan.Panel.Slots[2].AlarmId);
+        AreEqual("rule:clone-linked", plan.Panel.Slots[3].AlarmId);
+        AreEqual("LINKED HIGH", plan.Panel.Slots[3].DisplayName);
+        AreEqual("rule:clone-appended", plan.Panel.Slots[4].AlarmId);
+        AreEqual("APPENDED RULE", plan.Panel.Slots[4].DisplayName);
+        IsFalse(plan.Panel.Slots.Exists(slot =>
+            slot.AlarmId == "rule:missing-rule"));
+        IsFalse(plan.Panel.Slots.Exists(slot =>
+            string.Equals(
+                slot.AlarmId?.Trim(),
+                "rule:",
+                StringComparison.Ordinal)));
+        AreEqual(1, plan.Panel.Slots.Count(slot =>
+            slot.AlarmId == "rule:clone-primary"));
+        AreEqual(1, plan.Panel.ExcludedAlarmIds.Count);
+        AreEqual("system:workers", plan.Panel.ExcludedAlarmIds[0]);
+
+        var clonedPrimary = plan.Rules[0];
+        AreEqual("clone-primary", clonedPrimary.Id);
+        AreEqual(plan.Panel.Id, clonedPrimary.PanelId);
+        AreEqual(primaryRule.Name, clonedPrimary.Name);
+        AreEqual(primaryRule.Severity, clonedPrimary.Severity);
+        AreEqual(primaryRule.Logic, clonedPrimary.Logic);
+        AreEqual(primaryRule.ActiveColor, clonedPrimary.ActiveColor);
+        AreEqual(primaryRule.SoundId, clonedPrimary.SoundId);
+        IsFalse(clonedPrimary.Enabled);
+        IsTrue(clonedPrimary.AutoAcknowledgeOnClear);
+        AreEqual(0, clonedPrimary.LinkedPanelIds.Count);
+        AreEqual(1, clonedPrimary.Conditions.Count);
+        IsFalse(ReferenceEquals(primaryRule, clonedPrimary));
+        IsFalse(ReferenceEquals(
+            primaryRule.Conditions,
+            clonedPrimary.Conditions));
+        IsFalse(ReferenceEquals(
+            primaryRule.Conditions[0],
+            clonedPrimary.Conditions[0]));
+        var clonedCondition = clonedPrimary.Conditions[0];
+        var sourceCondition = primaryRule.Conditions[0];
+        AreEqual(sourceCondition.EntityId, clonedCondition.EntityId);
+        AreEqual(sourceCondition.EntityTitle, clonedCondition.EntityTitle);
+        AreEqual(sourceCondition.EntityType, clonedCondition.EntityType);
+        AreEqual(sourceCondition.MetricPath, clonedCondition.MetricPath);
+        AreEqual(sourceCondition.MetricLabel, clonedCondition.MetricLabel);
+        AreEqual(sourceCondition.Comparison, clonedCondition.Comparison);
+        AreEqual(sourceCondition.Threshold, clonedCondition.Threshold);
+        AreEqual(
+            sourceCondition.ExpectedProductId,
+            clonedCondition.ExpectedProductId);
+        AreEqual(
+            sourceCondition.EntityPrototypeId,
+            clonedCondition.EntityPrototypeId);
+        AreEqual(sourceCondition.ValueMode, clonedCondition.ValueMode);
+        AreEqual(
+            sourceCondition.ReferenceMetricPath,
+            clonedCondition.ReferenceMetricPath);
+        AreEqual(
+            sourceCondition.ReferenceMetricLabel,
+            clonedCondition.ReferenceMetricLabel);
+        AreEqual(sourceCondition.InstrumentId, clonedCondition.InstrumentId);
+        AreEqual(sourceCondition.TrendMode, clonedCondition.TrendMode);
+        AreEqual(sourceCondition.WindowSeconds, clonedCondition.WindowSeconds);
+        AreEqual(sourceCondition.DeltaThreshold, clonedCondition.DeltaThreshold);
+        AreEqual(sourceCondition.WindowAmount, clonedCondition.WindowAmount);
+        AreEqual(sourceCondition.WindowUnit, clonedCondition.WindowUnit);
+        foreach (var clonedRule in plan.Rules)
+        {
+            IsFalse(clonedRule.Enabled);
+            AreEqual(plan.Panel.Id, clonedRule.PanelId);
+            AreEqual(0, clonedRule.LinkedPanelIds.Count);
+        }
+
+        IsFalse(ReferenceEquals(source.Slots, plan.Panel.Slots));
+        IsFalse(ReferenceEquals(source.Slots[0], plan.Panel.Slots[0]));
+        IsFalse(ReferenceEquals(
+            source.ExcludedAlarmIds,
+            plan.Panel.ExcludedAlarmIds));
+        plan.Panel.Slots[0].DisplayName = "CLONE FOOD";
+        plan.Panel.ExcludedAlarmIds.Add("system:maintenance");
+        clonedCondition.Threshold = 1d;
+        clonedPrimary.LinkedPanelIds.Add("clone-only-link");
+        AreEqual("FOOD", source.Slots[0].DisplayName);
+        AreEqual(5, source.ExcludedAlarmIds.Count);
+        AreEqual(12.5d, primaryRule.Conditions[0].Threshold);
+        AreEqual(1, primaryRule.LinkedPanelIds.Count);
+
+        var dashboardCalls = 0;
+        IsFalse(PanelClonePolicy.TryCreatePlan(
+            new PanelDefinition { Id = "home", IsDashboard = true },
+            panels,
+            rules,
+            () =>
+            {
+                dashboardCalls++;
+                return "unused";
+            },
+            out var dashboardPlan,
+            out failure));
+        AreEqual(PanelCloneFailure.DashboardNotSupported, failure);
+        AreEqual(0, dashboardCalls);
+        IsTrue(dashboardPlan == null);
+        IsFalse(PanelClonePolicy.TryCreatePlan(
+            new PanelDefinition { Id = "entity", OwnerEntityId = 9 },
+            panels,
+            rules,
+            () => "unused",
+            out _,
+            out failure));
+        AreEqual(PanelCloneFailure.EntityPanelNotSupported, failure);
+        IsFalse(PanelClonePolicy.TryCreatePlan(
+            null,
+            panels,
+            rules,
+            () => "unused",
+            out _,
+            out failure));
+        AreEqual(PanelCloneFailure.InvalidSource, failure);
+
+        var exhaustedCalls = 0;
+        IsFalse(PanelClonePolicy.TryCreatePlan(
+            new PanelDefinition { Id = "collision" },
+            Array.Empty<PanelDefinition>(),
+            Array.Empty<AlarmRuleDefinition>(),
+            () =>
+            {
+                exhaustedCalls++;
+                return "collision";
+            },
+            out _,
+            out failure));
+        AreEqual(PanelCloneFailure.IdGenerationFailed, failure);
+        AreEqual(128, exhaustedCalls);
+        IsFalse(PanelClonePolicy.TryCreatePlan(
+            new PanelDefinition { Id = "throwing" },
+            Array.Empty<PanelDefinition>(),
+            Array.Empty<AlarmRuleDefinition>(),
+            () => throw new InvalidOperationException("generator failed"),
+            out _,
+            out failure));
+        AreEqual(PanelCloneFailure.IdGenerationFailed, failure);
+
+        var duplicateRule = new AlarmRuleDefinition
+        {
+            Id = primaryRule.Id,
+            PanelId = source.Id,
+        };
+        IsFalse(PanelClonePolicy.TryCreatePlan(
+            source,
+            panels,
+            new[] { primaryRule, duplicateRule },
+            () => "unused",
+            out _,
+            out failure));
+        AreEqual(PanelCloneFailure.InvalidSourceData, failure);
+
+        var configuration = new UnmaConfiguration
+        {
+            Panels = new List<PanelDefinition>
+            {
+                new()
+                {
+                    Id = "home",
+                    Name = "HOME",
+                    IsDashboard = true,
+                },
+                source,
+                copyOne,
+                copyTwo,
+                other,
+                plan.Panel,
+            },
+            Rules = rules.Concat(plan.Rules).ToList(),
+        };
+        var schemaVersion = configuration.SchemaVersion;
+        configuration.Normalize();
+        AreEqual(schemaVersion, configuration.SchemaVersion);
+        var normalizedClone = configuration.Panels.Single(panel =>
+            panel.Id == plan.Panel.Id);
+        AreEqual(3, configuration.Rules.Count(rule =>
+            rule.PanelId == normalizedClone.Id));
+        IsFalse(configuration.Rules.Where(rule =>
+            rule.PanelId == normalizedClone.Id).Any(rule => rule.Enabled));
+        IsFalse(configuration.Rules.Where(rule =>
+            rule.PanelId == normalizedClone.Id).Any(rule =>
+            rule.LinkedPanelIds.Count > 0));
+
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        using var stream = new MemoryStream();
+        serializer.WriteObject(stream, configuration);
+        stream.Position = 0;
+        var restored = (UnmaConfiguration)serializer.ReadObject(stream);
+        restored.Normalize();
+        AreEqual(schemaVersion, restored.SchemaVersion);
+        var restoredClone = restored.Panels.Single(panel =>
+            panel.Id == plan.Panel.Id);
+        AreEqual("SUPPLY COPY 3", restoredClone.Name);
+        AreEqual(3, restored.Rules.Count(rule =>
+            rule.PanelId == restoredClone.Id));
+        IsFalse(restored.Rules.Where(rule =>
+            rule.PanelId == restoredClone.Id).Any(rule => rule.Enabled));
+        IsTrue(restoredClone.Slots.Exists(slot =>
+            slot.AlarmId == "system:food"));
+        IsTrue(restoredClone.Slots.Exists(slot =>
+            slot.AlarmId == "rule:clone-primary"));
     }
 
     private static void TestEntityVanillaSlotPolicy()

@@ -27,6 +27,8 @@
              Link="Domain\PanelSlotProjection.cs" />
     <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
              Link="Domain\PanelTopologyPolicy.cs" />
+    <Compile Include="..\..\source\Domain\PanelClonePolicy.cs"
+             Link="Domain\PanelClonePolicy.cs" />
     <Compile Include="..\..\source\Domain\EntityVanillaSlotPolicy.cs"
              Link="Domain\EntityVanillaSlotPolicy.cs" />
     <Compile Include="..\..\source\Domain\CustomRuleLifecyclePolicy.cs"

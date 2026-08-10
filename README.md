@@ -107,6 +107,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   bekannter Meldungen sowie Vanilla-/System-Automatik und kommagetrennten
   Suchfiltern. Neu entdeckte passende Meldungsarten werden einmalig hinten
   angehängt und verschieben vorhandene Plätze nicht.
+- Globale Panels lassen sich als unabhängige Vorlage duplizieren. Reihenfolge,
+  Filter und eigene Regeln werden tief kopiert; kopierte Regeln erhalten neue
+  Kennungen und starten deaktiviert, während Livezustand und Verlauf unberührt
+  bleiben.
 - Persistente UI-Skalierung von 75 bis 200 Prozent für 1080p- und 4K-Monitore.
   Klicks, Drags und Mausradbewegungen werden nur innerhalb der sichtbaren
   UNMA-Rahmen abgefangen. Außerhalb bleiben Gebäudeauswahl, Kartenbewegung und

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.21 – 2026-08-10
+
+- Globale Panels lassen sich in ihren Einstellungen als unabhängige Vorlage
+  duplizieren. Spalten, Filter, automatische Quellen, Ausschlüsse und feste
+  Schlitzreihenfolge bleiben erhalten.
+- Zugeordnete eigene Meldungen werden tief kopiert, erhalten kollisionsfreie
+  Kennungen und starten bewusst deaktiviert. Verknüpfungen, aktive Zustände und
+  Verlaufseinträge werden nicht übernommen.
+- Dashboard und Objektpanels bleiben von der Funktion ausgeschlossen. Verwaiste
+  Regelplätze aus beschädigten Alt-Konfigurationen werden sicher übersprungen
+  und dem Nutzer gemeldet.
+- Der gesamte Vorgang wird einmal atomar gespeichert; bei einem Schreibfehler
+  werden Panel und Regeln vollständig zurückgerollt.
+
 ## 0.9.20 – 2026-08-10
 
 - Der Verlauf besitzt jetzt eine Freitextsuche über Meldung, Detail, Quelle,

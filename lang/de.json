@@ -808,5 +808,17 @@
     "ui.history.export_failed": "Verlaufsexport fehlgeschlagen: {0}",
     "ui.history.time": "SPIELZEIT",
     "ui.history.time_unknown": "—",
-    "ui.history.game_date": "J{0} M{1} T{2}"
+    "ui.history.game_date": "J{0} M{1} T{2}",
+    "ui.panel.clone": "PANEL DUPLIZIEREN",
+    "ui.panel.clone_hint": "Erstellt eine unabhängige Kopie. Kopierte eigene Meldungen starten deaktiviert.",
+    "ui.panel.clone_failed": "Panel konnte nicht kopiert werden: {0}",
+    "ui.panel.clone_save_first": "Vor dem Duplizieren zuerst die sichtbaren Panel-Einstellungen speichern.",
+    "ui.panel.clone_error_invalid_source": "Das Quellpanel ist nicht verfügbar.",
+    "ui.panel.clone_error_dashboard": "Das Dashboard kann nicht kopiert werden.",
+    "ui.panel.clone_error_entity": "Objektpanels können nicht kopiert werden.",
+    "ui.panel.clone_error_invalid_data": "Die Daten des Quellpanels sind ungültig.",
+    "ui.panel.clone_error_id_generation": "Es konnten keine eindeutigen Kennungen erzeugt werden.",
+    "ui.panel.clone_error_persistence": "Die Konfiguration konnte nicht gespeichert werden.",
+    "ui.panel.clone_success": "Panel kopiert. {0} eigene Meldung(en) starten deaktiviert.",
+    "ui.panel.clone_success_skipped": "Panel kopiert. {0} eigene Meldung(en) starten deaktiviert; {1} beschädigte Regelplätze wurden übersprungen."
 }

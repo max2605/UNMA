@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Runtime.Serialization.Json;
 using System.Threading;
 using Mafi;
 using Mafi.Collections;
@@ -270,6 +272,7 @@ public sealed class UnmaRuntime : IDisposable
     public UnmaConfiguration Configuration { get; }
     public UnmaSettings Settings => m_settings;
     public string LastPersistenceError { get; private set; } = "";
+    public PanelCloneFailure LastPanelCloneFailure { get; private set; }
 
     public UnmaRuntime(
         INotificationsManager notificationsManager,
@@ -2634,6 +2637,194 @@ public sealed class UnmaRuntime : IDisposable
             }
             return false;
         }
+    }
+
+    public bool TryCloneGlobalPanel(
+        string sourcePanelId,
+        string requestedName,
+        out PanelDefinition clonedPanel,
+        out int clonedRuleCount,
+        out int skippedSlotCount)
+    {
+        clonedPanel = null;
+        clonedRuleCount = 0;
+        skippedSlotCount = 0;
+        LastPanelCloneFailure = PanelCloneFailure.None;
+        sourcePanelId = sourcePanelId?.Trim() ?? "";
+        if (sourcePanelId.Length == 0)
+        {
+            LastPanelCloneFailure = PanelCloneFailure.InvalidSource;
+            LastPersistenceError = "Source panel ID is required.";
+            return false;
+        }
+
+        lock (m_persistenceGate)
+        {
+            PanelClonePlan plan;
+            UnmaConfiguration configurationSnapshot;
+            lock (m_configurationGate)
+            {
+                var sourcePanel = Configuration.Panels.FirstOrDefault(
+                    candidate => candidate != null && string.Equals(
+                        candidate.Id,
+                        sourcePanelId,
+                        StringComparison.Ordinal));
+                if (sourcePanel == null)
+                {
+                    LastPanelCloneFailure = PanelCloneFailure.InvalidSource;
+                    LastPersistenceError = "Source panel was not found.";
+                    return false;
+                }
+                if (!PanelClonePolicy.TryCreatePlan(
+                        sourcePanel,
+                        Configuration.Panels,
+                        Configuration.Rules,
+                        () => Guid.NewGuid().ToString("N"),
+                        out plan,
+                        out var failure))
+                {
+                    LastPanelCloneFailure = failure;
+                    LastPersistenceError = PanelCloneFailureMessage(failure);
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(requestedName))
+                {
+                    plan.Panel.Name = requestedName.Trim();
+                }
+                try
+                {
+                    configurationSnapshot = CloneConfiguration(
+                        Configuration);
+                }
+                catch (Exception exception)
+                {
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Configuration snapshot could not be created.");
+                    return false;
+                }
+                try
+                {
+                    Configuration.Panels.Add(plan.Panel);
+                    Configuration.Rules.AddRange(plan.Rules);
+                }
+                catch (Exception exception)
+                {
+                    RestoreConfiguration(
+                        Configuration,
+                        configurationSnapshot);
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Panel copy could not be prepared.");
+                    return false;
+                }
+            }
+
+            var saved = false;
+            try
+            {
+                saved = SaveConfiguration();
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration could not be saved.");
+            }
+            if (saved)
+            {
+                clonedPanel = plan.Panel;
+                clonedRuleCount = plan.Rules.Count;
+                skippedSlotCount = plan.OrphanRuleSlotCount;
+                Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                RestoreConfiguration(
+                    Configuration,
+                    configurationSnapshot);
+            }
+            if (string.IsNullOrWhiteSpace(LastPersistenceError))
+            {
+                LastPersistenceError =
+                    "Configuration could not be saved.";
+            }
+            return false;
+        }
+    }
+
+    private static string PanelCloneFailureMessage(PanelCloneFailure failure)
+    {
+        return failure switch
+        {
+            PanelCloneFailure.DashboardNotSupported =>
+                "The dashboard cannot be copied.",
+            PanelCloneFailure.EntityPanelNotSupported =>
+                "Entity panels cannot be copied.",
+            PanelCloneFailure.InvalidSourceData =>
+                "Source panel data is invalid.",
+            PanelCloneFailure.IdGenerationFailed =>
+                "Unique IDs could not be generated.",
+            _ => "The source panel is invalid.",
+        };
+    }
+
+    private static UnmaConfiguration CloneConfiguration(
+        UnmaConfiguration source)
+    {
+        using var stream = new MemoryStream();
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        serializer.WriteObject(stream, source);
+        stream.Position = 0;
+        return serializer.ReadObject(stream) as UnmaConfiguration ??
+               throw new InvalidDataException(
+                   "Configuration snapshot is empty.");
+    }
+
+    private static void RestoreConfiguration(
+        UnmaConfiguration target,
+        UnmaConfiguration snapshot)
+    {
+        target.SchemaVersion = snapshot.SchemaVersion;
+        target.Panels = snapshot.Panels;
+        target.Rules = snapshot.Rules;
+        target.WarningColor = snapshot.WarningColor;
+        target.CriticalColor = snapshot.CriticalColor;
+        target.EmergencyColor = snapshot.EmergencyColor;
+        target.WindowX = snapshot.WindowX;
+        target.WindowY = snapshot.WindowY;
+        target.WindowWidth = snapshot.WindowWidth;
+        target.WindowHeight = snapshot.WindowHeight;
+        target.SoundOverrides = snapshot.SoundOverrides;
+        target.LauncherX = snapshot.LauncherX;
+        target.LauncherY = snapshot.LauncherY;
+        target.SystemAlarms = snapshot.SystemAlarms;
+        target.AlarmMemories = snapshot.AlarmMemories;
+        target.AlarmHistory = snapshot.AlarmHistory;
+        target.LegacySustainedAlarmReconciliationPending =
+            snapshot.LegacySustainedAlarmReconciliationPending;
+        target.UiScalePercent = snapshot.UiScalePercent;
+        target.EditorWindowX = snapshot.EditorWindowX;
+        target.EditorWindowY = snapshot.EditorWindowY;
+        target.EditorWindowWidth = snapshot.EditorWindowWidth;
+        target.EditorWindowHeight = snapshot.EditorWindowHeight;
+        target.VanillaNotificationRules =
+            snapshot.VanillaNotificationRules;
+        target.Instruments = snapshot.Instruments;
+        target.InstrumentPanels = snapshot.InstrumentPanels;
+    }
+
+    private static string ExceptionDetail(
+        Exception exception,
+        string fallback)
+    {
+        return string.IsNullOrWhiteSpace(exception?.Message)
+            ? fallback
+            : exception.Message.Trim();
     }
 
     public bool UpdatePanelSettings(

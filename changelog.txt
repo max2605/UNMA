@@ -1,3 +1,10 @@
+v0.9.21 | 2026-08-10
+Panel workflows
+* Added safe duplication of global panels with columns, filters, automatic sources, exclusions, and stable slot order.
+* Deep-copied assigned custom alarms to collision-free IDs and left every clone disabled for deliberate review.
+* Kept live alarm state, history, links, dashboards, and entity panels outside the copy operation.
+* Made the operation atomic with rollback on persistence failure and explicit reporting for skipped orphan rule slots.
+
 v0.9.20 | 2026-08-10
 History 2.0
 * Added free-text search across message, detail, source, panel, and alarm ID.

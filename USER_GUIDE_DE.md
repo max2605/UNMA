@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.20** und
+Diese Anleitung gilt für **UNMA 0.9.21** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -145,6 +145,10 @@ Provider- und eigene Meldungen.
   Panel anlegen.
 - Über das benachbarte Zahnrad Name, Spaltenzahl, Filter, automatische Quellen
   und Schlitzreihenfolge ändern.
+- **PANEL DUPLIZIEREN** erstellt dort eine unabhängige Kopie einschließlich
+  Reihenfolge, Filter und eigener Meldungen. Die kopierten eigenen Meldungen
+  erhalten neue Kennungen und starten aus Sicherheitsgründen deaktiviert;
+  bestehende Alarmzustände und der Verlauf werden nicht kopiert.
 - Bekannte Meldungen gezielt in freie Schlitze aufnehmen und Plätze nach oben
   oder unten verschieben.
 - Neu entdeckte Meldungen, die zu einer automatischen Quelle oder einem Filter

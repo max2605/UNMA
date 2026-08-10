@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.20** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.21** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -131,6 +131,10 @@ system, provider, and custom alarms.
   **ANNUNCIATOR**.
 - Use the adjacent gear button to change its name, column count, filters,
   automatic sources, and slot order.
+- **DUPLICATE PANEL** creates an independent copy of that configuration,
+  including its slot order, filters, and custom alarms. Cloned custom alarms
+  receive new IDs and start disabled for safety; live alarm state and history
+  are not copied.
 - Add known alarms to free slots and move slots up or down.
 - Newly discovered alarms that match an automatic source or filter are added
   without moving existing slots.

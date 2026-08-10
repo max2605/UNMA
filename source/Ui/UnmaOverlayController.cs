@@ -3562,6 +3562,32 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var hasUnsavedPanelSettings = HasUnsavedPanelSettings(panel);
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            hasUnsavedPanelSettings
+                ? UnmaText.Get(
+                    "ui.panel.clone_save_first",
+                    "Save the visible panel settings before duplicating it.")
+                : UnmaText.Get(
+                    "ui.panel.clone_hint",
+                    "Create an independent copy. Cloned custom alarms start disabled."),
+            m_smallLabelStyle);
+        var guiWasEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = guiWasEnabled && !hasUnsavedPanelSettings;
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.panel.clone", "DUPLICATE PANEL"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(210f),
+                NativeGUILayout.Height(30f)))
+        {
+            ClonePanel(panel);
+            NativeGUILayout.EndHorizontal();
+            return;
+        }
+        NativeGUI.enabled = guiWasEnabled;
+        NativeGUILayout.EndHorizontal();
+
         NativeGUILayout.BeginHorizontal();
         m_panelSettingsIncludeVanilla = NativeGUILayout.Toggle(
             m_panelSettingsIncludeVanilla,
@@ -3649,6 +3675,99 @@ public sealed class UnmaOverlayController : MonoBehaviour
         SetStatus(
             UnmaText.Get("auto.27f10f6dc69e") +
             m_runtime.LastPersistenceError);
+    }
+
+    private bool HasUnsavedPanelSettings(PanelDefinition panel)
+    {
+        if (panel == null)
+        {
+            return false;
+        }
+
+        var normalizedName = string.IsNullOrWhiteSpace(m_panelSettingsName)
+            ? UnmaText.Get("default.panel", "PANEL")
+            : m_panelSettingsName.Trim();
+        return !string.Equals(
+                   panel.Name ?? "",
+                   normalizedName,
+                   StringComparison.Ordinal) ||
+               panel.Columns != Math.Max(
+                   1,
+                   Math.Min(8, m_panelSettingsColumns)) ||
+               panel.IncludeVanilla != m_panelSettingsIncludeVanilla ||
+               panel.IncludeSystem != m_panelSettingsIncludeSystem ||
+               !string.Equals(
+                   panel.NotificationFilter ?? "",
+                   m_panelSettingsFilter ?? "",
+                   StringComparison.Ordinal);
+    }
+
+    private void ClonePanel(PanelDefinition panel)
+    {
+        if (!m_runtime.TryCloneGlobalPanel(
+                panel?.Id,
+                requestedName: "",
+                out var clonedPanel,
+                out var clonedRuleCount,
+                out var skippedSlotCount))
+        {
+            SetStatus(UnmaText.Format(
+                "ui.panel.clone_failed",
+                "Panel copy failed: {0}",
+                GetPanelCloneFailureDetail()));
+            return;
+        }
+
+        m_activeEntityPanelId = "";
+        m_currentPanelIndex = GlobalPanels.FindIndex(candidate =>
+            string.Equals(
+                candidate.Id,
+                clonedPanel.Id,
+                StringComparison.Ordinal));
+        m_currentPanelIndex = Math.Max(0, m_currentPanelIndex);
+        if (!HasDraftRuleWork())
+        {
+            m_draftTargetPanelId = clonedPanel.Id;
+        }
+        CloseEditorWindow();
+        SetStatus(skippedSlotCount > 0
+            ? UnmaText.Format(
+                "ui.panel.clone_success_skipped",
+                "Panel copied. {0} custom alarm(s) start disabled; " +
+                "{1} broken rule slot(s) were skipped.",
+                clonedRuleCount,
+                skippedSlotCount)
+            : UnmaText.Format(
+                "ui.panel.clone_success",
+                "Panel copied. {0} custom alarm(s) start disabled.",
+                clonedRuleCount));
+    }
+
+    private string GetPanelCloneFailureDetail()
+    {
+        return m_runtime.LastPanelCloneFailure switch
+        {
+            PanelCloneFailure.InvalidSource => UnmaText.Get(
+                "ui.panel.clone_error_invalid_source",
+                "The source panel is unavailable."),
+            PanelCloneFailure.DashboardNotSupported => UnmaText.Get(
+                "ui.panel.clone_error_dashboard",
+                "The dashboard cannot be copied."),
+            PanelCloneFailure.EntityPanelNotSupported => UnmaText.Get(
+                "ui.panel.clone_error_entity",
+                "Entity panels cannot be copied."),
+            PanelCloneFailure.InvalidSourceData => UnmaText.Get(
+                "ui.panel.clone_error_invalid_data",
+                "The source panel data is invalid."),
+            PanelCloneFailure.IdGenerationFailed => UnmaText.Get(
+                "ui.panel.clone_error_id_generation",
+                "Unique IDs could not be generated."),
+            _ => string.IsNullOrWhiteSpace(m_runtime.LastPersistenceError)
+                ? UnmaText.Get(
+                    "ui.panel.clone_error_persistence",
+                    "The configuration could not be saved.")
+                : m_runtime.LastPersistenceError,
+        };
     }
 
     private void DrawAlarmRuleEditor(bool inEntityWindow)

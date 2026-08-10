@@ -808,5 +808,17 @@
     "ui.history.export_failed": "History export failed: {0}",
     "ui.history.time": "GAME TIME",
     "ui.history.time_unknown": "—",
-    "ui.history.game_date": "Y{0} M{1} D{2}"
+    "ui.history.game_date": "Y{0} M{1} D{2}",
+    "ui.panel.clone": "DUPLICATE PANEL",
+    "ui.panel.clone_hint": "Create an independent copy. Cloned custom alarms start disabled.",
+    "ui.panel.clone_failed": "Panel copy failed: {0}",
+    "ui.panel.clone_success": "Panel copied. {0} custom alarm(s) start disabled.",
+    "ui.panel.clone_success_skipped": "Panel copied. {0} custom alarm(s) start disabled; {1} broken rule slot(s) were skipped.",
+    "ui.panel.clone_save_first": "Save the visible panel settings before duplicating it.",
+    "ui.panel.clone_error_invalid_source": "The source panel is unavailable.",
+    "ui.panel.clone_error_dashboard": "The dashboard cannot be copied.",
+    "ui.panel.clone_error_entity": "Entity panels cannot be copied.",
+    "ui.panel.clone_error_invalid_data": "The source panel data is invalid.",
+    "ui.panel.clone_error_id_generation": "Unique IDs could not be generated.",
+    "ui.panel.clone_error_persistence": "The configuration could not be saved."
 }
