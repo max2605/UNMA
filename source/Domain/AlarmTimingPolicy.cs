@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace UNMA.Domain;
 
@@ -136,6 +140,58 @@ public static class AlarmTimingPolicy
                 : 0d);
     }
 
+    public static bool HasPersistentStateChanged(
+        AlarmTimingState previous,
+        AlarmTimingState current)
+    {
+        return previous.IsInitialized != current.IsInitialized ||
+               previous.IsActive != current.IsActive ||
+               previous.ActivationPendingSinceTick !=
+               current.ActivationPendingSinceTick ||
+               previous.ActiveSinceTick != current.ActiveSinceTick ||
+               previous.ResetPendingSinceTick !=
+               current.ResetPendingSinceTick;
+    }
+
+    /// <summary>
+    /// Keeps an already annunciated alarm active across a semantic definition
+    /// edit without carrying a pending clear from the old definition. Inactive
+    /// and activation-pending state deliberately restart under the new
+    /// semantics.
+    /// </summary>
+    public static AlarmTimingState PreserveActiveForDefinitionChange(
+        AlarmTimingState state,
+        long currentGameTick)
+    {
+        if (!state.IsInitialized || !state.IsActive)
+        {
+            return default;
+        }
+
+        currentGameTick = Math.Max(0, currentGameTick);
+        var activeSinceTick = state.ActiveSinceTick >= 0 &&
+                              state.ActiveSinceTick <= currentGameTick
+            ? state.ActiveSinceTick
+            : currentGameTick;
+        return new AlarmTimingState(
+            true,
+            AlarmTimingState.NoTick,
+            activeSinceTick,
+            AlarmTimingState.NoTick,
+            currentGameTick);
+    }
+
+    public static Dictionary<int, bool> CreateActiveConditionLatches(
+        int conditionCount)
+    {
+        var latches = new Dictionary<int, bool>();
+        for (var index = 0; index < Math.Max(0, conditionCount); index++)
+        {
+            latches[index] = true;
+        }
+        return latches;
+    }
+
     /// <summary>
     /// Applies hysteresis to a numeric comparison. Directional operators keep
     /// their configured activation boundary and move only the release
@@ -191,6 +247,22 @@ public static class AlarmTimingPolicy
                 actual > SubtractSaturating(threshold, hysteresis),
             _ => false,
         };
+    }
+
+    internal static bool EvaluateConditionLatch(
+        double actual,
+        ComparisonOperator comparison,
+        double threshold,
+        double hysteresis,
+        bool hasPreviousLatch,
+        bool previousLatch)
+    {
+        return CompareWithHysteresis(
+            actual,
+            comparison,
+            threshold,
+            hysteresis,
+            hasPreviousLatch && previousLatch);
     }
 
     /// <summary>
@@ -444,5 +516,513 @@ public static class AlarmTimingPolicy
     private static bool IsFinite(double value)
     {
         return !double.IsNaN(value) && !double.IsInfinity(value);
+    }
+}
+
+/// <summary>
+/// Stable persistence contract for the runtime-only timing state. Definition
+/// signatures deliberately exclude presentation and routing fields, while all
+/// values which can change condition or timer semantics are included.
+/// </summary>
+public static class AlarmTimingMemoryPolicy
+{
+    private const char OwnerSeparator = '\u001f';
+
+    private sealed class ExpectedDefinition
+    {
+        public string Signature = "";
+        public int ConditionCount;
+    }
+
+    public static string RuleOwnerKey(string ruleId)
+    {
+        return "rule:" + (ruleId ?? "");
+    }
+
+    public static string SystemStageOwnerKey(
+        string alarmId,
+        string stageId,
+        int stageIndex)
+    {
+        return SystemAlarmOwnerPrefix(alarmId) +
+               (stageId ?? "") +
+               OwnerSeparator +
+               Math.Max(0, stageIndex).ToString(
+                   CultureInfo.InvariantCulture);
+    }
+
+    public static string SystemAlarmOwnerPrefix(string alarmId)
+    {
+        return "system-stage:" + (alarmId ?? "") + OwnerSeparator;
+    }
+
+    /// <summary>
+    /// Resolves the stage represented by a restored active system alarm.
+    /// Modern memories carry a stable occurrence ID and must never be
+    /// reassigned to another stage when that stage was removed or disabled.
+    /// Priority/severity fallbacks remain available only for legacy memories
+    /// which predate occurrence IDs.
+    /// </summary>
+    public static int FindRestoredSystemStageIndex(
+        IReadOnlyList<SystemAlarmStageDefinition> stages,
+        string occurrenceId,
+        int occurrencePriority,
+        AlarmSeverity severity)
+    {
+        if (stages == null)
+        {
+            return -1;
+        }
+
+        if (!string.IsNullOrWhiteSpace(occurrenceId))
+        {
+            for (var index = 0; index < stages.Count; index++)
+            {
+                var stage = stages[index];
+                if (stage != null &&
+                    stage.Enabled &&
+                    string.Equals(
+                        stage.Id,
+                        occurrenceId,
+                        StringComparison.Ordinal))
+                {
+                    return index;
+                }
+            }
+            return -1;
+        }
+
+        var candidates = stages
+            .Select((stage, index) => new { Stage = stage, Index = index })
+            .Where(item => item.Stage != null && item.Stage.Enabled)
+            .ToArray();
+        var restored = candidates.FirstOrDefault(item =>
+                           item.Stage.Priority == occurrencePriority &&
+                           item.Stage.Severity == severity) ??
+                       candidates.FirstOrDefault(item =>
+                           item.Stage.Severity == severity) ??
+                       candidates
+                           .OrderByDescending(item => item.Stage.Severity)
+                           .ThenByDescending(item => item.Stage.Priority)
+                           .FirstOrDefault();
+        return restored?.Index ?? -1;
+    }
+
+    public static string RuleDefinitionSignature(AlarmRuleDefinition rule)
+    {
+        if (rule == null)
+        {
+            return "";
+        }
+
+        var signature = new SignatureBuilder("unma-rule-timing-v1");
+        signature.Add((int)rule.Logic);
+        AddTiming(signature, new AlarmTimingSettings(
+            rule.ActivationDelayTicks,
+            rule.ResetDelayTicks,
+            rule.MinimumActiveTicks,
+            0d));
+        var conditions = rule.Conditions ?? new List<ConditionDefinition>();
+        signature.Add(conditions.Count);
+        foreach (var condition in conditions)
+        {
+            if (condition == null)
+            {
+                signature.AddNull();
+                continue;
+            }
+            signature.Add(condition.EntityId);
+            signature.Add(condition.EntityType);
+            signature.Add(condition.MetricPath);
+            signature.Add((int)condition.Comparison);
+            signature.Add(condition.Threshold);
+            signature.Add(AlarmTimingPolicy.Normalize(
+                new AlarmTimingSettings(0, 0, 0, condition.Hysteresis))
+                .Hysteresis);
+            signature.Add(condition.ExpectedProductId);
+            signature.Add(condition.EntityPrototypeId);
+            signature.Add((int)condition.ValueMode);
+            signature.Add(condition.ReferenceMetricPath);
+            signature.Add(condition.InstrumentId);
+            signature.Add((int)condition.TrendMode);
+            signature.Add(condition.DeltaThreshold);
+            signature.Add(condition.WindowAmount);
+            signature.Add((int)condition.WindowUnit);
+        }
+        return signature.Finish();
+    }
+
+    public static string SystemStageDefinitionSignature(
+        SystemAlarmStageDefinition stage)
+    {
+        if (stage == null)
+        {
+            return "";
+        }
+
+        var signature = new SignatureBuilder("unma-system-stage-timing-v1");
+        signature.Add((int)stage.Logic);
+        AddTiming(signature, new AlarmTimingSettings(
+            stage.ActivationDelayTicks,
+            stage.ResetDelayTicks,
+            stage.MinimumActiveTicks,
+            0d));
+        var conditions = stage.Conditions ??
+                         new List<SystemConditionDefinition>();
+        signature.Add(conditions.Count);
+        foreach (var condition in conditions)
+        {
+            if (condition == null)
+            {
+                signature.AddNull();
+                continue;
+            }
+            signature.Add(condition.MetricId);
+            signature.Add((int)condition.Comparison);
+            signature.Add(condition.Threshold);
+            signature.Add(AlarmTimingPolicy.Normalize(
+                new AlarmTimingSettings(0, 0, 0, condition.Hysteresis))
+                .Hysteresis);
+        }
+        return signature.Finish();
+    }
+
+    public static AlarmTimingMemoryDefinition CreateMemory(
+        string ownerKey,
+        string definitionSignature,
+        AlarmTimingState state,
+        IReadOnlyDictionary<int, bool> conditionLatches)
+    {
+        ownerKey ??= "";
+        definitionSignature ??= "";
+        if (ownerKey.Length == 0 ||
+            definitionSignature.Length == 0 ||
+            !state.IsInitialized)
+        {
+            return null;
+        }
+
+        var memory = new AlarmTimingMemoryDefinition
+        {
+            OwnerKey = ownerKey,
+            DefinitionSignature = definitionSignature,
+            IsActive = state.IsActive,
+            ActivationPendingSinceTick = state.ActivationPendingSinceTick,
+            ActiveSinceTick = state.ActiveSinceTick,
+            ResetPendingSinceTick = state.ResetPendingSinceTick,
+            LastObservedTick = state.LastObservedTick,
+        };
+        if (conditionLatches != null)
+        {
+            foreach (var latch in conditionLatches
+                         .Where(item => item.Key >= 0)
+                         .OrderBy(item => item.Key))
+            {
+                memory.ConditionLatches.Add(
+                    new AlarmConditionLatchMemoryDefinition
+                    {
+                        ConditionIndex = latch.Key,
+                        IsLatched = latch.Value,
+                    });
+            }
+        }
+        return memory;
+    }
+
+    public static bool TryRestore(
+        AlarmTimingMemoryDefinition memory,
+        string expectedOwnerKey,
+        string expectedSignature,
+        int conditionCount,
+        out AlarmTimingState state,
+        out Dictionary<int, bool> conditionLatches)
+    {
+        state = default;
+        conditionLatches = new Dictionary<int, bool>();
+        expectedOwnerKey ??= "";
+        expectedSignature ??= "";
+        if (memory == null ||
+            expectedOwnerKey.Length == 0 ||
+            expectedSignature.Length == 0 ||
+            !string.Equals(
+                memory.OwnerKey ?? "",
+                expectedOwnerKey,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                memory.DefinitionSignature ?? "",
+                expectedSignature,
+                StringComparison.Ordinal) ||
+            memory.LastObservedTick < 0)
+        {
+            return false;
+        }
+
+        var lastObservedTick = memory.LastObservedTick;
+        if (memory.IsActive)
+        {
+            var activeSinceTick = IsPastTick(
+                memory.ActiveSinceTick,
+                lastObservedTick)
+                ? memory.ActiveSinceTick
+                : lastObservedTick;
+            var resetPendingSinceTick = IsPastTick(
+                memory.ResetPendingSinceTick,
+                lastObservedTick)
+                ? memory.ResetPendingSinceTick
+                : AlarmTimingState.NoTick;
+            state = new AlarmTimingState(
+                true,
+                AlarmTimingState.NoTick,
+                activeSinceTick,
+                resetPendingSinceTick,
+                lastObservedTick);
+        }
+        else
+        {
+            var activationPendingSinceTick = IsPastTick(
+                memory.ActivationPendingSinceTick,
+                lastObservedTick)
+                ? memory.ActivationPendingSinceTick
+                : AlarmTimingState.NoTick;
+            state = new AlarmTimingState(
+                false,
+                activationPendingSinceTick,
+                AlarmTimingState.NoTick,
+                AlarmTimingState.NoTick,
+                lastObservedTick);
+        }
+
+        conditionCount = Math.Max(0, conditionCount);
+        foreach (var latch in memory.ConditionLatches ??
+                     new List<AlarmConditionLatchMemoryDefinition>())
+        {
+            if (latch == null ||
+                latch.ConditionIndex < 0 ||
+                latch.ConditionIndex >= conditionCount)
+            {
+                continue;
+            }
+            conditionLatches[latch.ConditionIndex] = latch.IsLatched;
+        }
+        return true;
+    }
+
+    public static AlarmTimingMemoryDefinition CloneMemory(
+        AlarmTimingMemoryDefinition source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+        return new AlarmTimingMemoryDefinition
+        {
+            OwnerKey = source.OwnerKey,
+            DefinitionSignature = source.DefinitionSignature,
+            IsActive = source.IsActive,
+            ActivationPendingSinceTick = source.ActivationPendingSinceTick,
+            ActiveSinceTick = source.ActiveSinceTick,
+            ResetPendingSinceTick = source.ResetPendingSinceTick,
+            LastObservedTick = source.LastObservedTick,
+            ConditionLatches = (source.ConditionLatches ??
+                    new List<AlarmConditionLatchMemoryDefinition>())
+                .Where(item => item != null)
+                .Select(item => new AlarmConditionLatchMemoryDefinition
+                {
+                    ConditionIndex = item.ConditionIndex,
+                    IsLatched = item.IsLatched,
+                })
+                .ToList(),
+        };
+    }
+
+    public static void NormalizeMemories(
+        List<AlarmTimingMemoryDefinition> memories,
+        IReadOnlyList<AlarmRuleDefinition> rules,
+        IReadOnlyList<SystemAlarmDefinition> systemAlarms,
+        bool discardExisting)
+    {
+        if (memories == null)
+        {
+            throw new ArgumentNullException(nameof(memories));
+        }
+        if (discardExisting)
+        {
+            memories.Clear();
+            return;
+        }
+
+        var expected = BuildExpectedDefinitions(rules, systemAlarms);
+        var normalized = new Dictionary<string, AlarmTimingMemoryDefinition>(
+            StringComparer.Ordinal);
+        foreach (var memory in memories)
+        {
+            var ownerKey = memory?.OwnerKey ?? "";
+            if (!expected.TryGetValue(ownerKey, out var definition) ||
+                !TryRestore(
+                    memory,
+                    ownerKey,
+                    definition.Signature,
+                    definition.ConditionCount,
+                    out var state,
+                    out var latches))
+            {
+                continue;
+            }
+            var restored = CreateMemory(
+                ownerKey,
+                definition.Signature,
+                state,
+                latches);
+            if (restored != null)
+            {
+                normalized[ownerKey] = restored;
+            }
+        }
+
+        memories.Clear();
+        memories.AddRange(normalized.Values.OrderBy(
+            item => item.OwnerKey,
+            StringComparer.Ordinal));
+    }
+
+    private static Dictionary<string, ExpectedDefinition>
+        BuildExpectedDefinitions(
+            IReadOnlyList<AlarmRuleDefinition> rules,
+            IReadOnlyList<SystemAlarmDefinition> systemAlarms)
+    {
+        var expected = new Dictionary<string, ExpectedDefinition>(
+            StringComparer.Ordinal);
+        foreach (var rule in rules ?? Array.Empty<AlarmRuleDefinition>())
+        {
+            if (rule == null ||
+                !rule.Enabled ||
+                string.IsNullOrWhiteSpace(rule.Id))
+            {
+                continue;
+            }
+            expected[RuleOwnerKey(rule.Id)] = new ExpectedDefinition
+            {
+                Signature = RuleDefinitionSignature(rule),
+                ConditionCount = rule.Conditions?.Count ?? 0,
+            };
+        }
+
+        foreach (var alarm in systemAlarms ??
+                     Array.Empty<SystemAlarmDefinition>())
+        {
+            if (alarm == null ||
+                !alarm.Enabled ||
+                string.IsNullOrWhiteSpace(alarm.Id))
+            {
+                continue;
+            }
+            var stages = alarm.Stages ??
+                         new List<SystemAlarmStageDefinition>();
+            for (var stageIndex = 0;
+                 stageIndex < stages.Count;
+                 stageIndex++)
+            {
+                var stage = stages[stageIndex];
+                if (stage == null || !stage.Enabled)
+                {
+                    continue;
+                }
+                expected[SystemStageOwnerKey(
+                    alarm.Id,
+                    stage.Id,
+                    stageIndex)] = new ExpectedDefinition
+                {
+                    Signature = SystemStageDefinitionSignature(stage),
+                    ConditionCount = stage.Conditions?.Count ?? 0,
+                };
+            }
+        }
+        return expected;
+    }
+
+    private static void AddTiming(
+        SignatureBuilder signature,
+        AlarmTimingSettings settings)
+    {
+        settings = AlarmTimingPolicy.Normalize(settings);
+        signature.Add(settings.ActivationDelayTicks);
+        signature.Add(settings.ResetDelayTicks);
+        signature.Add(settings.MinimumActiveTicks);
+    }
+
+    private static bool IsPastTick(long tick, long lastObservedTick)
+    {
+        return tick >= 0 && tick <= lastObservedTick;
+    }
+
+    private sealed class SignatureBuilder
+    {
+        private readonly StringBuilder m_value = new();
+
+        public SignatureBuilder(string version)
+        {
+            Add(version);
+        }
+
+        public void AddNull()
+        {
+            m_value.Append("n;");
+        }
+
+        public void Add(string value)
+        {
+            value ??= "";
+            m_value.Append('s');
+            m_value.Append(value.Length.ToString(CultureInfo.InvariantCulture));
+            m_value.Append(':');
+            m_value.Append(value);
+            m_value.Append(';');
+        }
+
+        public void Add(int value)
+        {
+            m_value.Append('i');
+            m_value.Append(value.ToString(CultureInfo.InvariantCulture));
+            m_value.Append(';');
+        }
+
+        public void Add(double value)
+        {
+            m_value.Append('d');
+            if (double.IsNaN(value))
+            {
+                m_value.Append("nan");
+            }
+            else if (double.IsPositiveInfinity(value))
+            {
+                m_value.Append("+inf");
+            }
+            else if (double.IsNegativeInfinity(value))
+            {
+                m_value.Append("-inf");
+            }
+            else
+            {
+                m_value.Append(BitConverter.DoubleToInt64Bits(value).ToString(
+                    "X16",
+                    CultureInfo.InvariantCulture));
+            }
+            m_value.Append(';');
+        }
+
+        public string Finish()
+        {
+            using var sha256 = SHA256.Create();
+            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(
+                m_value.ToString()));
+            var result = new StringBuilder(bytes.Length * 2);
+            foreach (var value in bytes)
+            {
+                result.Append(value.ToString(
+                    "x2",
+                    CultureInfo.InvariantCulture));
+            }
+            return result.ToString();
+        }
     }
 }

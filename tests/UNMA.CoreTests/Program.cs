@@ -24,6 +24,9 @@ internal static class Program
         TestBooleanLogic();
         TestAlarmLatch();
         TestAlarmTimingPolicy();
+        TestAlarmTimingModelNormalization();
+        TestAlarmTimingMemoryPolicy();
+        TestAlarmAudioSnoozePolicy();
         TestSustainedVanillaAlarmPolicy();
         TestVanillaNotificationSuppressionPolicy();
         TestAlarmHistoryState();
@@ -438,6 +441,35 @@ internal static class Program
             5d,
             isCurrentlyActive: true));
 
+        IsFalse(AlarmTimingPolicy.EvaluateConditionLatch(
+            24d,
+            ComparisonOperator.Less,
+            20d,
+            5d,
+            hasPreviousLatch: false,
+            previousLatch: true));
+        IsTrue(AlarmTimingPolicy.EvaluateConditionLatch(
+            24d,
+            ComparisonOperator.Less,
+            20d,
+            5d,
+            hasPreviousLatch: true,
+            previousLatch: true));
+        IsFalse(AlarmTimingPolicy.EvaluateConditionLatch(
+            20.5d,
+            ComparisonOperator.NotEqual,
+            20d,
+            1d,
+            hasPreviousLatch: false,
+            previousLatch: false));
+        IsFalse(AlarmTimingPolicy.EvaluateConditionLatch(
+            20.5d,
+            ComparisonOperator.NotEqual,
+            20d,
+            1d,
+            hasPreviousLatch: true,
+            previousLatch: false));
+
         var immediate = AlarmTimingPolicy.Advance(
             AlarmTimingState.Inactive,
             conditionMet: true,
@@ -672,6 +704,754 @@ internal static class Program
             legacy);
         AreEqual(0L, clampedTick.State.LastObservedTick);
         IsTrue(clampedTick.IsActive);
+    }
+
+    private static void TestAlarmTimingModelNormalization()
+    {
+        var defaultRule = new AlarmRuleDefinition();
+        AreEqual(0, defaultRule.ActivationDelayTicks);
+        AreEqual(0, defaultRule.ResetDelayTicks);
+        AreEqual(0, defaultRule.MinimumActiveTicks);
+        AreEqual(0d, new ConditionDefinition().Hysteresis);
+        var defaultStage = new SystemAlarmStageDefinition();
+        AreEqual(0, defaultStage.ActivationDelayTicks);
+        AreEqual(0, defaultStage.ResetDelayTicks);
+        AreEqual(0, defaultStage.MinimumActiveTicks);
+        AreEqual(0d, new SystemConditionDefinition().Hysteresis);
+
+        var legacy = UnmaConfiguration.CreateDefault();
+        legacy.SchemaVersion = 17;
+        var legacyRule = new AlarmRuleDefinition
+        {
+            PanelId = legacy.Panels.Find(panel => !panel.IsDashboard).Id,
+            ActivationDelayTicks = 10,
+            ResetDelayTicks = 20,
+            MinimumActiveTicks = 30,
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    MetricPath = "$global:population.total",
+                    Hysteresis = 4.5d,
+                },
+            },
+        };
+        legacy.Rules.Add(legacyRule);
+        var legacyStage = legacy.SystemAlarms[0].Stages[0];
+        legacyStage.ActivationDelayTicks = 40;
+        legacyStage.ResetDelayTicks = 50;
+        legacyStage.MinimumActiveTicks = 60;
+        legacyStage.Conditions[0].Hysteresis = 7.5d;
+        legacy.Normalize();
+
+        AreEqual(18, legacy.SchemaVersion);
+        AreEqual(0, legacyRule.ActivationDelayTicks);
+        AreEqual(0, legacyRule.ResetDelayTicks);
+        AreEqual(0, legacyRule.MinimumActiveTicks);
+        AreEqual(0d, legacyRule.Conditions[0].Hysteresis);
+        AreEqual(0, legacyStage.ActivationDelayTicks);
+        AreEqual(0, legacyStage.ResetDelayTicks);
+        AreEqual(0, legacyStage.MinimumActiveTicks);
+        AreEqual(0d, legacyStage.Conditions[0].Hysteresis);
+
+        var current = UnmaConfiguration.CreateDefault();
+        var currentRule = new AlarmRuleDefinition
+        {
+            PanelId = current.Panels.Find(panel => !panel.IsDashboard).Id,
+            ActivationDelayTicks = -1,
+            ResetDelayTicks = int.MaxValue,
+            MinimumActiveTicks = 33,
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    MetricPath = "$global:population.total",
+                    Hysteresis = 2.5d,
+                },
+                new()
+                {
+                    MetricPath = "$global:population.available_workers",
+                    Hysteresis = double.NaN,
+                },
+                new()
+                {
+                    MetricPath = "$global:population.needed_workers",
+                    Hysteresis = -5d,
+                },
+            },
+        };
+        current.Rules.Add(currentRule);
+        var currentStage = current.SystemAlarms[0].Stages[0];
+        currentStage.ActivationDelayTicks = int.MaxValue;
+        currentStage.ResetDelayTicks = -2;
+        currentStage.MinimumActiveTicks = 44;
+        currentStage.Conditions[0].Hysteresis = double.PositiveInfinity;
+        current.Normalize();
+
+        AreEqual(0, currentRule.ActivationDelayTicks);
+        AreEqual(
+            AlarmTimingPolicy.MaximumTimingTicks,
+            currentRule.ResetDelayTicks);
+        AreEqual(33, currentRule.MinimumActiveTicks);
+        AreEqual(2.5d, currentRule.Conditions[0].Hysteresis);
+        AreEqual(0d, currentRule.Conditions[1].Hysteresis);
+        AreEqual(0d, currentRule.Conditions[2].Hysteresis);
+        AreEqual(
+            AlarmTimingPolicy.MaximumTimingTicks,
+            currentStage.ActivationDelayTicks);
+        AreEqual(0, currentStage.ResetDelayTicks);
+        AreEqual(44, currentStage.MinimumActiveTicks);
+        AreEqual(0d, currentStage.Conditions[0].Hysteresis);
+    }
+
+    private static void TestAlarmTimingMemoryPolicy()
+    {
+        var rule = new AlarmRuleDefinition
+        {
+            Id = "timed-rule",
+            PanelId = "panel-a",
+            Name = "TIMED RULE",
+            Severity = AlarmSeverity.Warning,
+            Logic = AlarmLogic.All,
+            ActiveColor = "#112233",
+            SoundId = "auto",
+            ActivationDelayTicks = 20,
+            ResetDelayTicks = 30,
+            MinimumActiveTicks = 40,
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    EntityId = 17,
+                    EntityType = "Storage",
+                    EntityPrototypeId = "AirStorageT1",
+                    MetricPath = "$stored.percent",
+                    Comparison = ComparisonOperator.Less,
+                    Threshold = 25d,
+                    Hysteresis = 3d,
+                },
+                new()
+                {
+                    MetricPath = "$global:population.available_workers",
+                    Comparison = ComparisonOperator.GreaterOrEqual,
+                    Threshold = 10d,
+                    Hysteresis = 2d,
+                },
+            },
+        };
+        var ruleSignature =
+            AlarmTimingMemoryPolicy.RuleDefinitionSignature(rule);
+        IsFalse(string.IsNullOrWhiteSpace(ruleSignature));
+        rule.Name = "DISPLAY ONLY";
+        rule.PanelId = "panel-b";
+        rule.ActiveColor = "#FFFFFF";
+        rule.SoundId = "horn";
+        rule.Severity = AlarmSeverity.Emergency;
+        AreEqual(
+            ruleSignature,
+            AlarmTimingMemoryPolicy.RuleDefinitionSignature(rule));
+        rule.Conditions[0].Threshold = 24d;
+        IsFalse(string.Equals(
+            ruleSignature,
+            AlarmTimingMemoryPolicy.RuleDefinitionSignature(rule),
+            StringComparison.Ordinal));
+        rule.Conditions[0].Threshold = 25d;
+        rule.Conditions[0].EntityType = "Storage ";
+        IsFalse(string.Equals(
+            ruleSignature,
+            AlarmTimingMemoryPolicy.RuleDefinitionSignature(rule),
+            StringComparison.Ordinal));
+        rule.Conditions[0].EntityType = "Storage";
+
+        var stage = new SystemAlarmStageDefinition
+        {
+            Id = "warning",
+            Priority = 10,
+            Message = "WARNING",
+            Severity = AlarmSeverity.Warning,
+            Logic = AlarmLogic.Any,
+            ActivationDelayTicks = 5,
+            ResetDelayTicks = 6,
+            MinimumActiveTicks = 7,
+            Conditions = new List<SystemConditionDefinition>
+            {
+                new()
+                {
+                    MetricId = "population.health",
+                    Comparison = ComparisonOperator.LessOrEqual,
+                    Threshold = 90d,
+                    Hysteresis = 2d,
+                },
+            },
+        };
+        var stageSignature =
+            AlarmTimingMemoryPolicy.SystemStageDefinitionSignature(stage);
+        stage.Message = "DISPLAY ONLY";
+        stage.Priority = 999;
+        stage.Severity = AlarmSeverity.Critical;
+        stage.ActiveColor = "#ABCDEF";
+        stage.SoundId = "siren";
+        AreEqual(
+            stageSignature,
+            AlarmTimingMemoryPolicy.SystemStageDefinitionSignature(stage));
+        stage.Conditions[0].Hysteresis = 3d;
+        IsFalse(string.Equals(
+            stageSignature,
+            AlarmTimingMemoryPolicy.SystemStageDefinitionSignature(stage),
+            StringComparison.Ordinal));
+        stage.Conditions[0].Hysteresis = 2d;
+        stage.Conditions[0].MetricId = "population.health ";
+        IsFalse(string.Equals(
+            stageSignature,
+            AlarmTimingMemoryPolicy.SystemStageDefinitionSignature(stage),
+            StringComparison.Ordinal));
+        stage.Conditions[0].MetricId = "population.health";
+
+        var pendingState = new AlarmTimingState(
+            false,
+            activationPendingSinceTick: 100,
+            activeSinceTick: AlarmTimingState.NoTick,
+            resetPendingSinceTick: AlarmTimingState.NoTick,
+            lastObservedTick: 104);
+        var memory = AlarmTimingMemoryPolicy.CreateMemory(
+            AlarmTimingMemoryPolicy.RuleOwnerKey(rule.Id),
+            ruleSignature,
+            pendingState,
+            new Dictionary<int, bool>
+            {
+                [0] = true,
+                [1] = false,
+            });
+        IsTrue(memory != null);
+        IsTrue(AlarmTimingMemoryPolicy.TryRestore(
+            memory,
+            AlarmTimingMemoryPolicy.RuleOwnerKey(rule.Id),
+            ruleSignature,
+            rule.Conditions.Count,
+            out var restoredPendingState,
+            out var restoredLatches));
+        IsFalse(restoredPendingState.IsActive);
+        AreEqual(100L, restoredPendingState.ActivationPendingSinceTick);
+        AreEqual(104L, restoredPendingState.LastObservedTick);
+        AreEqual(2, restoredLatches.Count);
+        IsTrue(restoredLatches[0]);
+        IsFalse(restoredLatches[1]);
+
+        var activeResetState = new AlarmTimingState(
+            true,
+            activationPendingSinceTick: AlarmTimingState.NoTick,
+            activeSinceTick: 80,
+            resetPendingSinceTick: 110,
+            lastObservedTick: 115);
+        var activeMemory = AlarmTimingMemoryPolicy.CreateMemory(
+            AlarmTimingMemoryPolicy.RuleOwnerKey(rule.Id),
+            ruleSignature,
+            activeResetState,
+            restoredLatches);
+        IsTrue(AlarmTimingMemoryPolicy.TryRestore(
+            activeMemory,
+            AlarmTimingMemoryPolicy.RuleOwnerKey(rule.Id),
+            ruleSignature,
+            rule.Conditions.Count,
+            out var restoredActiveState,
+            out _));
+        IsTrue(restoredActiveState.IsActive);
+        AreEqual(80L, restoredActiveState.ActiveSinceTick);
+        AreEqual(110L, restoredActiveState.ResetPendingSinceTick);
+        IsFalse(AlarmTimingPolicy.HasPersistentStateChanged(
+            activeResetState,
+            new AlarmTimingState(
+                true,
+                AlarmTimingState.NoTick,
+                80,
+                110,
+                999)));
+        var preservedAfterDefinitionEdit = AlarmTimingPolicy
+            .PreserveActiveForDefinitionChange(activeResetState, 120);
+        IsTrue(preservedAfterDefinitionEdit.IsActive);
+        AreEqual(80L, preservedAfterDefinitionEdit.ActiveSinceTick);
+        AreEqual(
+            AlarmTimingState.NoTick,
+            preservedAfterDefinitionEdit.ResetPendingSinceTick);
+        AreEqual(120L, preservedAfterDefinitionEdit.LastObservedTick);
+        IsFalse(AlarmTimingPolicy.PreserveActiveForDefinitionChange(
+            pendingState,
+            120).IsInitialized);
+        var activeDefinitionEditLatches = AlarmTimingPolicy
+            .CreateActiveConditionLatches(3);
+        AreEqual(3, activeDefinitionEditLatches.Count);
+        IsTrue(activeDefinitionEditLatches.Values.All(value => value));
+        AreEqual(
+            0,
+            AlarmTimingPolicy.CreateActiveConditionLatches(-1).Count);
+        IsTrue(AlarmTimingPolicy.HasPersistentStateChanged(
+            pendingState,
+            new AlarmTimingState(
+                false,
+                AlarmTimingState.NoTick,
+                AlarmTimingState.NoTick,
+                AlarmTimingState.NoTick,
+                104)));
+        IsTrue(AlarmTimingPolicy.HasPersistentStateChanged(
+            activeResetState,
+            preservedAfterDefinitionEdit));
+
+        var invalidFutureTick = AlarmTimingMemoryPolicy.CloneMemory(memory);
+        invalidFutureTick.ActivationPendingSinceTick = 200;
+        IsTrue(AlarmTimingMemoryPolicy.TryRestore(
+            invalidFutureTick,
+            invalidFutureTick.OwnerKey,
+            ruleSignature,
+            rule.Conditions.Count,
+            out var safelyNormalizedState,
+            out _));
+        AreEqual(
+            AlarmTimingState.NoTick,
+            safelyNormalizedState.ActivationPendingSinceTick);
+        IsFalse(AlarmTimingMemoryPolicy.TryRestore(
+            memory,
+            memory.OwnerKey,
+            "wrong-signature",
+            rule.Conditions.Count,
+            out _,
+            out _));
+
+        var systemAlarm = new SystemAlarmDefinition
+        {
+            Id = "system:test",
+            Enabled = true,
+            Stages = new List<SystemAlarmStageDefinition> { stage },
+        };
+        var systemState = AlarmTimingState.ActiveAt(70);
+        var systemMemory = AlarmTimingMemoryPolicy.CreateMemory(
+            AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+                systemAlarm.Id,
+                stage.Id,
+                0),
+            stageSignature,
+            systemState,
+            new Dictionary<int, bool> { [0] = true });
+        IsFalse(string.Equals(
+            systemMemory.OwnerKey,
+            AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+                systemAlarm.Id,
+                stage.Id,
+                1),
+            StringComparison.Ordinal));
+        var criticalStage = new SystemAlarmStageDefinition
+        {
+            Id = "critical",
+            Enabled = true,
+            Logic = AlarmLogic.All,
+            ActivationDelayTicks = 9,
+            Conditions = new List<SystemConditionDefinition>
+            {
+                new()
+                {
+                    MetricId = "population.health",
+                    Comparison = ComparisonOperator.Less,
+                    Threshold = 50d,
+                    Hysteresis = 1d,
+                },
+            },
+        };
+        systemAlarm.Stages.Add(criticalStage);
+        var criticalStageSignature = AlarmTimingMemoryPolicy
+            .SystemStageDefinitionSignature(criticalStage);
+        var criticalStageMemory = AlarmTimingMemoryPolicy.CreateMemory(
+            AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+                systemAlarm.Id,
+                criticalStage.Id,
+                1),
+            criticalStageSignature,
+            new AlarmTimingState(
+                false,
+                60,
+                AlarmTimingState.NoTick,
+                AlarmTimingState.NoTick,
+                65),
+            new Dictionary<int, bool> { [0] = true });
+        var memories = new List<AlarmTimingMemoryDefinition>
+        {
+            memory,
+            systemMemory,
+            criticalStageMemory,
+            new()
+            {
+                OwnerKey = "rule:orphan",
+                DefinitionSignature = "orphan",
+                LastObservedTick = 1,
+            },
+            new()
+            {
+                OwnerKey = memory.OwnerKey,
+                DefinitionSignature = "stale",
+                LastObservedTick = 104,
+            },
+            memory,
+        };
+        AlarmTimingMemoryPolicy.NormalizeMemories(
+            memories,
+            new[] { rule },
+            new[] { systemAlarm },
+            discardExisting: false);
+        AreEqual(3, memories.Count);
+        IsTrue(memories.Any(item => string.Equals(
+            item.OwnerKey,
+            AlarmTimingMemoryPolicy.RuleOwnerKey(rule.Id),
+            StringComparison.Ordinal)));
+        IsTrue(memories.Any(item => string.Equals(
+            item.OwnerKey,
+            AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+                systemAlarm.Id,
+                stage.Id,
+                0),
+            StringComparison.Ordinal)));
+        var normalizedCriticalMemory = memories.Single(item =>
+            string.Equals(
+                item.OwnerKey,
+                AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+                    systemAlarm.Id,
+                    criticalStage.Id,
+                    1),
+                StringComparison.Ordinal));
+        AreEqual(
+            60L,
+            normalizedCriticalMemory.ActivationPendingSinceTick);
+
+        var disabledOccurrenceStage = new SystemAlarmStageDefinition
+        {
+            Id = "disabled-occurrence",
+            Enabled = false,
+            Priority = 999,
+            Severity = AlarmSeverity.Emergency,
+        };
+        var restoreStages = new List<SystemAlarmStageDefinition>
+        {
+            stage,
+            disabledOccurrenceStage,
+            criticalStage,
+        };
+        AreEqual(
+            0,
+            AlarmTimingMemoryPolicy.FindRestoredSystemStageIndex(
+                restoreStages,
+                stage.Id,
+                stage.Priority,
+                stage.Severity));
+        AreEqual(
+            -1,
+            AlarmTimingMemoryPolicy.FindRestoredSystemStageIndex(
+                restoreStages,
+                disabledOccurrenceStage.Id,
+                disabledOccurrenceStage.Priority,
+                disabledOccurrenceStage.Severity));
+        AreEqual(
+            -1,
+            AlarmTimingMemoryPolicy.FindRestoredSystemStageIndex(
+                restoreStages,
+                "removed-occurrence",
+                criticalStage.Priority,
+                criticalStage.Severity));
+        AreEqual(
+            2,
+            AlarmTimingMemoryPolicy.FindRestoredSystemStageIndex(
+                restoreStages,
+                "",
+                criticalStage.Priority,
+                criticalStage.Severity));
+        AreEqual(
+            0,
+            AlarmTimingMemoryPolicy.FindRestoredSystemStageIndex(
+                restoreStages,
+                " ",
+                stage.Priority,
+                stage.Severity));
+        AreEqual(
+            -1,
+            AlarmTimingMemoryPolicy.FindRestoredSystemStageIndex(
+                null,
+                "",
+                0,
+                AlarmSeverity.Warning));
+
+        var configuration = UnmaConfiguration.CreateDefault();
+        rule.PanelId = configuration.Panels.Find(panel => !panel.IsDashboard).Id;
+        configuration.Rules.Add(rule);
+        configuration.AlarmTimingMemories.Add(memory);
+        using var stream = new MemoryStream();
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        serializer.WriteObject(stream, configuration);
+        stream.Position = 0;
+        var roundTripped =
+            (UnmaConfiguration)serializer.ReadObject(stream);
+        roundTripped.Normalize();
+        AreEqual(1, roundTripped.AlarmTimingMemories.Count);
+        AreEqual(
+            100L,
+            roundTripped.AlarmTimingMemories[0]
+                .ActivationPendingSinceTick);
+        AreEqual(2, roundTripped.AlarmTimingMemories[0]
+            .ConditionLatches.Count);
+
+        configuration.SchemaVersion = 17;
+        configuration.AlarmTimingMemories.Add(systemMemory);
+        configuration.Normalize();
+        AreEqual(0, configuration.AlarmTimingMemories.Count);
+    }
+
+    private static void TestAlarmAudioSnoozePolicy()
+    {
+        AreEqual(
+            GameTimeWindowPolicy.MaximumWindowTicks,
+            AlarmAudioSnoozePolicy.MaximumDurationTicks);
+        var empty = default(AlarmAudioSnoozeState);
+        IsFalse(empty.IsInitialized);
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            empty,
+            "alarm:test",
+            1,
+            0,
+            isActive: true));
+
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            null,
+            1,
+            0,
+            1,
+            out var invalid));
+        IsFalse(invalid.IsInitialized);
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "   ",
+            1,
+            0,
+            1,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:test",
+            0,
+            0,
+            1,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:test",
+            -1,
+            0,
+            1,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:test",
+            1,
+            -1,
+            1,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:test",
+            1,
+            10,
+            10,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:test",
+            1,
+            10,
+            9,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilGone(
+            "alarm:test",
+            0,
+            10,
+            out _));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilGone(
+            "alarm:test",
+            1,
+            -1,
+            out _));
+
+        IsTrue(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            " rule:workers ",
+            7,
+            100,
+            110,
+            out var timed));
+        IsTrue(timed.IsInitialized);
+        AreEqual("rule:workers", timed.AlarmKey);
+        AreEqual(7L, timed.Sequence);
+        AreEqual(100L, timed.StartedAtGameTick);
+        AreEqual(110L, timed.MutedUntilGameTick);
+        IsTrue(timed.HasEndTick);
+        IsFalse(timed.EndWhenGone);
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            7,
+            100,
+            isActive: true));
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            " rule:workers ",
+            7,
+            100,
+            isActive: false));
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            7,
+            109,
+            isActive: false));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            7,
+            110,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            7,
+            111,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            8,
+            101,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "RULE:WORKERS",
+            7,
+            101,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            7,
+            99,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timed,
+            "rule:workers",
+            7,
+            -1,
+            isActive: true));
+
+        IsTrue(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "system:food",
+            12,
+            50,
+            75,
+            endWhenGone: true,
+            out var timedUntilGone));
+        IsTrue(timedUntilGone.EndWhenGone);
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            timedUntilGone,
+            "system:food",
+            12,
+            60,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            timedUntilGone,
+            "system:food",
+            12,
+            60,
+            isActive: false));
+
+        IsTrue(AlarmAudioSnoozePolicy.TryCreateUntilGone(
+            "vanilla:warning",
+            21,
+            200,
+            out var untilGone));
+        IsFalse(untilGone.HasEndTick);
+        AreEqual(
+            AlarmAudioSnoozeState.NoGameTick,
+            untilGone.MutedUntilGameTick);
+        IsTrue(untilGone.EndWhenGone);
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            untilGone,
+            "vanilla:warning",
+            21,
+            200,
+            isActive: true));
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            untilGone,
+            "vanilla:warning",
+            21,
+            long.MaxValue,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            untilGone,
+            "vanilla:warning",
+            21,
+            201,
+            isActive: false));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            untilGone,
+            "vanilla:warning",
+            22,
+            201,
+            isActive: true));
+
+        IsTrue(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:clamped",
+            30,
+            100,
+            long.MaxValue,
+            out var clamped));
+        AreEqual(
+            100L + AlarmAudioSnoozePolicy.MaximumDurationTicks,
+            clamped.MutedUntilGameTick);
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            clamped,
+            "alarm:clamped",
+            30,
+            clamped.MutedUntilGameTick - 1,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            clamped,
+            "alarm:clamped",
+            30,
+            clamped.MutedUntilGameTick,
+            isActive: true));
+
+        var nearMaximum = long.MaxValue - 5;
+        IsTrue(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:saturated",
+            long.MaxValue,
+            nearMaximum,
+            long.MaxValue,
+            out var saturated));
+        AreEqual(long.MaxValue, saturated.MutedUntilGameTick);
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            saturated,
+            "alarm:saturated",
+            long.MaxValue,
+            long.MaxValue - 1,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.IsSnoozed(
+            saturated,
+            "alarm:saturated",
+            long.MaxValue,
+            long.MaxValue,
+            isActive: true));
+        IsFalse(AlarmAudioSnoozePolicy.TryCreateUntilTick(
+            "alarm:no-future-tick",
+            1,
+            long.MaxValue,
+            long.MaxValue,
+            out _));
+        IsTrue(AlarmAudioSnoozePolicy.TryCreateUntilGone(
+            "alarm:max-tick",
+            long.MaxValue,
+            long.MaxValue,
+            out var maxTickUntilGone));
+        IsTrue(AlarmAudioSnoozePolicy.IsSnoozed(
+            maxTickUntilGone,
+            "alarm:max-tick",
+            long.MaxValue,
+            long.MaxValue,
+            isActive: true));
     }
 
     private static void TestComparableValues()
@@ -1000,7 +1780,7 @@ internal static class Program
             },
         };
         legacyConfiguration.Normalize();
-        AreEqual(17, legacyConfiguration.SchemaVersion);
+        AreEqual(18, legacyConfiguration.SchemaVersion);
         AreEqual(1, legacyConfiguration.Instruments.Count);
         AreEqual(1, legacyConfiguration.Instruments[0].Sources.Count);
         AreEqual(42, legacyConfiguration.Instruments[0].Sources[0].EntityId);
@@ -1249,7 +2029,7 @@ internal static class Program
             EditorWindowHeight = 780f,
         };
         configuration.Normalize();
-        AreEqual(17, configuration.SchemaVersion);
+        AreEqual(18, configuration.SchemaVersion);
         AreEqual("Lagerhaus III", entityPanel.OwnerEntityTitle);
         AreEqual("AirStorageT3", entityPanel.OwnerEntityPrototypeId);
         AreEqual(
@@ -1442,6 +2222,7 @@ internal static class Program
                     MetricLabel = "Amount",
                     Comparison = ComparisonOperator.LessOrEqual,
                     Threshold = 12.5d,
+                    Hysteresis = 1.75d,
                     ExpectedProductId = "AirSeparator",
                     EntityPrototypeId = "AirStorageT3",
                     ValueMode = ConditionValueMode.PercentOfReference,
@@ -1460,6 +2241,9 @@ internal static class Program
             Enabled = true,
             AutoAcknowledgeOnClear = true,
             LinkedPanelIds = new List<string> { other.Id },
+            ActivationDelayTicks = 120,
+            ResetDelayTicks = 240,
+            MinimumActiveTicks = 360,
         };
         var linkedRule = new AlarmRuleDefinition
         {
@@ -1597,6 +2381,13 @@ internal static class Program
         AreEqual(primaryRule.SoundId, clonedPrimary.SoundId);
         IsFalse(clonedPrimary.Enabled);
         IsTrue(clonedPrimary.AutoAcknowledgeOnClear);
+        AreEqual(
+            primaryRule.ActivationDelayTicks,
+            clonedPrimary.ActivationDelayTicks);
+        AreEqual(primaryRule.ResetDelayTicks, clonedPrimary.ResetDelayTicks);
+        AreEqual(
+            primaryRule.MinimumActiveTicks,
+            clonedPrimary.MinimumActiveTicks);
         AreEqual(0, clonedPrimary.LinkedPanelIds.Count);
         AreEqual(1, clonedPrimary.Conditions.Count);
         IsFalse(ReferenceEquals(primaryRule, clonedPrimary));
@@ -1615,6 +2406,7 @@ internal static class Program
         AreEqual(sourceCondition.MetricLabel, clonedCondition.MetricLabel);
         AreEqual(sourceCondition.Comparison, clonedCondition.Comparison);
         AreEqual(sourceCondition.Threshold, clonedCondition.Threshold);
+        AreEqual(sourceCondition.Hysteresis, clonedCondition.Hysteresis);
         AreEqual(
             sourceCondition.ExpectedProductId,
             clonedCondition.ExpectedProductId);
@@ -1649,10 +2441,14 @@ internal static class Program
         plan.Panel.Slots[0].DisplayName = "CLONE FOOD";
         plan.Panel.ExcludedAlarmIds.Add("system:maintenance");
         clonedCondition.Threshold = 1d;
+        clonedCondition.Hysteresis = 0.25d;
+        clonedPrimary.ActivationDelayTicks = 1;
         clonedPrimary.LinkedPanelIds.Add("clone-only-link");
         AreEqual("FOOD", source.Slots[0].DisplayName);
         AreEqual(5, source.ExcludedAlarmIds.Count);
         AreEqual(12.5d, primaryRule.Conditions[0].Threshold);
+        AreEqual(1.75d, primaryRule.Conditions[0].Hysteresis);
+        AreEqual(120, primaryRule.ActivationDelayTicks);
         AreEqual(1, primaryRule.LinkedPanelIds.Count);
 
         var dashboardCalls = 0;
@@ -2402,7 +3198,7 @@ internal static class Program
             IsGloballyDisabled = true,
         });
         legacyConfig.Normalize();
-        AreEqual(17, legacyConfig.SchemaVersion);
+        AreEqual(18, legacyConfig.SchemaVersion);
         IsFalse(legacyConfig.SoundOverrides.Last().IsGloballyDisabled);
         AreEqual(
             VanillaNotificationBehavior.Hidden,
@@ -3081,13 +3877,20 @@ internal static class Program
         editedSystemStage.Logic = AlarmLogic.Any;
         editedSystemStage.ActiveColor = "#123456";
         editedSystemStage.SoundId = "triangle";
+        editedSystemStage.ActivationDelayTicks = 11;
+        editedSystemStage.ResetDelayTicks = 22;
+        editedSystemStage.MinimumActiveTicks = 33;
         editedSystemStage.Conditions[0].Threshold = 7.5d;
+        editedSystemStage.Conditions[0].Hysteresis = 1.25d;
         configuration.Rules.Add(new AlarmRuleDefinition
         {
             PanelId = fixedPanel.Id,
             Name = "LAGER UND BAND LEER",
             Logic = AlarmLogic.All,
             AutoAcknowledgeOnClear = true,
+            ActivationDelayTicks = 44,
+            ResetDelayTicks = 55,
+            MinimumActiveTicks = 66,
             Conditions = new List<ConditionDefinition>
             {
                 new()
@@ -3100,6 +3903,7 @@ internal static class Program
                     MetricLabel = "Lagerinhalt",
                     Comparison = ComparisonOperator.Equal,
                     Threshold = 0,
+                    Hysteresis = 0.5d,
                 },
                 new()
                 {
@@ -3137,6 +3941,7 @@ internal static class Program
                     DeltaThreshold = 12.5d,
                     WindowAmount = 2,
                     WindowUnit = GameTimeUnit.Year,
+                    Hysteresis = 0.75d,
                 },
             },
         });
@@ -3218,7 +4023,7 @@ internal static class Program
         IsFalse(restoredSystemOverride.IsGloballyDisabled);
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
-        AreEqual(17, restored.SchemaVersion);
+        AreEqual(18, restored.SchemaVersion);
         AreEqual(1, restored.InstrumentPanels.Count);
         AreEqual("instruments-main", restored.InstrumentPanels[0].Id);
         AreEqual(1, restored.Instruments.Count);
@@ -3278,6 +4083,11 @@ internal static class Program
             "$input.capacity:Potato",
             restored.Rules[0].Conditions[2].ReferenceMetricPath);
         AreEqual(50d, restored.Rules[0].Conditions[2].Threshold);
+        AreEqual(44, restored.Rules[0].ActivationDelayTicks);
+        AreEqual(55, restored.Rules[0].ResetDelayTicks);
+        AreEqual(66, restored.Rules[0].MinimumActiveTicks);
+        AreEqual(0.5d, restored.Rules[0].Conditions[0].Hysteresis);
+        AreEqual(0.75d, restored.Rules[0].Conditions[3].Hysteresis);
         AreEqual(3, restored.SystemAlarms.Count);
         IsTrue(restored.Rules[0].AutoAcknowledgeOnClear);
         var restoredSystemAlarm = restored.SystemAlarms
@@ -3292,6 +4102,10 @@ internal static class Program
         AreEqual("#123456", restoredSystemStage.ActiveColor);
         AreEqual("triangle", restoredSystemStage.SoundId);
         AreEqual(7.5d, restoredSystemStage.Conditions[0].Threshold);
+        AreEqual(11, restoredSystemStage.ActivationDelayTicks);
+        AreEqual(22, restoredSystemStage.ResetDelayTicks);
+        AreEqual(33, restoredSystemStage.MinimumActiveTicks);
+        AreEqual(1.25d, restoredSystemStage.Conditions[0].Hysteresis);
         AreEqual(1, restored.AlarmMemories.Count);
         var restoredMemory = restored.AlarmMemories[0];
         AreEqual(17, restoredMemory.EntityId);
@@ -3592,7 +4406,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(17, restored.SchemaVersion);
+        AreEqual(18, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -3631,7 +4445,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(17, oldConfiguration.SchemaVersion);
+        AreEqual(18, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(100, oldConfiguration.UiScalePercent);
@@ -3757,7 +4571,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(17, schemaSeven.SchemaVersion);
+        AreEqual(18, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -3835,7 +4649,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(17, legacy.SchemaVersion);
+        AreEqual(18, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -3887,7 +4701,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(17, versionFive.SchemaVersion);
+        AreEqual(18, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -3964,7 +4778,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(17, schemaEight.SchemaVersion);
+        AreEqual(18, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

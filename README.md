@@ -69,6 +69,9 @@ Zielversion: Captain of Industry **0.8.6c**.
   das zugehörige Gebäude/Fahrzeug und öffnet dessen Inspector.
 - AWL-artige Bedingungstabelle mit sichtbarem Ist-Wert, verständlicher Kennung,
   allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
+- Spielzeitbasierte Auslöse- und Rücksetzverzögerung sowie Mindestaktivzeit je
+  eigener Regel und Systemalarmstufe. Eine Hysterese je numerischer Bedingung
+  hält Grenzwerte stabil; laufende Timer und Latches überleben Save/Load.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
   werden für Lager, Förderer/Rohre und Fahrzeugfracht automatisch empfohlen.
 - Bedingungen können statt eines Spielobjekts auch **GLOBALE VARIABLEN** wie
@@ -102,6 +105,9 @@ Zielversion: Captain of Industry **0.8.6c**.
   Bedingungen können absolut (`< 400`) oder automatisch relativ zur summierten
   Produktkapazität (`< 50 %`) definiert werden.
 - Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
+- `Z` pausiert den Ton eines Meldeschlitzes für einen Spielmonat, `R` setzt ihn
+  fort. Die Funktion arbeitet auch für zusammengefasste Objektmeldungen und
+  verändert weder Quittierung noch Sichtbarkeit, Zähler oder Verlauf.
 - Beliebig viele Panels mit klar getrennter Auswahl, Bearbeitung und Neuanlage,
   Spaltenzahl, festen hoch/runter sortierbaren Schlitzen, gezieltem Hinzufügen
   bekannter Meldungen sowie Vanilla-/System-Automatik und kommagetrennten

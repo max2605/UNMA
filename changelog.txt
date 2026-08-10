@@ -1,3 +1,14 @@
+v0.9.22 | 2026-08-10
+Alarm timing
+* Added per-rule and per-system-stage activation delay, reset delay, and minimum active time on the COI game calendar.
+* Added per-condition hysteresis for every numeric comparison, with immediate legacy defaults.
+* Persisted running timers and condition latches so save/load and display-only edits do not create artificial alarm transitions.
+
+Operator audio control
+* Added per-slot audio snooze for one game month with an explicit resume action.
+* Kept snooze independent from acknowledgement, visibility, counters, sound assignment, and history.
+* Applied snooze and resume to every real occurrence represented by aggregated object slots.
+
 v0.9.21 | 2026-08-10
 Panel workflows
 * Added safe duplication of global panels with columns, filters, automatic sources, exclusions, and stable slot order.

@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.21** und
+Diese Anleitung gilt für **UNMA 0.9.22** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -173,6 +173,14 @@ quittiert alle auf der aktuellen Tafel dargestellten Zustände, einschließlich
 aller in einem Objektschlitz zusammengefassten Ereignisse. **ALLES
 QUITTIEREN** bleibt die ausdrückliche globale Aktion.
 
+Die Taste **Z** pausiert nur den Alarmton dieses Schlitzes für einen
+Spielmonat. Das Kennzeichen wechselt zu **AUDIO Z · 1 MONAT**; **R** setzt den
+Ton sofort fort. Bei einem Sammelschlitz gilt die Pause für alle aktuell
+dahinterliegenden Ereignisse. Sie quittiert, versteckt oder löscht keine
+Meldung und verändert
+weder Zähler noch Verlauf. Ein späteres neues Ereignis erhält eine neue
+Sequenz und ist wieder hörbar.
+
 Ein Doppelklick auf einen eigenen Meldeschlitz öffnet die zugehörige Regel
 direkt im Editor.
 
@@ -276,6 +284,25 @@ UNMA berechnet `Ist-Wert / Bezugswert × 100`. Ein fehlender, null oder negative
 Bezugswert gilt als nicht verfügbar und aktiviert die Bedingung nicht. Werte
 über 100 Prozent werden nicht künstlich begrenzt.
 
+### Alarmzeiten und Hysterese
+
+Jede eigene Regel besitzt drei Dauern nach dem
+Captain-of-Industry-Spielkalender:
+
+- **AUSLÖSEVERZÖGERUNG** verlangt, dass die kombinierte UND-/ODER-Bedingung
+  für die gewählte Zeit erfüllt bleibt;
+- **RÜCKSETZVERZÖGERUNG** verlangt, dass sie vor dem Gehen entsprechend lange
+  nicht erfüllt bleibt;
+- **MINDESTE AKTIVZEIT** hält eine ausgelöste Meldung mindestens für die
+  gewählte Dauer aktiv.
+
+Mit `0` gilt jeweils das bisherige Sofortverhalten. Jede normale numerische
+Bedingung besitzt außerdem eine **HYSTERESE**. Dieses Totband um den Grenzwert
+verhindert wiederholtes Kommen und Gehen bei schwankenden Messwerten. Laufende
+Timer und Hystereselatches werden je Welt gespeichert und nach dem Laden
+fortgesetzt. Trendbedingungen für Zunahme oder Abnahme verwenden bewusst keine
+Hysterese.
+
 ### Regeln mit mehreren Bedingungen oder Objekten
 
 Nach dem Hinzufügen der ersten Zeile kann außerhalb des Editors ein anderes
@@ -345,8 +372,11 @@ Zustand. **NICHT LOGGEN · KOMPLETT IGNORIEREN** bleibt überall unsichtbar.
 Der Tab **SYSTEM** enthält die eingebaute Überwachung für Gesundheit, Nahrung
 und Arbeiter. Jede Systemmeldung kann aktiviert, vollständig bearbeitet oder
 auf ihre Werkvorgabe zurückgesetzt werden. Die Stufen enthalten Messwert,
-Operator, Schwelle, Alarmstufe, Farbe und Ton. Das Zurücksetzen auf Werkvorgabe
-muss durch einen zweiten Druck bestätigt werden.
+Operator, Schwelle, Hysterese, Auslöse- und Rücksetzverzögerung,
+Mindestaktivzeit, Alarmstufe, Farbe und Ton. Jede Stufe wird unabhängig
+zeitlich ausgewertet; anschließend zeigt UNMA die höchste passende Alarmstufe
+und Priorität. Das Zurücksetzen auf Werkvorgabe muss durch einen zweiten Druck
+bestätigt werden.
 
 Der Gesundheitswert des Spiels ist keine klassische 0–100-Prozent-Skala. `10`
 ist der neutrale Basiswert; ein gesundheitsbedingter Bevölkerungsverlust beginnt

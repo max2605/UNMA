@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.22 – 2026-08-10
+
+- Eigene Regeln und jede einzelne Systemalarmstufe besitzen jetzt eine
+  spielzeitbasierte Auslöseverzögerung, Rücksetzverzögerung und optionale
+  Mindestaktivzeit. `0` erhält das bisherige Sofortverhalten.
+- Jede numerische Schwellenbedingung kann mit einer Hysterese versehen werden.
+  Die sechs Vergleichsoperatoren verwenden dafür stabile Schmitt-Bänder, damit
+  Messwerte an einer Grenze keine Alarmflut erzeugen.
+- Laufende Timer und Bedingungslatches werden je Welt gespeichert. Laden,
+  Spielzeitrücksprünge und reine Text-, Farb- oder Tonänderungen erzeugen keine
+  künstlichen Alarmwechsel.
+- `Z` pausiert den Ton eines sichtbaren Meldeschlitzes für einen Spielmonat;
+  `R` hebt die Pause wieder auf. Quittierung, Sichtbarkeit, Zähler und Verlauf
+  bleiben unverändert, auch bei zusammengefassten Objektmeldungen.
+- Ungültige Zeit- oder Hystereseentwürfe blockieren das Speichern und
+  strukturelle Systemeditor-Aktionen, statt Eingaben still zu normalisieren
+  oder zu verwerfen.
+
 ## 0.9.21 – 2026-08-10
 
 - Globale Panels lassen sich in ihren Einstellungen als unabhängige Vorlage

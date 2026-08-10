@@ -10,6 +10,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $runtimeTypeName = "UNMA.Runtime.UnmaRuntime"
+$configurationTypeName = "UNMA.Domain.UnmaConfiguration"
+$timingMemoryPolicyTypeName = "UNMA.Domain.AlarmTimingMemoryPolicy"
 $entityTypeName = "Mafi.Core.Entities.IEntity"
 $entitiesManagerTypeName = "Mafi.Core.Entities.IEntitiesManager"
 $nonSaveableEventTypeName = "Mafi.IEventNonSaveable``1"
@@ -333,6 +335,10 @@ if (Test-Path -LiteralPath $multiLangLibPath -PathType Leaf) {
 $assembly = [System.Reflection.Assembly]::Load(
     [System.IO.File]::ReadAllBytes($resolvedAssemblyPath))
 $runtimeType = $assembly.GetType($runtimeTypeName, $true, $false)
+$configurationType = $assembly.GetType(
+    $configurationTypeName,
+    $true,
+    $false)
 $bindingFlags = [System.Reflection.BindingFlags]::Instance -bor
     [System.Reflection.BindingFlags]::Static -bor
     [System.Reflection.BindingFlags]::Public -bor
@@ -343,8 +349,105 @@ $constructors = @($runtimeType.GetConstructors($bindingFlags))
 $methods = @($runtimeType.GetMethods($bindingFlags))
 $initialize = @($methods | Where-Object Name -eq "Initialize")
 $dispose = @($methods | Where-Object Name -eq "Dispose")
+$restoreConfiguration = @(
+    $methods | Where-Object Name -eq "RestoreConfiguration")
+$restoreAlarmTimingStates = @(
+    $methods | Where-Object Name -eq "RestoreAlarmTimingStates")
 Assert-Condition ($initialize.Count -eq 1) "Initialize was not found exactly once."
 Assert-Condition ($dispose.Count -eq 1) "Dispose was not found exactly once."
+Assert-Condition `
+    ($restoreConfiguration.Count -eq 1) `
+    "RestoreConfiguration was not found exactly once."
+Assert-Condition `
+    ($restoreAlarmTimingStates.Count -eq 1) `
+    "RestoreAlarmTimingStates was not found exactly once."
+
+$restoredStageSelectorCalls = @(
+    Read-MethodInstructions $restoreAlarmTimingStates[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $timingMemoryPolicyTypeName `
+            "FindRestoredSystemStageIndex"
+    })
+Assert-Condition `
+    ($restoredStageSelectorCalls.Count -eq 1) `
+    "RestoreAlarmTimingStates must use the strict stage selector exactly once."
+Write-Host `
+    "UNMA restored-stage bootstrap IL regression passed."
+
+# Atomic configuration rollback must not silently miss a newly added
+# DataMember. Validate the compiled IL rather than maintaining a fragile
+# hard-coded field count.
+$configurationFields = @($configurationType.GetFields(
+    [System.Reflection.BindingFlags]::Instance -bor
+    [System.Reflection.BindingFlags]::Public -bor
+    [System.Reflection.BindingFlags]::DeclaredOnly) | Where-Object {
+        $_.IsDefined(
+            [System.Runtime.Serialization.DataMemberAttribute],
+            $false)
+    })
+$restoreInstructions = @(
+    Read-MethodInstructions $restoreConfiguration[0])
+$restoredFieldNames = @($restoreInstructions | Where-Object {
+        $_.OpCode.Name -eq "stfld" -and
+        $_.Operand -is [System.Reflection.FieldInfo] -and
+        $_.Operand.DeclaringType.FullName -eq $configurationTypeName
+    } | ForEach-Object {
+        $_.Operand.Name
+    })
+$loadedFieldNames = @($restoreInstructions | Where-Object {
+        $_.OpCode.Name -eq "ldfld" -and
+        $_.Operand -is [System.Reflection.FieldInfo] -and
+        $_.Operand.DeclaringType.FullName -eq $configurationTypeName
+    } | ForEach-Object {
+        $_.Operand.Name
+    })
+foreach ($field in $configurationFields) {
+    Assert-Condition `
+        (@($restoredFieldNames | Where-Object { $_ -eq $field.Name }).Count -eq 1) `
+        "RestoreConfiguration must assign DataMember '$($field.Name)' exactly once."
+    Assert-Condition `
+        (@($loadedFieldNames | Where-Object { $_ -eq $field.Name }).Count -eq 1) `
+        "RestoreConfiguration must load DataMember '$($field.Name)' from the snapshot exactly once."
+}
+
+function Assert-CallsRuntimeMethodExactlyOnce {
+    param(
+        [System.Reflection.MethodBase]$Caller,
+        [string]$CalleeName
+    )
+
+    $matchingCalls = @(Read-MethodInstructions $Caller | Where-Object {
+            ($_.OpCode.Name -eq "call" -or
+                $_.OpCode.Name -eq "callvirt") -and
+            $_.Operand -is [System.Reflection.MethodBase] -and
+            $_.Operand.DeclaringType.FullName -eq $runtimeTypeName -and
+            $_.Operand.Name -eq $CalleeName
+        })
+    Assert-Condition `
+        ($matchingCalls.Count -eq 1) `
+        "$($Caller.Name) must call $CalleeName exactly once."
+}
+Write-Host (
+    "UNMA configuration rollback IL regression passed: " +
+    "$($configurationFields.Count) DataMember fields are restored atomically.")
+
+foreach ($mutationMethodName in @(
+        "UpdateRuleWithPersistenceLock",
+        "UpdateSystemAlarmWithPersistenceLock",
+        "SetRuleEnabledWithPersistenceLock")) {
+    $mutationMethod = @(
+        $methods | Where-Object Name -eq $mutationMethodName)
+    Assert-Condition `
+        ($mutationMethod.Count -eq 1) `
+        "$mutationMethodName was not found exactly once."
+    Assert-CallsRuntimeMethodExactlyOnce `
+        $mutationMethod[0] `
+        "CloneConfiguration"
+    Assert-CallsRuntimeMethodExactlyOnce `
+        $mutationMethod[0] `
+        "RestoreConfiguration"
+}
 
 $getterLocations = @()
 foreach ($constructor in $constructors) {

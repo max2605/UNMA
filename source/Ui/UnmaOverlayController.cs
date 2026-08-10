@@ -86,6 +86,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
         PanelSettings,
     }
 
+    private enum TimingDisplayUnit
+    {
+        Tick,
+        Day,
+        Month,
+        Year,
+        Decade,
+        Century,
+    }
+
+    private sealed class TimingDraftValue
+    {
+        public string AmountText = "0";
+        public TimingDisplayUnit Unit = TimingDisplayUnit.Tick;
+    }
+
     private static readonly FieldInfo s_menuDepthField =
         typeof(GlobalGfxSettings).GetField(
             "s_isInMenus",
@@ -103,6 +119,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private readonly List<string> m_draftConditionThresholdTexts = new();
     private readonly Dictionary<ConditionDefinition, string>
         m_draftTrendWindowTexts = new();
+    private readonly Dictionary<ConditionDefinition, string>
+        m_draftHysteresisTexts = new();
     private readonly Dictionary<string, PanelViewCacheEntry> m_panelViewCache =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<float>> m_instrumentSamples =
@@ -203,6 +221,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_originalDraftSoundId = "auto";
     private bool m_draftSoundChanged;
     private bool m_draftAutoAcknowledgeOnClear;
+    private readonly TimingDraftValue m_draftActivationDelay = new();
+    private readonly TimingDraftValue m_draftResetDelay = new();
+    private readonly TimingDraftValue m_draftMinimumActive = new();
     private string m_editingRuleId = "";
     private string m_draftTargetPanelId = "";
     private string m_lastAlarmTileClickId = "";
@@ -252,6 +273,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private double m_recorderArchiveCacheObservedMaximum;
     private SystemAlarmDefinition m_systemAlarmDraft;
     private readonly Dictionary<string, string> m_systemThresholdTexts =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> m_systemHysteresisTexts =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TimingDraftValue> m_systemTimingDrafts =
         new(StringComparer.Ordinal);
     private string m_pendingSystemResetId = "";
     private float m_pendingSystemResetUntil;
@@ -2107,9 +2132,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftConditions.Add(condition);
         m_draftConditionThresholdTexts.Add(
             condition.Threshold.ToString(
-                "0.###",
+                "R",
                 CultureInfo.CurrentCulture));
         m_draftTrendWindowTexts[condition] = "1";
+        EnsureDraftHysteresisText(condition);
         OpenRuleEditorWindow();
         SetStatus(UnmaText.Format(
             "ui.instrument.status.alarm_prepared",
@@ -4509,9 +4535,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     (UsesComparisonThreshold(condition.TrendMode)
                         ? condition.Threshold
                         : condition.DeltaThreshold).ToString(
-                        "0.###",
+                        "R",
                         CultureInfo.CurrentCulture));
             }
+            EnsureDraftHysteresisText(condition);
 
             if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
             {
@@ -4602,6 +4629,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     NativeGUILayout.Height(30f)))
                 {
                     m_draftTrendWindowTexts.Remove(condition);
+                    m_draftHysteresisTexts.Remove(condition);
                     m_draftConditions.RemoveAt(index);
                 m_draftConditionThresholdTexts.RemoveAt(index);
                 if (m_conditionReferencePickerIndex == index)
@@ -4615,6 +4643,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 index--;
             }
             NativeGUILayout.EndHorizontal();
+
+            if (index >= 0 &&
+                index < m_draftConditions.Count &&
+                ReferenceEquals(m_draftConditions[index], condition))
+            {
+                DrawDraftHysteresisRow(condition, 465f);
+            }
 
             if (index >= 0 && m_conditionReferencePickerIndex == index)
             {
@@ -4762,6 +4797,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_draftConditions.RemoveAt(index);
             m_draftConditionThresholdTexts.RemoveAt(index);
             m_draftTrendWindowTexts.Remove(condition);
+            m_draftHysteresisTexts.Remove(condition);
             NativeGUILayout.EndHorizontal();
             NativeGUILayout.EndVertical();
             return true;
@@ -4791,6 +4827,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_textFieldStyle,
                 NativeGUILayout.Width(110f),
                 NativeGUILayout.Height(28f));
+            DrawDraftHysteresisInline(condition);
         }
         else
         {
@@ -4895,6 +4932,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
         return false;
     }
 
+    private void EnsureDraftHysteresisText(ConditionDefinition condition)
+    {
+        if (condition == null || m_draftHysteresisTexts.ContainsKey(condition))
+        {
+            return;
+        }
+        m_draftHysteresisTexts[condition] = condition.Hysteresis.ToString(
+            "R",
+            CultureInfo.CurrentCulture);
+    }
+
+    private void DrawDraftHysteresisRow(
+        ConditionDefinition condition,
+        float leadingSpace)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Space(leadingSpace);
+        DrawDraftHysteresisInline(condition);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.timing.hysteresis_hint",
+                "0 disables the dead band around the threshold."),
+            m_smallLabelStyle);
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawDraftHysteresisInline(ConditionDefinition condition)
+    {
+        EnsureDraftHysteresisText(condition);
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.timing.hysteresis", "HYSTERESIS"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(88f));
+        m_draftHysteresisTexts[condition] = NativeGUILayout.TextField(
+            m_draftHysteresisTexts[condition],
+            24,
+            m_textFieldStyle,
+            NativeGUILayout.Width(82f),
+            NativeGUILayout.Height(28f));
+    }
+
     private void SetInstrumentTrendMode(
         int index,
         ConditionDefinition condition,
@@ -4943,7 +5021,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             (UsesComparisonThreshold(mode)
                 ? condition.Threshold
                 : condition.DeltaThreshold).ToString(
-                "0.###",
+                "R",
                 CultureInfo.CurrentCulture);
         m_draftTrendWindowTexts[condition] =
             condition.WindowAmount.ToString(CultureInfo.CurrentCulture);
@@ -5201,6 +5279,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_smallLabelStyle);
         NativeGUILayout.EndHorizontal();
 
+        DrawAlarmTimingDraft();
+
         NativeGUILayout.BeginHorizontal();
         NativeGUI.enabled = m_draftConditions.Count > 0 &&
                       GetDraftTargetPanel() != null;
@@ -5247,6 +5327,174 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
         }
         NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawAlarmTimingDraft()
+    {
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.timing.title", "ALARM TIMING"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.timing.hint",
+                "All durations use the COI game calendar. Zero activates and resets immediately; zero minimum time is disabled."),
+            m_smallLabelStyle);
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.activation", "ACTIVATION DELAY"),
+            m_draftActivationDelay,
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.reset", "RESET DELAY"),
+            m_draftResetDelay,
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.minimum_active", "MINIMUM ACTIVE"),
+            m_draftMinimumActive,
+            UnmaText.Get("ui.timing.zero.off", "OFF"));
+    }
+
+    private void DrawTimingDraftValue(
+        string label,
+        TimingDraftValue draft,
+        string zeroLabel)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            label,
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        draft.AmountText = NativeGUILayout.TextField(
+            draft.AmountText ?? "0",
+            9,
+            m_textFieldStyle,
+            NativeGUILayout.Width(72f),
+            NativeGUILayout.Height(28f));
+        if (NativeGUILayout.Button(
+                TimingUnitLabel(draft.Unit),
+                m_buttonStyle,
+                NativeGUILayout.Width(105f),
+                NativeGUILayout.Height(28f)))
+        {
+            draft.Unit = NextTimingDisplayUnit(draft.Unit);
+        }
+        NativeGUILayout.Label(
+            TimingDraftIsZero(draft) ? zeroLabel : "",
+            m_smallLabelStyle,
+            NativeGUILayout.Width(105f));
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private static TimingDisplayUnit NextTimingDisplayUnit(
+        TimingDisplayUnit unit)
+    {
+        return unit == TimingDisplayUnit.Century
+            ? TimingDisplayUnit.Tick
+            : (TimingDisplayUnit)((int)unit + 1);
+    }
+
+    private static bool TimingDraftIsZero(TimingDraftValue draft)
+    {
+        return draft != null && int.TryParse(
+            draft.AmountText,
+            NumberStyles.Integer,
+            CultureInfo.CurrentCulture,
+            out var amount) && amount == 0;
+    }
+
+    private static bool TimingDraftHasInput(TimingDraftValue draft)
+    {
+        return draft != null && !string.Equals(
+            draft.AmountText?.Trim(),
+            "0",
+            StringComparison.Ordinal);
+    }
+
+    private static bool TryGetTimingTicks(
+        TimingDraftValue draft,
+        out int ticks)
+    {
+        ticks = 0;
+        if (draft == null ||
+            !int.TryParse(
+                draft.AmountText,
+                NumberStyles.Integer,
+                CultureInfo.CurrentCulture,
+                out var amount) ||
+            amount < 0)
+        {
+            return false;
+        }
+        var total = (long)amount * TimingTicksPerUnit(draft.Unit);
+        if (total > AlarmTimingPolicy.MaximumTimingTicks)
+        {
+            return false;
+        }
+        ticks = (int)total;
+        return true;
+    }
+
+    private static void LoadTimingDraft(TimingDraftValue draft, int ticks)
+    {
+        ticks = Math.Max(
+            0,
+            Math.Min(AlarmTimingPolicy.MaximumTimingTicks, ticks));
+        draft.AmountText = ticks.ToString(CultureInfo.CurrentCulture);
+        draft.Unit = TimingDisplayUnit.Tick;
+        if (ticks == 0)
+        {
+            return;
+        }
+        foreach (var unit in new[]
+                 {
+                     TimingDisplayUnit.Century,
+                     TimingDisplayUnit.Decade,
+                     TimingDisplayUnit.Year,
+                     TimingDisplayUnit.Month,
+                     TimingDisplayUnit.Day,
+                 })
+        {
+            var divisor = TimingTicksPerUnit(unit);
+            if (ticks % divisor != 0)
+            {
+                continue;
+            }
+            draft.AmountText = (ticks / divisor).ToString(
+                CultureInfo.CurrentCulture);
+            draft.Unit = unit;
+            return;
+        }
+    }
+
+    private static int TimingTicksPerUnit(TimingDisplayUnit unit)
+    {
+        return unit switch
+        {
+            TimingDisplayUnit.Day => GameTimeWindowPolicy.SimTicksPerDay,
+            TimingDisplayUnit.Month => GameTimeWindowPolicy.SimTicksPerMonth,
+            TimingDisplayUnit.Year => GameTimeWindowPolicy.SimTicksPerYear,
+            TimingDisplayUnit.Decade =>
+                GameTimeWindowPolicy.SimTicksPerYear * 10,
+            TimingDisplayUnit.Century =>
+                GameTimeWindowPolicy.SimTicksPerYear * 100,
+            _ => 1,
+        };
+    }
+
+    private static string TimingUnitLabel(TimingDisplayUnit unit)
+    {
+        return unit switch
+        {
+            TimingDisplayUnit.Day => UnmaText.Get("ui.time.day", "DAY"),
+            TimingDisplayUnit.Month => UnmaText.Get("ui.time.month", "MONTH"),
+            TimingDisplayUnit.Year => UnmaText.Get("ui.time.year", "YEAR"),
+            TimingDisplayUnit.Decade =>
+                UnmaText.Get("ui.time.decade", "10 YEARS"),
+            TimingDisplayUnit.Century =>
+                UnmaText.Get("ui.time.century", "100 YEARS"),
+            _ => UnmaText.Get("ui.time.tick", "TICK"),
+        };
     }
 
     private void DrawSystemAlarms()
@@ -5389,10 +5637,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_smallLabelStyle);
         NativeGUILayout.EndHorizontal();
 
-        foreach (var stage in draft.Stages
-                     .OrderBy(stage => stage.Priority)
+        foreach (var stageEntry in draft.Stages
+                     .Select((stage, index) => new
+                     {
+                         Stage = stage,
+                         Index = index,
+                     })
+                     .OrderBy(entry => entry.Stage.Priority)
                      .ToArray())
         {
+            var stage = stageEntry.Stage;
+            var stageIndex = stageEntry.Index;
             NativeGUILayout.BeginVertical(m_panelStyle);
             NativeGUILayout.BeginHorizontal();
             stage.Enabled = NativeGUILayout.Toggle(
@@ -5471,6 +5726,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             NativeGUILayout.EndHorizontal();
 
+            DrawSystemStageTiming(stageIndex, stage);
+
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
                 var condition = stage.Conditions[index];
@@ -5482,15 +5739,31 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         condition.MetricId ?? "",
                         UnmaText.Get("auto.516699304b80") + (condition.MetricId ?? ""),
                         UnmaText.Get("auto.9a98b3d0d737"));
-                var thresholdKey = SystemThresholdKey(stage.Id, index);
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
                 if (!m_systemThresholdTexts.TryGetValue(
                         thresholdKey,
                         out var thresholdText))
                 {
                     thresholdText = condition.Threshold.ToString(
-                        "0.###",
+                        "R",
                         CultureInfo.CurrentCulture);
                     m_systemThresholdTexts[thresholdKey] = thresholdText;
+                }
+                if (!m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText))
+                {
+                    hysteresisText = condition.Hysteresis.ToString(
+                        "R",
+                        CultureInfo.CurrentCulture);
+                    m_systemHysteresisTexts[hysteresisKey] = hysteresisText;
                 }
 
                 NativeGUILayout.BeginHorizontal();
@@ -5531,15 +5804,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_textFieldStyle,
                     NativeGUILayout.Width(90f));
                 m_systemThresholdTexts[thresholdKey] = thresholdText;
+                NativeGUILayout.Label(
+                    UnmaText.Get("ui.timing.hysteresis", "HYSTERESIS"),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(88f));
+                hysteresisText = NativeGUILayout.TextField(
+                    hysteresisText,
+                    24,
+                    m_textFieldStyle,
+                    NativeGUILayout.Width(78f));
+                m_systemHysteresisTexts[hysteresisKey] = hysteresisText;
                 if (NativeGUILayout.Button(
                         UnmaText.Get("ui.common.remove", "REMOVE"),
                         m_dangerButtonStyle,
                         NativeGUILayout.Width(95f)))
                 {
-                    ApplyValidSystemThresholdTexts();
-                    stage.Conditions.RemoveAt(index);
-                    RebuildSystemThresholdTexts();
-                    index--;
+                    if (TryApplySystemDraftTexts())
+                    {
+                        stage.Conditions.RemoveAt(index);
+                        RebuildSystemThresholdTexts();
+                        index--;
+                    }
                 }
                 NativeGUILayout.EndHorizontal();
             }
@@ -5549,14 +5834,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_buttonStyle,
                     NativeGUILayout.Width(135f)))
             {
-                ApplyValidSystemThresholdTexts();
-                stage.Conditions.Add(new SystemConditionDefinition
+                if (TryApplySystemDraftTexts())
                 {
-                    MetricId = metrics[0].Id,
-                    Comparison = ComparisonOperator.Less,
-                    Threshold = 0d,
-                });
-                RebuildSystemThresholdTexts();
+                    stage.Conditions.Add(new SystemConditionDefinition
+                    {
+                        MetricId = metrics[0].Id,
+                        Comparison = ComparisonOperator.Less,
+                        Threshold = 0d,
+                    });
+                    RebuildSystemThresholdTexts();
+                }
             }
             NativeGUILayout.EndVertical();
         }
@@ -5577,10 +5864,56 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 NativeGUILayout.Height(30f)))
         {
             m_systemAlarmDraft = null;
-            m_systemThresholdTexts.Clear();
+            ClearSystemDraftTexts();
             SetStatus(UnmaText.Get("auto.6b89012b7c85"));
         }
         NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawSystemStageTiming(
+        int stageIndex,
+        SystemAlarmStageDefinition stage)
+    {
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.timing.stage_title", "STAGE TIMING"),
+            m_smallLabelStyle);
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.activation", "ACTIVATION DELAY"),
+            GetSystemTimingDraft(
+                stageIndex,
+                "activation",
+                stage.ActivationDelayTicks),
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.reset", "RESET DELAY"),
+            GetSystemTimingDraft(
+                stageIndex,
+                "reset",
+                stage.ResetDelayTicks),
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.minimum_active", "MINIMUM ACTIVE"),
+            GetSystemTimingDraft(
+                stageIndex,
+                "minimum-active",
+                stage.MinimumActiveTicks),
+            UnmaText.Get("ui.timing.zero.off", "OFF"));
+    }
+
+    private TimingDraftValue GetSystemTimingDraft(
+        int stageIndex,
+        string field,
+        int fallbackTicks)
+    {
+        var key = SystemStageDraftKey(stageIndex, field);
+        if (m_systemTimingDrafts.TryGetValue(key, out var draft))
+        {
+            return draft;
+        }
+        draft = new TimingDraftValue();
+        LoadTimingDraft(draft, fallbackTicks);
+        m_systemTimingDrafts[key] = draft;
+        return draft;
     }
 
     private void BeginEditingSystemAlarm(SystemAlarmDefinition alarm)
@@ -5593,12 +5926,52 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void SaveSystemAlarmDraft()
     {
-        foreach (var stage in m_systemAlarmDraft.Stages)
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
         {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            if (!TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "activation",
+                        stage.ActivationDelayTicks),
+                    out var activationDelayTicks) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "reset",
+                        stage.ResetDelayTicks),
+                    out var resetDelayTicks) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "minimum-active",
+                        stage.MinimumActiveTicks),
+                    out var minimumActiveTicks))
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.timing.invalid_stage_duration",
+                    "Stage '{0}': Enter non-negative whole timing values within 100 game years.",
+                    stage.Message));
+                return;
+            }
+            stage.ActivationDelayTicks = activationDelayTicks;
+            stage.ResetDelayTicks = resetDelayTicks;
+            stage.MinimumActiveTicks = minimumActiveTicks;
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
-                var key = SystemThresholdKey(stage.Id, index);
-                if (!m_systemThresholdTexts.TryGetValue(key, out var text) ||
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
+                if (!m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var text) ||
                     !TryParseDouble(text, out var threshold))
                 {
                     SetStatus(
@@ -5606,7 +5979,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         stage.Message + "'.");
                     return;
                 }
+                if (!m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText) ||
+                    !TryParseDouble(hysteresisText, out var hysteresis) ||
+                    hysteresis < 0d)
+                {
+                    SetStatus(UnmaText.Format(
+                        "ui.timing.invalid_stage_hysteresis",
+                        "Stage '{0}', condition {1}: Enter a non-negative hysteresis value.",
+                        stage.Message,
+                        index + 1));
+                    return;
+                }
                 stage.Conditions[index].Threshold = threshold;
+                stage.Conditions[index].Hysteresis = hysteresis;
             }
             stage.ActiveColor = NormalizeSystemColor(stage.ActiveColor);
             stage.SoundId = string.IsNullOrWhiteSpace(stage.SoundId)
@@ -5622,52 +6009,217 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
         m_systemAlarmDraft = null;
-        m_systemThresholdTexts.Clear();
+        ClearSystemDraftTexts();
         SetStatus(UnmaText.Get("auto.a62e7b126c0b"));
     }
 
     private void RebuildSystemThresholdTexts()
     {
-        m_systemThresholdTexts.Clear();
+        ClearSystemDraftTexts();
         if (m_systemAlarmDraft == null)
         {
             return;
         }
-        foreach (var stage in m_systemAlarmDraft.Stages)
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
         {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            GetSystemTimingDraft(
+                stageIndex,
+                "activation",
+                stage.ActivationDelayTicks);
+            GetSystemTimingDraft(
+                stageIndex,
+                "reset",
+                stage.ResetDelayTicks);
+            GetSystemTimingDraft(
+                stageIndex,
+                "minimum-active",
+                stage.MinimumActiveTicks);
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
-                m_systemThresholdTexts[SystemThresholdKey(stage.Id, index)] =
-                    stage.Conditions[index].Threshold.ToString(
-                        "0.###",
+                var condition = stage.Conditions[index];
+                m_systemThresholdTexts[SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold")] = condition.Threshold.ToString(
+                        "R",
+                        CultureInfo.CurrentCulture);
+                m_systemHysteresisTexts[SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis")] = condition.Hysteresis.ToString(
+                        "R",
                         CultureInfo.CurrentCulture);
             }
         }
     }
 
-    private void ApplyValidSystemThresholdTexts()
+    private bool TryApplySystemDraftTexts()
     {
         if (m_systemAlarmDraft == null)
         {
-            return;
+            return false;
         }
-        foreach (var stage in m_systemAlarmDraft.Stages)
+
+        // Validate every text draft before changing the model. ADD/REMOVE
+        // rebuilds the index-based draft keys, so proceeding with even one
+        // invalid value would otherwise silently discard the player's input.
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
         {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            if (!TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "activation",
+                        stage.ActivationDelayTicks),
+                    out _) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "reset",
+                        stage.ResetDelayTicks),
+                    out _) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "minimum-active",
+                        stage.MinimumActiveTicks),
+                    out _))
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.timing.invalid_stage_duration",
+                    "Stage '{0}': Enter non-negative whole timing values within 100 game years.",
+                    stage.Message));
+                return false;
+            }
+
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
-                var key = SystemThresholdKey(stage.Id, index);
-                if (m_systemThresholdTexts.TryGetValue(key, out var text) &&
-                    TryParseDouble(text, out var threshold))
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
+                if (!m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var thresholdText) ||
+                    !TryParseDouble(thresholdText, out _))
                 {
-                    stage.Conditions[index].Threshold = threshold;
+                    SetStatus(UnmaText.Format(
+                        "ui.timing.invalid_stage_threshold",
+                        "Stage '{0}', condition {1}: Enter a valid threshold value.",
+                        stage.Message,
+                        index + 1));
+                    return false;
+                }
+                if (!m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText) ||
+                    !TryParseDouble(hysteresisText, out var hysteresis) ||
+                    hysteresis < 0d)
+                {
+                    SetStatus(UnmaText.Format(
+                        "ui.timing.invalid_stage_hysteresis",
+                        "Stage '{0}', condition {1}: Enter a non-negative hysteresis value.",
+                        stage.Message,
+                        index + 1));
+                    return false;
                 }
             }
         }
+
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
+        {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            if (TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "activation",
+                        stage.ActivationDelayTicks),
+                    out var activationDelayTicks))
+            {
+                stage.ActivationDelayTicks = activationDelayTicks;
+            }
+            if (TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "reset",
+                        stage.ResetDelayTicks),
+                    out var resetDelayTicks))
+            {
+                stage.ResetDelayTicks = resetDelayTicks;
+            }
+            if (TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "minimum-active",
+                        stage.MinimumActiveTicks),
+                    out var minimumActiveTicks))
+            {
+                stage.MinimumActiveTicks = minimumActiveTicks;
+            }
+            for (var index = 0; index < stage.Conditions.Count; index++)
+            {
+                var condition = stage.Conditions[index];
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
+                if (m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var text) &&
+                    TryParseDouble(text, out var threshold))
+                {
+                    condition.Threshold = threshold;
+                }
+                if (m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText) &&
+                    TryParseDouble(hysteresisText, out var hysteresis) &&
+                    hysteresis >= 0d)
+                {
+                    condition.Hysteresis = hysteresis;
+                }
+            }
+        }
+        return true;
     }
 
-    private static string SystemThresholdKey(string stageId, int index)
+    private void ClearSystemDraftTexts()
     {
-        return (stageId ?? "") + "|" + index;
+        m_systemThresholdTexts.Clear();
+        m_systemHysteresisTexts.Clear();
+        m_systemTimingDrafts.Clear();
+    }
+
+    private static string SystemStageDraftKey(int stageIndex, string field)
+    {
+        return "stage:" + stageIndex.ToString(CultureInfo.InvariantCulture) +
+               "|" + field;
+    }
+
+    private static string SystemConditionDraftKey(
+        int stageIndex,
+        int conditionIndex,
+        string field)
+    {
+        return "stage:" + stageIndex.ToString(CultureInfo.InvariantCulture) +
+               "|condition:" +
+               conditionIndex.ToString(CultureInfo.InvariantCulture) +
+               "|" + field;
     }
 
     private void DrawSoundOverrides()
@@ -6434,31 +6986,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     NativeGUILayout.Height(TileHeight));
                 if (index < alarms.Count)
                 {
-                    DrawAlarmTile(rect, alarms[index], displayPanel);
+                    var alarm = alarms[index];
+                    var isAudioSnoozed =
+                        alarm.RequiresAcknowledgement &&
+                        displayPanel != null &&
+                        m_runtime.IsAlarmAudioSnoozed(
+                            displayPanel.Id,
+                            PanelSlotProjection.StableAlarmId(alarm));
+                    DrawAlarmTile(
+                        rect,
+                        alarm,
+                        displayPanel,
+                        isAudioSnoozed);
                     if (assignmentPending && interactionPanel != null)
                     {
                         DrawExistingAssignmentTarget(
                             rect,
                             interactionPanel,
-                            alarms[index]);
+                            alarm);
                     }
                     else if (!m_entityAssignmentPending)
                     {
                         var hasEntityVanillaControls =
                             IsEntityVanillaTile(
                                 displayPanel,
-                                alarms[index]);
-                        var tileClickRect =
+                                alarm);
+                        var hasNavigationButton =
+                            !hasEntityVanillaControls &&
                             m_runtime.TryResolveNavigationEntity(
                                 displayPanel,
-                                alarms[index],
-                                out _)
-                                ? new Rect(
-                                    rect.x,
-                                    rect.y,
-                                    rect.width - 35f,
-                                    rect.height)
-                                : rect;
+                                alarm,
+                                out _);
+                        var hasRightActionColumn =
+                            alarm.RequiresAcknowledgement ||
+                            hasNavigationButton;
+                        var tileClickRect = hasRightActionColumn
+                            ? new Rect(
+                                rect.x,
+                                rect.y,
+                                rect.width - 35f,
+                                rect.height)
+                            : rect;
                         if (hasEntityVanillaControls)
                         {
                             tileClickRect.height = Math.Max(
@@ -6470,18 +7038,23 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                 GUIContent.none,
                                 GUIStyle.none))
                         {
-                            HandleAlarmTileClick(alarms[index]);
+                            HandleAlarmTileClick(alarm);
                         }
                         if (!hasEntityVanillaControls)
                         {
                             DrawAlarmNavigationButton(
                                 rect,
-                                alarms[index],
+                                alarm,
                                 displayPanel);
                         }
+                        DrawAlarmAudioSnoozeButton(
+                            rect,
+                            alarm,
+                            displayPanel,
+                            isAudioSnoozed);
                         DrawAlarmAcknowledgeButton(
                             rect,
-                            alarms[index],
+                            alarm,
                             displayPanel);
                     }
                 }
@@ -6627,7 +7200,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawAlarmTile(
         Rect rect,
         AlarmView alarm,
-        PanelDefinition displayPanel)
+        PanelDefinition displayPanel,
+        bool isAudioSnoozed)
     {
         var background = CoiUiPalette.Text;
         if (alarm.IsActive || alarm.IsGoneUnacknowledged)
@@ -6666,6 +7240,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             alarm.IsMissingSource)
         {
             badge += UnmaText.Get("auto.70ab47b6f195");
+        }
+        if (isAudioSnoozed)
+        {
+            badge = UnmaText.Get(
+                "alarm_tile.audio_snoozed_badge",
+                "Z · 1M") + " · " + badge;
         }
         var acknowledgementInset = alarm.RequiresAcknowledgement ? 32f : 0f;
         NativeGUI.Label(
@@ -6968,6 +7548,63 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
     }
 
+    private void DrawAlarmAudioSnoozeButton(
+        Rect tileRect,
+        AlarmView alarm,
+        PanelDefinition panel,
+        bool isAudioSnoozed)
+    {
+        if (alarm?.RequiresAcknowledgement != true || panel == null)
+        {
+            return;
+        }
+
+        var buttonRect = new Rect(
+            tileRect.xMax - 31f,
+            tileRect.y + (tileRect.height - 27f) * 0.5f,
+            27f,
+            27f);
+        if (!NativeGUI.Button(
+                buttonRect,
+                isAudioSnoozed
+                    ? UnmaText.Get("alarm_tile.audio_resume", "R")
+                    : UnmaText.Get("alarm_tile.audio_snooze", "Z"),
+                isAudioSnoozed ? m_primaryButtonStyle : m_buttonStyle))
+        {
+            return;
+        }
+
+        m_lastAlarmTileClickId = "";
+        m_lastAlarmTileClickAt = 0f;
+        var slotId = PanelSlotProjection.StableAlarmId(alarm);
+        var changed = isAudioSnoozed
+            ? m_runtime.UnsnoozeAlarmAudio(panel.Id, slotId)
+            : m_runtime.SnoozeAlarmAudio(
+                panel.Id,
+                slotId,
+                GameTimeWindowPolicy.SimTicksPerMonth);
+        if (changed <= 0)
+        {
+            SetStatus(UnmaText.Get(
+                "board.audio_snooze_no_change",
+                "Alarm audio state did not change."));
+            return;
+        }
+        if (!isAudioSnoozed)
+        {
+            m_audio.StopAlarm();
+        }
+        SetStatus(isAudioSnoozed
+            ? UnmaText.Format(
+                "board.audio_resumed",
+                "Alarm audio resumed ({0} occurrence(s)).",
+                changed)
+            : UnmaText.Format(
+                "board.audio_snoozed",
+                "Alarm audio snoozed for 1 game month ({0} occurrence(s)).",
+                changed));
+    }
+
     private void NavigateToEntity(int entityId)
     {
         if (!m_runtime.TryGetLiveEntity(entityId, out var entity))
@@ -7217,6 +7854,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                m_draftSoundIndex != 0 ||
                m_draftSoundChanged ||
                m_draftAutoAcknowledgeOnClear ||
+               TimingDraftHasInput(m_draftActivationDelay) ||
+               TimingDraftHasInput(m_draftResetDelay) ||
+               TimingDraftHasInput(m_draftMinimumActive) ||
                m_draftValueMode != ConditionValueMode.Absolute ||
                m_draftComparison != ComparisonOperator.Less ||
                !string.Equals(
@@ -7555,8 +8195,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 ? m_selectedEntity.StoredProductId
                 : "",
         });
+        EnsureDraftHysteresisText(
+            m_draftConditions[m_draftConditions.Count - 1]);
         m_draftConditionThresholdTexts.Add(
-            threshold.ToString("0.###", CultureInfo.CurrentCulture));
+            threshold.ToString("R", CultureInfo.CurrentCulture));
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
         SetStatus(UnmaText.Get("auto.af3edd1b9f09"));
@@ -7590,8 +8232,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 (instrument.Maximum - instrument.Minimum) * 0.05d),
         };
         m_draftConditions.Add(condition);
+        EnsureDraftHysteresisText(condition);
         m_draftConditionThresholdTexts.Add(
-            threshold.ToString("0.###", CultureInfo.CurrentCulture));
+            threshold.ToString("R", CultureInfo.CurrentCulture));
         m_draftTrendWindowTexts[condition] = "1";
         SetStatus(UnmaText.Format(
             "ui.editor.status.linked_value_added",
@@ -7694,6 +8337,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return false;
         }
 
+        if (!TryGetTimingTicks(
+                m_draftActivationDelay,
+                out var activationDelayTicks) ||
+            !TryGetTimingTicks(m_draftResetDelay, out var resetDelayTicks) ||
+            !TryGetTimingTicks(
+                m_draftMinimumActive,
+                out var minimumActiveTicks))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.timing.invalid_duration",
+                "Enter non-negative whole timing values within 100 game years."));
+            return false;
+        }
+
         for (var index = 0; index < m_draftConditions.Count; index++)
         {
             var condition = m_draftConditions[index];
@@ -7707,6 +8364,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     UnmaText.Get("auto.ddb8c3cdbc29"));
                 return false;
             }
+            EnsureDraftHysteresisText(condition);
+            if (!TryParseDouble(
+                    m_draftHysteresisTexts[condition],
+                    out var hysteresis) ||
+                hysteresis < 0d)
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.timing.invalid_hysteresis",
+                    "Condition {0}: Enter a non-negative hysteresis value.",
+                    index + 1));
+                return false;
+            }
+            condition.Hysteresis = hysteresis;
             if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
             {
                 if (!m_runtime.Configuration.Instruments.Any(instrument =>
@@ -7817,6 +8487,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SoundId = soundId,
             Enabled = existingRule?.Enabled ?? true,
             AutoAcknowledgeOnClear = m_draftAutoAcknowledgeOnClear,
+            ActivationDelayTicks = activationDelayTicks,
+            ResetDelayTicks = resetDelayTicks,
+            MinimumActiveTicks = minimumActiveTicks,
             Conditions = m_draftConditions.Select(CloneCondition).ToList(),
             LinkedPanelIds = m_draftLinkedPanelIds.ToList(),
         };
@@ -7856,6 +8529,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = rule.SoundId;
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = rule.AutoAcknowledgeOnClear;
+        LoadTimingDraft(m_draftActivationDelay, rule.ActivationDelayTicks);
+        LoadTimingDraft(m_draftResetDelay, rule.ResetDelayTicks);
+        LoadTimingDraft(m_draftMinimumActive, rule.MinimumActiveTicks);
         m_draftLinkedPanelIds.Clear();
         foreach (var panelId in rule.LinkedPanelIds ?? new List<string>())
         {
@@ -7864,6 +8540,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
         m_draftTrendWindowTexts.Clear();
+        m_draftHysteresisTexts.Clear();
         foreach (var sourceCondition in rule.Conditions)
         {
             var condition = CloneCondition(sourceCondition);
@@ -7872,11 +8549,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 (UsesComparisonThreshold(condition.TrendMode)
                     ? condition.Threshold
                     : condition.DeltaThreshold).ToString(
-                    "0.###",
+                    "R",
                     CultureInfo.CurrentCulture));
             m_draftTrendWindowTexts[condition] =
                 condition.WindowAmount.ToString(
                     CultureInfo.CurrentCulture);
+            EnsureDraftHysteresisText(condition);
         }
         var linkedCondition = m_draftConditions.FirstOrDefault(condition =>
             !string.IsNullOrWhiteSpace(condition.InstrumentId));
@@ -7902,6 +8580,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
         m_draftTrendWindowTexts.Clear();
+        m_draftHysteresisTexts.Clear();
         m_draftRuleName = UnmaText.Get("auto.fe04a9d0e58c");
         m_draftSeverity = AlarmSeverity.Warning;
         m_draftLogic = AlarmLogic.All;
@@ -7910,6 +8589,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = "auto";
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = false;
+        LoadTimingDraft(m_draftActivationDelay, 0);
+        LoadTimingDraft(m_draftResetDelay, 0);
+        LoadTimingDraft(m_draftMinimumActive, 0);
         m_draftLinkedPanelIds.Clear();
         m_draftValueMode = ConditionValueMode.Absolute;
         m_draftComparison = ComparisonOperator.Less;
@@ -8896,6 +9578,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             MetricLabel = source.MetricLabel,
             Comparison = source.Comparison,
             Threshold = source.Threshold,
+            Hysteresis = source.Hysteresis,
             ExpectedProductId = source.ExpectedProductId,
             EntityPrototypeId = source.EntityPrototypeId,
             ValueMode = source.ValueMode,

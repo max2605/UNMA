@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.21** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.22** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -157,6 +157,12 @@ all unacknowledged states represented by the current panel, including every
 underlying event combined into an object slot. **MASTER ACK** remains the
 explicit global action.
 
+The **Z** button snoozes only that slot's alarm audio for one game month. Its
+badge changes to **AUDIO Z · 1 MONTH** and **R** resumes audio immediately.
+Snoozing an aggregated slot covers every current occurrence behind it, but never
+acknowledges, hides, clears, or removes an alarm from counters or history. A
+later occurrence receives a new sequence and is audible again.
+
 Double-click a custom alarm slot to open its rule directly in the editor.
 
 ### Detached panels
@@ -255,6 +261,24 @@ UNMA calculates `measured value / reference value × 100`. A missing, zero, or
 negative reference value is treated as unavailable and does not activate the
 condition. Values above 100 percent are not artificially limited.
 
+### Alarm timing and hysteresis
+
+Every custom rule can use three durations based on Captain of Industry's game
+calendar:
+
+- **ACTIVATION DELAY** requires the combined AND/OR condition to remain true
+  before the alarm comes in;
+- **RESET DELAY** requires it to remain false before the alarm clears;
+- **MINIMUM ACTIVE** keeps an activated alarm standing for at least the chosen
+  duration.
+
+Set a value to `0` for the previous immediate behavior. Each normal numeric
+condition also has a **HYSTERESIS** value. It creates a dead band around the
+threshold so a fluctuating measurement does not repeatedly activate and clear
+the alarm. Timers and hysteresis latches are saved per world and continue after
+loading. Trend increase/decrease conditions intentionally do not use
+hysteresis.
+
 ### Rules with several conditions or objects
 
 After adding the first row, you can select another object in the game and click
@@ -321,8 +345,10 @@ invisible everywhere.
 
 The **SYSTEM** tab contains the built-in health, food, and worker monitoring.
 Each system alarm can be enabled, edited, or restored to its factory defaults.
-Its stages expose measured value, operator, threshold, severity, color, and
-sound. Restoring factory defaults requires a second press for confirmation.
+Its stages expose measured value, operator, threshold, hysteresis, activation
+and reset delay, minimum active time, severity, color, and sound. Each stage is
+timed independently before the highest applicable severity and priority is
+displayed. Restoring factory defaults requires a second press for confirmation.
 
 The game's health value is not a conventional 0–100 percent scale. `10` is the
 neutral base value, and health-related population loss starts below `0`. UNMA

@@ -393,6 +393,9 @@ public static class PanelClonePolicy
             Enabled = false,
             AutoAcknowledgeOnClear = source.AutoAcknowledgeOnClear,
             LinkedPanelIds = new List<string>(),
+            ActivationDelayTicks = source.ActivationDelayTicks,
+            ResetDelayTicks = source.ResetDelayTicks,
+            MinimumActiveTicks = source.MinimumActiveTicks,
         };
     }
 
@@ -408,6 +411,7 @@ public static class PanelClonePolicy
             MetricLabel = source.MetricLabel,
             Comparison = source.Comparison,
             Threshold = source.Threshold,
+            Hysteresis = source.Hysteresis,
             ExpectedProductId = source.ExpectedProductId,
             EntityPrototypeId = source.EntityPrototypeId,
             ValueMode = source.ValueMode,

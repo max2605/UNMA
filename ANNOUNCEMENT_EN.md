@@ -1,36 +1,45 @@
-# UNMA v0.9.21 – Reusable panel workflows
+# UNMA v0.9.22 – Stable alarm timing and per-slot audio snooze
 
-UNMA v0.9.21 makes recurring annunciator layouts much faster to build. A
-configured global panel can now be duplicated as an independent starting point
-without copying live alarm state or history.
+UNMA v0.9.22 gives operators control over when an alarm becomes active, when
+it clears, and which single alarm should stay quiet for a while. All timing is
+based on Captain of Industry's game calendar and remains independent from
+frame rate or wall-clock time.
 
-## What changed in v0.9.21
+## What changed in v0.9.22
 
-- **DUPLICATE PANEL** is available in every global panel's settings.
-- The copy retains its columns, filters, automatic-source settings, exclusions,
-  and permanent slot order.
-- Every assigned custom alarm is deep-copied with a collision-free ID.
-- Cloned custom alarms deliberately start disabled so thresholds and targets can
-  be reviewed before they become operational.
-- Custom alarm links are cleared, while live state, acknowledgements, and
-  history remain attached only to the original alarms.
-- Dashboard and entity panels cannot be duplicated because they have different
-  ownership and lifecycle semantics.
-- Orphaned custom-rule slots from damaged legacy configurations are skipped and
-  reported instead of making the whole operation unsafe.
+- Every custom alarm has an activation delay, reset delay, and optional
+  minimum active time.
+- Every built-in system-alarm stage has the same independent timing controls.
+- Numeric conditions support hysteresis for all six comparison operators,
+  preventing noisy repeated transitions near a threshold.
+- Existing worlds keep their immediate behavior because all migrated values
+  default to zero.
+- Running timers and condition latches persist per world and resume safely
+  after loading. Game-clock rollback is handled without inheriting invalid
+  elapsed time.
+- Display-only edits such as text, color, and sound no longer reset active
+  timing state or create artificial history events.
 
-The copy is persisted as one atomic operation. If saving fails, UNMA removes
-the new panel and all cloned rules again and preserves the original
-configuration.
+Alarm tiles now provide a compact audio action between acknowledgement and
+navigation:
+
+- **Z** snoozes that slot for one game month.
+- **R** resumes its audio immediately.
+- Aggregated object slots apply the action to every represented occurrence.
+- Snooze never acknowledges, hides, clears, or changes the sound assignment of
+  an alarm, and it does not alter counters or history.
+- A genuinely new alarm occurrence is audible again even if an older sequence
+  was snoozed.
 
 ## Compatibility and safety
 
 - Captain of Industry: **0.8.6c**
-- UNMA: **0.9.21**
+- UNMA: **0.9.22**
 - Required dependency: **MultiLangLib 0.1.0 or newer**
 - Optional dependency: **Keybind Framework 2.0.2 or newer**
 - Can be added to or removed from existing saves.
-- No schema migration is required for existing worlds.
+- Existing configurations migrate automatically with immediate timing
+  defaults; runtime timing state is saved only for matching rule definitions.
 
 ## Download and documentation
 
@@ -41,4 +50,4 @@ and back up `Mods/UNMA` before updating.
 - [English User Guide](https://coigame.com/Topic/1926/User-Guide)
 - [Deutsche Benutzeranleitung](https://coigame.com/Topic/1927/Benutzeranleitung)
 
-Copy the panel, verify the alarms, then keep the factory moving.
+Debounce the threshold, snooze the noisy slot, and keep the factory moving.

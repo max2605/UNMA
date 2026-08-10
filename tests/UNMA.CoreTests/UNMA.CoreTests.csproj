@@ -23,6 +23,8 @@
              Link="Domain\GameTimeStampPolicy.cs" />
     <Compile Include="..\..\source\Domain\AlarmTimingPolicy.cs"
              Link="Domain\AlarmTimingPolicy.cs" />
+    <Compile Include="..\..\source\Domain\AlarmAudioSnoozePolicy.cs"
+             Link="Domain\AlarmAudioSnoozePolicy.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
              Link="Domain\PanelSlotProjection.cs" />
     <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
