@@ -1,4 +1,14 @@
+v0.9.18 | 2026-08-10
+Native game UI
+* Moved all visible UNMA launcher, window, editor, detached-panel, form, and instrument rendering into Captain of Industry's native UI hierarchy.
+* Removed the legacy IMGUI layer and transparent uGUI pointer shield so UNMA and Vanilla windows now share the same game-controlled z-order.
+* Hardened text-field focus, UI scaling, and dynamic-list interactions across multiple open UNMA windows.
+
+Fixes
+* Made the Options page scrollable so every setting remains reachable in smaller windows and at larger UI scales.
+
 v0.9.17 | 2026-08-10
+
 Alarm editor
 * Replaced the implicit first-panel destination for instrument alarms with an explicit target-panel picker.
 * Added independent multi-panel assignment per instrument alarm and enforced at least one destination.

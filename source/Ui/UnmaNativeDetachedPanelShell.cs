@@ -15,8 +15,10 @@ namespace UNMA.Ui;
 
 /// <summary>
 /// Hosts one detached UNMA panel in an independently movable native Captain
-/// of Industry window. Position persistence intentionally remains with the
-/// owning panel instance so multiple detached windows never share offsets.
+/// of Industry runtime UI Toolkit window, keeping content and chrome in one
+/// clipping, input and stacking layer.
+/// Position persistence intentionally remains with the owning panel instance
+/// so multiple detached windows never share offsets.
 /// </summary>
 internal sealed class UnmaNativeDetachedPanelShell : IDisposable
 {
@@ -89,9 +91,6 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
             return Frame.WorldBound.Contains(panelPoint);
         }
 
-        public bool ContainsResizeHandlePoint(Vector2 panelPoint) =>
-            m_resizeHandle.worldBound.Contains(panelPoint);
-
         public void ConfigureResize(
             Action<Vector2> resizeDelta,
             Action resizeCompleted)
@@ -139,10 +138,10 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         {
             RootElement.BringToFront();
             var panelPoint = (Vector2)evt.position;
-            var isImGuiBodyPoint =
+            var isNativeBodyPoint =
                 m_isBodyPoint?.Invoke(panelPoint) == true &&
                 !m_resizeHandle.worldBound.Contains(panelPoint);
-            m_onActivated?.Invoke(isImGuiBodyPoint);
+            m_onActivated?.Invoke(isNativeBodyPoint);
         }
 
         private void HandleResizePointerMove(PointerMoveEvent evt)
@@ -208,6 +207,7 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
     private readonly UiRoot m_uiRoot;
     private readonly Action<float, float> m_onResized;
     private readonly DetachedWindow m_window;
+    private readonly NativeUiSurface m_bodySurface;
     private readonly VisualElement m_bodyElement;
     private readonly VisualElement m_rootElement;
 
@@ -250,11 +250,8 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
 
         var bodyWidth = GetBodyWidth(m_windowWidth);
         var bodyHeight = GetBodyHeight(m_windowHeight);
-        m_bodyElement = new VisualElement
-        {
-            name = "UNMA.NativeDetachedBody",
-            pickingMode = PickingMode.Ignore,
-        };
+        m_bodySurface = new NativeUiSurface("UNMA.NativeDetachedBody");
+        m_bodyElement = m_bodySurface.RootElement;
         m_bodyElement.style.width = bodyWidth;
         m_bodyElement.style.height = bodyHeight;
         m_bodyElement.style.flexGrow = 1f;
@@ -303,6 +300,20 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
 
     public bool IsOpen => !m_disposed && m_window.IsOpen;
 
+    public bool IsBodyKeyboardCaptured =>
+        !m_disposed &&
+        !m_suppressed &&
+        m_window.IsOpen &&
+        m_bodySurface.HasTextInputFocus;
+
+    public void ClearBodyFocus()
+    {
+        if (!m_disposed)
+        {
+            m_bodySurface.ClearFocus();
+        }
+    }
+
     public void SetTitle(string title)
     {
         var normalized = NormalizeTitle(title);
@@ -337,6 +348,14 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         if (!m_disposed && m_window.IsOpen)
         {
             m_window.Close();
+        }
+    }
+
+    public void RenderBody(Action drawBody, float scale)
+    {
+        if (!m_disposed && !m_suppressed && m_window.IsOpen)
+        {
+            m_bodySurface.Render(drawBody, scale);
         }
     }
 
@@ -381,58 +400,6 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         return m_window.ContainsInteractivePoint(panelPoint);
     }
 
-    public bool IsPointerOverResizeHandle(Vector2 screenPointTopLeft)
-    {
-        if (!IsOpen || m_suppressed || m_window.RootElement.panel == null)
-        {
-            return false;
-        }
-        var panelPoint = RuntimePanelUtils.ScreenToPanel(
-            m_window.RootElement.panel,
-            screenPointTopLeft);
-        return m_window.ContainsResizeHandlePoint(panelPoint);
-    }
-
-    public bool TryGetBodyScreenRect(out Rect screenRect)
-    {
-        screenRect = default;
-        if (!IsOpen || m_suppressed || m_bodyElement.panel == null)
-        {
-            return false;
-        }
-
-        var bounds = m_bodyElement.worldBound;
-        var panel = m_bodyElement.panel;
-        var panelOrigin = RuntimePanelUtils.ScreenToPanel(
-            panel,
-            Vector2.zero);
-        var panelScreenX = RuntimePanelUtils.ScreenToPanel(
-            panel,
-            new Vector2(Screen.width, 0f));
-        var panelScreenY = RuntimePanelUtils.ScreenToPanel(
-            panel,
-            new Vector2(0f, Screen.height));
-        var panelWidth = panelScreenX.x - panelOrigin.x;
-        var panelHeight = panelScreenY.y - panelOrigin.y;
-        if (!IsFinitePositive(panelWidth) ||
-            !IsFinitePositive(panelHeight) ||
-            !IsFinitePositive(bounds.width) ||
-            !IsFinitePositive(bounds.height))
-        {
-            return false;
-        }
-
-        var scaleX = Screen.width / panelWidth;
-        var scaleY = Screen.height / panelHeight;
-        screenRect = new Rect(
-            (bounds.x - panelOrigin.x) * scaleX,
-            (bounds.y - panelOrigin.y) * scaleY,
-            bounds.width * scaleX,
-            bounds.height * scaleY);
-        return IsFinitePositive(screenRect.width) &&
-               IsFinitePositive(screenRect.height);
-    }
-
     public void Dispose()
     {
         if (m_disposed)
@@ -441,6 +408,7 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         }
 
         m_disposed = true;
+        m_bodySurface.Dispose();
         m_window.DisposeResizeHandle();
         if (m_window.IsOpen)
         {

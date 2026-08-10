@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.17** und
+Diese Anleitung gilt für **UNMA 0.9.18** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -20,10 +20,14 @@ Benötigte Abhängigkeit: **MultiLangLib 0.1.0 oder neuer**.
 4. UNMA im Mod-Menü des Spiels aktivieren.
 5. Einen Spielstand laden oder ein neues Spiel beginnen.
 
-Für eine Aktualisierung das Spiel schließen und den vorhandenen Ordner `UNMA`
-durch den Ordner aus dem neuen Archiv ersetzen. Spielstandsbezogene Panels,
-Regeln, Meldungszustände und Quittierungen liegen getrennt von den Mod-Dateien
-und gehen dabei nicht verloren.
+Vor einer Aktualisierung das Spiel schließen und den vorhandenen Ordner
+`Mods/UNMA` sichern. Weltbezogene Daten liegen dort als
+`unma-world-<GameId>.json` samt Sicherungsdateien; eigene Töne können unter
+`Sounds/` gespeichert sein. Den neuen `UNMA`-Ordner über den vorhandenen
+entpacken und die Release-Dateien ersetzen lassen. Das Release-Archiv enthält
+weder Weltdateien noch selbst hinzugefügte Töne. Den alten Ordner daher nur
+dann vollständig löschen, wenn diese Dateien gesichert wurden und anschließend
+zurückkopiert werden.
 
 UNMA kann einem bestehenden Spielstand hinzugefügt und wieder daraus entfernt
 werden.
@@ -31,21 +35,50 @@ werden.
 ## Schnellstart
 
 1. Mit **F8** das UNMA-Hauptfenster öffnen oder schließen.
-2. Alternativ den kompakten Launcher am linken Bildschirmrand verwenden.
+2. Alternativ den frei schwebenden Launcher verwenden, der zunächst nahe am
+   linken Bildschirmrand liegt.
 3. Unter **MELDETAFEL** befinden sich HOME und die dauerhaft angelegten Panels.
 4. **MASTER QUIT / QUITTIEREN** quittiert alle neuen sowie bereits gegangenen,
    aber noch nicht quittierten Meldungen und beendet deren Ton.
 5. Unter **VERLAUF** lassen sich frühere Meldungsereignisse einsehen.
 
-Der Launcher erscheint nur bei geschlossenem Hauptfenster. Sein Pfeilgriff
-kann vertikal verschoben werden, damit er keine anderen HUD-Elemente verdeckt.
-Die Position wird je Spielwelt gespeichert.
+### Launcher und native Fenster
 
-Hauptfenster, Meldungseditor und abgekoppelte Tafeln verwenden native
-CoI-Rahmen. Sie lassen sich wie Spielfenster verschieben, anheften und am Griff
-unten rechts vergrößern oder verkleinern. Das Hauptfenster kann über
-**MINIMIEREN** oder das native Schließen-Symbol eingeklappt werden; beides
-bringt den kompakten Launcher zurück.
+Der Launcher erscheint nur während einer aktiven Spielwelt und bei
+geschlossenem Hauptfenster. Der Zusatz `+N` zeigt die Zahl noch nicht
+quittierter Meldungen. Am schmalen Pfeilgriff lässt er sich frei in alle
+Richtungen verschieben. UNMA hält ihn innerhalb des sichtbaren Bildschirms und
+speichert seine Position je Spielwelt.
+
+Launcher, Hauptfenster, Meldungseditor, abgekoppelte Tafeln, Formulare und
+Instrumente liegen vollständig in Captain of Industrys nativer
+Game-UI-Hierarchie. Ein Klick auf ein UNMA-Fenster holt Rahmen und Inhalt
+gemeinsam nach vorn. Ein danach aktiviertes Spielfenster darf UNMA normal
+überdecken; es existiert keine getrennte Web-, IMGUI- oder uGUI-Overlayebene.
+
+Hauptfenster, Editor und abgekoppelte Tafeln lassen sich wie andere
+Spielfenster verschieben, anheften und am Griff unten rechts vergrößern oder
+verkleinern. **MINIMIEREN**, das native Schließen-Symbol und **F8** schließen
+nur das Hauptfenster und bringen den Launcher zurück; ein offener Editor oder
+eine abgekoppelte Tafel bleibt davon unabhängig. Fenstergrößen werden auf den
+sichtbaren Bereich begrenzt.
+
+Klicks, Ziehen und Mausradbewegungen innerhalb eines sichtbaren UNMA-Fensters
+bleiben in diesem Fenster und erreichen nicht die Spielwelt dahinter. Solange
+ein UNMA-Textfeld aktiv ist, erhält es die Tastatureingaben. Ein Fokuswechsel
+weg von allen UNMA-Textfeldern oder das Schließen des fokussierten Fensters gibt
+die Spieltastatur wieder frei.
+
+### Tabs des Hauptfensters
+
+| Tab | Zweck |
+| --- | --- |
+| **MELDETAFEL** | HOME, globale und objektbezogene Panels, Quittierung und neue Meldeschlitze |
+| **MESSPULT** | Live-Instrumente, berechnete Werte, Papierschreiber und Instrumentmeldungen |
+| **VERLAUF** | Aktuelle und abgeschlossene Meldungsereignisse |
+| **SYSTEM** | Eingebaute Überwachung für Gesundheit, Nahrung und Arbeiter |
+| **MELDUNGSOPTIONEN** | Ton, Sichtbarkeit, Protokollierung und Vanilla-Verhalten je Meldungsart |
+| **OPTIONEN** | Inhaltsskalierung, Alarmfarben, Ton-Neueinlesen und Integrationsdiagnose |
 
 ## Meldungszustände
 
@@ -63,7 +96,8 @@ bleibt sichtbar, bis die überwachte Ursache wieder im Normalbereich liegt.
 
 Abgeschlossene `KGQ`-Einträge bleiben im Verlauf gespeichert, bis sie dort
 ausdrücklich gelöscht werden. Nur abgeschlossene Einträge können gelöscht
-werden.
+werden. Das Löschen aller abgeschlossenen Ereignisse muss innerhalb von fünf
+Sekunden durch einen zweiten Druck bestätigt werden.
 
 ## Panels und Meldeschlitze
 
@@ -78,14 +112,16 @@ inaktive, gegangene und leere Plätze werden ausgeblendet.
 Globale Panels sind dauerhaft angelegte Meldetafeln für Spiel-, System-,
 Provider- und eigene Meldungen.
 
-- Mit **+ PANEL** unter **OPTIONEN** ein neues Panel anlegen.
-- Über das Zahnrad Name, Spaltenzahl, Filter, automatische Quellen und
-  Schlitzreihenfolge ändern.
+- Mit **+ PANEL** neben der globalen Panelleiste unter **MELDETAFEL** ein neues
+  Panel anlegen.
+- Über das benachbarte Zahnrad Name, Spaltenzahl, Filter, automatische Quellen
+  und Schlitzreihenfolge ändern.
 - Bekannte Meldungen gezielt in freie Schlitze aufnehmen und Plätze nach oben
   oder unten verschieben.
 - Neu entdeckte Meldungen, die zu einer automatischen Quelle oder einem Filter
   passen, werden angehängt, ohne vorhandene Plätze zu verschieben.
-- Panels können als eigene verschiebbare In-Game-Tafeln abgekoppelt werden.
+- Panels können als eigene verschiebbare In-Game-Tafeln abgekoppelt werden;
+  Einzelheiten stehen im folgenden Abschnitt.
 
 ### Objektpanels
 
@@ -101,6 +137,19 @@ das Objekt und öffnet seinen Inspector.
 
 Ein Doppelklick auf einen eigenen Meldeschlitz öffnet die zugehörige Regel
 direkt im Editor.
+
+### Abgekoppelte Panels
+
+Das gerade angezeigte HOME-, globale oder Objektpanel kann in ein eigenes
+natives Fenster abgekoppelt werden. Dieses Fenster zeigt denselben Panel- und
+Meldungszustand; es erzeugt keine zweite Meldung. Dasselbe Panel darf mehrfach
+geöffnet werden. Abgekoppelte Tafeln stellen höchstens fünf Spalten dar.
+
+Das Schließen einer abgekoppelten Tafel entfernt nur diese Ansicht. Panel,
+Schlitze und Meldungen bleiben erhalten. Position und Größe werden nicht
+gespeichert; eine neu abgekoppelte Ansicht beginnt an einer neuen
+Vorgabeposition. Das zugrunde liegende Panel wird weiterhin je Spielwelt
+gespeichert.
 
 ## Eigene Meldung erstellen
 
@@ -212,13 +261,16 @@ Meldungszustände.
 
 ## Eigene Meldungen bearbeiten, schließen und löschen
 
+- Der Meldungseditor ist ein eigenes, scrollbar aufgebautes natives Fenster.
+  Er kann geöffnet bleiben, während das Hauptfenster minimiert ist.
 - Ein Doppelklick auf einen eigenen Schlitz öffnet die Regel zum Bearbeiten.
 - Ist bereits ein anderer ungespeicherter Entwurf geöffnet, behält UNMA diesen
   bei und zeigt einen auffälligen Warnhinweis, statt ihn still zu überschreiben.
-- Beim Schließen eines Editors mit Entwurf stehen drei Möglichkeiten bereit:
+- Beim Schließen eines Editors mit Entwurf stehen vier Möglichkeiten bereit:
   - **SPEICHERN & SCHLIESSEN** speichert die Regel und schließt den Editor;
   - **MINIMIEREN** schließt das Fenster, behält den Entwurf aber für später;
   - **VERWERFEN** entfernt die ungespeicherten Änderungen.
+  - **ZURÜCK ZUM EDITOR** bricht das Schließen ab und kehrt zum Entwurf zurück.
 - **ENTWURF LEEREN** setzt den Editor ohne Speichern zurück.
 - Beim Bearbeiten einer vorhandenen eigenen Meldung kann sie mit
   **MELDUNG LÖSCHEN** und einem zweiten Druck zur Bestätigung entfernt werden.
@@ -255,7 +307,8 @@ Zustand. **NICHT LOGGEN · KOMPLETT IGNORIEREN** bleibt überall unsichtbar.
 Der Tab **SYSTEM** enthält die eingebaute Überwachung für Gesundheit, Nahrung
 und Arbeiter. Jede Systemmeldung kann aktiviert, vollständig bearbeitet oder
 auf ihre Werkvorgabe zurückgesetzt werden. Die Stufen enthalten Messwert,
-Operator, Schwelle, Alarmstufe, Farbe und Ton.
+Operator, Schwelle, Alarmstufe, Farbe und Ton. Das Zurücksetzen auf Werkvorgabe
+muss durch einen zweiten Druck bestätigt werden.
 
 Der Gesundheitswert des Spiels ist keine klassische 0–100-Prozent-Skala. `10`
 ist der neutrale Basiswert; ein gesundheitsbedingter Bevölkerungsverlust beginnt
@@ -274,29 +327,46 @@ Signale. Töne werden wiederholt, solange eine Meldung nicht quittiert ist.
 Eigene PCM-WAV- oder Ogg-Vorbis-Dateien kommen nach:
 
 ```text
-UNMA/Sounds/
+Mods/UNMA/Sounds/
 ```
 
-Nach dem Hinzufügen muss das Spiel neu gestartet werden. Es dürfen nur eigene
-oder entsprechend lizenzierte Audiodateien verwendet und weitergegeben werden.
+Nach dem Hinzufügen unter **OPTIONEN** die Tondateien neu einlesen. Nur wenn eine
+gültige Datei danach weiterhin fehlt, ist ein Neustart erforderlich. Es dürfen
+nur eigene oder entsprechend lizenzierte Audiodateien verwendet und
+weitergegeben werden.
 
-Ton, Lautstärke und automatische Quittierung beim Gehen lassen sich je
-bekannter Meldungsart einstellen. Eigene Regeln wählen diese Eigenschaften
-direkt im Editor.
+Ton und automatische Quittierung beim Gehen lassen sich je bekannter
+Meldungsart einstellen. Die Lautstärke ist eine globale Mod-Einstellung. Eigene
+Regeln wählen ihren Ton und ihr Quittierverhalten direkt im Editor.
 
 ## Optionen
 
-Der Tab **OPTIONEN** enthält globale UI- und Panel-Einstellungen.
+Die Seite **OPTIONEN** ist vollständig vertikal scrollbar. Den Mauszeiger über
+der Seite halten und mit dem Mausrad zu den unteren Bereichen wechseln, wenn
+das Fenster klein oder die Inhaltsskalierung groß ist.
 
-- Die gesamte UNMA-Oberfläche von 75 bis 200 Prozent skalieren.
-- Globale Panels anlegen und verwalten.
-- UNMA-Audio ein- oder ausschalten.
-- Alarmlautstärke ändern.
-- Eingebaute Systemüberwachung ein- oder ausschalten.
+- Die Inhalte von Hauptfenster, Editor und abgekoppelten Tafeln in
+  25-Prozent-Schritten von 75 bis 200 Prozent skalieren oder auf 100 Prozent
+  zurücksetzen. Native COI-Rahmen, Hauptnavigation und Launcher behalten die
+  vom Spiel vorgegebene UI-Skalierung.
+- Warn-, Kritisch- und Notfallfarbe bearbeiten und speichern.
+- Den Ordner für eigene Töne anzeigen und unterstützte WAV- und Ogg-Dateien
+  ohne Neustart neu einlesen.
+- Informationen zu Systemmeldungen, abgekoppelten Tafeln und Zustandsmodell
+  einsehen.
+- Provider-JSON, API-, Sprach- und Tondaten neu laden sowie
+  Integrationsdiagnosen prüfen.
+
+Globale Panels werden unter **MELDETAFEL** verwaltet; Alarmstufen werden unter
+**SYSTEM** bearbeitet. Audio-Aktivierung, Lautstärke, Prüfintervall und globale
+Systemüberwachung sind Mod-Einstellungen. Ihre Startvorgaben stehen in der
+folgenden Tabelle.
 
 UNMA verhindert, dass Klicks, Ziehen oder Mausradbewegungen innerhalb seiner
-sichtbaren Fenster gleichzeitig die Spielwelt im Hintergrund beeinflussen.
-Außerhalb der Rahmen bleiben Gebäudeauswahl, Kartenbewegung und Zoom frei.
+sichtbaren nativen Fenster gleichzeitig die Spielwelt im Hintergrund
+beeinflussen. Außerhalb der Fenster bleiben Gebäudeauswahl, Kartenbewegung und
+Zoom frei. Native Textfelder blockieren Spiel-Tastenkürzel nur, solange sie den
+Tastaturfokus besitzen.
 
 Die Startvorgaben in `config.json` lauten:
 
@@ -338,21 +408,30 @@ die Spielsimulation. Für den normalen Betrieb ist keine externe Anzeige nötig.
 
 ## Gespeicherte Daten und Entfernung
 
-UNMA speichert weltbezogene Daten in `unma-world-<GameId>.json`. Folgende
-Informationen überleben Speichern und Neuladen:
+UNMA speichert weltbezogene Daten in
+`Mods/UNMA/unma-world-<GameId>.json`. Diese Dateien sind nicht Bestandteil des
+Release-Archivs. Folgende Informationen überleben Speichern und Neuladen:
 
 - Paneldefinitionen und Schlitzreihenfolge;
 - eigene Regeln und verknüpfte Panels;
 - quittierte aktive Meldungen;
 - gegangene, aber noch nicht quittierte Meldungen;
 - abgeschlossene Verlaufsereignisse;
-- UI-Skalierung, Launcherposition und Fenstergrößen.
+- Messpulte, Instrumente, Quellen, Berechnungsarten und Anzeigeskalen;
+- angepasste Systemstufen sowie Vanilla-Verhaltens- und Tonregeln;
+- Inhaltsskalierung, Launcherposition sowie Größen von Hauptfenster und Editor.
 
 Ist eine Konfigurationsdatei beschädigt, legt UNMA eine Sicherung an und ersetzt
 sie durch sichere Vorgaben.
 
+Captain of Industry kann Positionen verschiebbarer nativer Fenster zusätzlich
+über sein eigenes Fenstersystem behalten. Vor einer Deinstallation den gesamten
+Ordner `Mods/UNMA` sichern, wenn die UNMA-Konfiguration später wiederhergestellt
+werden soll.
+
 UNMA kann aus einem vorhandenen Spielstand entfernt werden, da die Mod keine
-physischen Spiel-Entities hinzufügt. Die Mod nur bei geschlossenem Spiel
+physischen Spiel-Entities hinzufügt. Beim Löschen des Mod-Ordners werden jedoch
+auch UNMAs weltbezogene Dateien gelöscht. Die Mod nur bei geschlossenem Spiel
 entfernen.
 
 ## Messpult: mehrere Lager überwachen
@@ -360,8 +439,8 @@ entfernen.
 1. Öffne im Spiel den Inspector des ersten Lagers.
 2. Öffne UNMA mit **F8** und wechsle zu **MESSPULT**.
 3. Wähle **QUELLE AUS GEÖFFNETEM GEBÄUDE**.
-4. Wähle beispielsweise **Füllstand**, gib den Skalenbereich `0` bis `100`
-   an und schalte mit der Typ-Taste zum gewünschten Instrument.
+4. Wähle beispielsweise **Füllstand**, gib die Skalenwerte `VON` und `BIS` an,
+   öffne **TYP** und wähle das Instrument aus der scrollbaren Vorschaugalerie.
 5. Wähle **INSTRUMENT EINBAUEN** und wiederhole die Schritte für weitere
    Kohlelager.
 
@@ -371,10 +450,11 @@ verschiebt UNMA seine Instrumente auf ein verbleibendes Panel, statt sie zu
 löschen.
 
 Der kleine Pfeil öffnet die erste Quelle; das **X** baut nur das Instrument
-aus. Mit **MELD.** entsteht eine Alarmregel direkt für diesen – auch
-berechneten – Messwert. Der Editor zeigt dabei
-**VERKNÜPFTE WERTE: Schildname** als Quelle. Über die Wertauswahl können auch
-weitere Instrumente desselben Messpults als Bedingungen ergänzt werden.
+aus. Hängt ein offener Entwurf oder eine gespeicherte Meldung davon ab, muss
+diese zuerst abgeschlossen oder gelöscht werden. Mit **MELD.** entsteht eine
+Alarmregel direkt für diesen – auch berechneten – Messwert. Der Editor zeigt
+dabei **VERKNÜPFTE WERTE: Schildname** als Quelle. Über die Wertauswahl können
+auch weitere Instrumente desselben Messpults als Bedingungen ergänzt werden.
 **INSTRUMENT** ist dafür der dritte Quellenbutton neben Gebäudeauswahl und
 globalen Variablen. Jede Instrumentmeldung besitzt eine eigene Zielauswahl:
 Ein oder mehrere Meldungspanels können gewählt werden, wobei mindestens eines
@@ -385,15 +465,20 @@ Jahre, ein Jahrhundert oder die gesamte noch gespeicherte Laufzeit. Der
 Schreiber läuft von links nach rechts; neue Werte
 werden nicht in den vorhandenen Ausschnitt zusammengedrückt.
 
-Über **QUELLE HINZUFÜGEN** können weitere geöffnete Gebäude mit derselben
-Messgröße in ein Instrument aufgenommen werden. Als Berechnung stehen
-**EINZEL**, **SUMME**, **MITTEL**, **MIN** und **MAX** bereit. In der zugehörigen
-Meldung kann entweder **WERT**, **RÜCKGANG**, **ZUNAHME** oder **HALTEN**
-gewählt werden. Rückgang und Zunahme arbeiten wahlweise mit Betrag oder
-Prozent. HALTEN fordert, dass Operator und Sollwert während des kompletten
-Zeitraums erfüllt bleiben. Zeiträume werden in Spieltagen, -monaten, -jahren,
-Jahrzehnten oder Jahrhunderten angegeben und berücksichtigen Pause sowie
-Spielgeschwindigkeit. Eine einzige Verletzung startet HALTEN neu.
+Instrumentdefinitionen und Panelaufteilung werden je Spielwelt gespeichert.
+Die Messproben des Schreiberarchivs existieren nur während der laufenden
+Sitzung und beginnen nach erneutem Laden der Welt von vorn.
+
+Über **+ GEÖFFNETES GEBÄUDE MIT GLEICHEM MESSWERT** können weitere geöffnete
+Gebäude mit derselben Messgröße in ein Instrument aufgenommen werden. Als
+Berechnung stehen **EINZEL**, **SUMME**, **MITTEL**, **MIN** und **MAX** bereit.
+In der zugehörigen Meldung kann entweder **WERT**, **RÜCKGANG**, **ZUNAHME**
+oder **HALTEN** gewählt werden. Rückgang und Zunahme arbeiten wahlweise mit
+Betrag oder Prozent. HALTEN fordert, dass Operator und Sollwert während des
+kompletten Zeitraums erfüllt bleiben. Zeiträume werden in Spieltagen,
+Spielmonaten, Spieljahren, Jahrzehnten oder Jahrhunderten angegeben und
+berücksichtigen Pause sowie Spielgeschwindigkeit. Eine einzige Verletzung
+startet HALTEN neu.
 
 Profilanzeigen eignen sich besonders für lange Reihen. CRT und
 Papierschreiber zeigen zusätzlich einen kontinuierlich verbundenen
@@ -402,9 +487,22 @@ Kurzzeittrend.
 ## Fehlerbehebung
 
 - **UNMA wird nicht geladen:** Prüfen, ob UNMA und MultiLangLib installiert,
-  aktiviert und mit Captain of Industry 0.8.6c kompatibel sind.
+  aktiviert und mit Captain of Industry 0.8.6c kompatibel sind. Außerdem muss
+  der Pfad `Mods/UNMA/manifest.json` statt
+  `Mods/UNMA/UNMA/manifest.json` lauten.
 - **Der Launcher fehlt:** **F8** drücken. Bei geöffnetem Hauptfenster ist der
-  Launcher absichtlich ausgeblendet.
+  Launcher absichtlich ausgeblendet. Er erscheint außerdem nur in einer
+  geladenen Welt und außerhalb unterdrückender Spielmenüs.
+- **Ein Spielfenster überdeckt UNMA:** Das ist die normale native
+  Fensterreihenfolge. Das gewünschte UNMA-Fenster anklicken, um Rahmen und
+  Inhalt gemeinsam nach vorn zu holen, oder die native COI-Pin-Funktion nutzen.
+- **Nur der UNMA-Inhalt bleibt über einem Spielfenster, während sein Rahmen
+  dahinterliegt:** Version 0.9.18 hat dieses alte Misch-Layer-Verhalten
+  entfernt. Das Spiel schließen, eine doppelte `Mods/UNMA`-Installation
+  ausschließen, die DLL aktualisieren und neu starten.
+- **Der untere Teil von OPTIONEN fehlt:** Mit dem Mauszeiger über der Seite
+  scrollen, das Fenster vergrößern oder die Inhaltsskalierung vorübergehend
+  verkleinern.
 - **Eine Meldung fehlt in HOME:** HOME zeigt nur aktuell aktive Meldungen.
   Außerdem unter **MELDUNGSOPTIONEN** prüfen, ob sie ausgeblendet oder komplett
   ignoriert wird.
@@ -412,8 +510,6 @@ Kurzzeittrend.
   erst zur Laufzeit entdeckt. Im passenden Objektpanel werden registrierte
   potenzielle Meldungen bereits vor dem Auftreten angezeigt, sofern das Spiel
   sie zur Verfügung stellt.
-- **Die Auswahl globaler Variablen schließt sich sofort:** Auf UNMA 0.9.11 oder
-  neuer aktualisieren.
 - **Ein Produktmesswert fehlt:** Das Objekt das Produkt einmal verarbeiten
   lassen und danach die Quellauswahl neu übernehmen.
 - **Eine Bedingung zeigt eine fehlende Quelle:** Das Objekt wurde möglicherweise
@@ -421,8 +517,9 @@ Kurzzeittrend.
   verfügbar.
 - **Eine Prozentregel löst nie aus:** Prüfen, ob der Bezugswert vorhanden und
   größer als null ist.
-- **Ein eigener Ton fehlt:** Dateiformat und Ablageort prüfen und das Spiel neu
-  starten.
+- **Ein eigener Ton fehlt:** Dateiformat und Ablageort prüfen, unter
+  **OPTIONEN** die Tondateien neu einlesen und erst danach gegebenenfalls das
+  Spiel neu starten.
 - **Ein Entwurf wurde nicht ersetzt:** Das ist beabsichtigt. Den bestehenden
   Entwurf zuerst speichern, verwerfen oder leeren.
 
@@ -434,8 +531,9 @@ Kurzzeittrend.
   Produkte möglicherweise erst an, nachdem eines vorhanden war.
 - Transportkapazität beschreibt den momentanen Inhaltsraum, nicht den Durchsatz
   pro Zeit.
-- Abgekoppelte Panels bleiben innerhalb der Spieloberfläche. Native Fenster auf
-  weiteren Monitoren erfordern eine separate Begleitanwendung.
+- Abgekoppelte Panels bleiben innerhalb der Spieloberfläche. Eigene
+  Betriebssystemfenster auf weiteren Monitoren erfordern eine separate
+  Begleitanwendung.
 
 ## Links
 

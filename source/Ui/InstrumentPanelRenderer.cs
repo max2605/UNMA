@@ -104,7 +104,7 @@ internal static class InstrumentPanelRenderer
             wordWrap = false,
         };
         titleStyle.normal.textColor = Cream;
-        GUI.Label(titleRect, definition.Title, titleStyle);
+        NativeGUI.Label(titleRect, definition.Title, titleStyle);
 
         var faceTop = reserveActionBar ? 56f : 28f;
         var face = new Rect(
@@ -122,7 +122,7 @@ internal static class InstrumentPanelRenderer
                 clipping = TextClipping.Clip,
             };
             failureStyle.normal.textColor = Red;
-            GUI.Label(
+            NativeGUI.Label(
                 face,
                 UnmaText.Get(
                     "ui.instrument.source_unavailable",
@@ -170,7 +170,7 @@ internal static class InstrumentPanelRenderer
             wordWrap = false,
         };
         sourceStyle.normal.textColor = CoiUiPalette.Text;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(rect.x + 8f, rect.yMax - 29f, rect.width - 16f, 22f),
             definition.EntityTitle + " · " + definition.MetricLabel,
             sourceStyle);
@@ -218,7 +218,7 @@ internal static class InstrumentPanelRenderer
         var headerLabel = string.IsNullOrWhiteSpace(definition.Title)
             ? definition.MetricLabel
             : definition.Title;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(header.x + 16f, header.y, header.width * 0.70f - 16f, header.height),
             headerLabel,
             archiveTitleStyle);
@@ -231,7 +231,7 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         rangeStyle.normal.textColor = CoiUiPalette.Yellow;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(header.x + header.width * 0.70f, header.y, header.width * 0.30f - 16f, header.height),
             string.IsNullOrWhiteSpace(rangeLabel)
                 ? UnmaText.Get("ui.recorder.full_history", "FULL HISTORY")
@@ -278,7 +278,7 @@ internal static class InstrumentPanelRenderer
                 clipping = TextClipping.Clip,
             };
             unavailableStyle.normal.textColor = Red;
-            GUI.Label(
+            NativeGUI.Label(
                 chart,
                 UnmaText.Get(
                     "ui.instrument.source_unavailable",
@@ -288,27 +288,23 @@ internal static class InstrumentPanelRenderer
         else if (normalizedSamples is RecorderArchiveTrace archiveTrace &&
             archiveTrace.Count > 0)
         {
-            if (Event.current == null ||
-                Event.current.type == EventType.Repaint)
-            {
-                DrawArchiveTrace(
-                    plot,
-                    archiveTrace,
-                    new Color(0.65f, 0.08f, 0.05f, 1f));
+            DrawArchiveTrace(
+                plot,
+                archiveTrace,
+                new Color(0.65f, 0.08f, 0.05f, 1f));
 
-                var last = Mathf.Clamp01(
-                    archiveTrace[archiveTrace.Count - 1]);
-                var markerCenter = new Vector2(
-                    plot.xMax,
-                    plot.yMax - last * plot.height);
-                Fill(
-                    new Rect(
-                        markerCenter.x - 4f,
-                        markerCenter.y - 4f,
-                        8f,
-                        8f),
-                    CoiUiPalette.Orange);
-            }
+            var last = Mathf.Clamp01(
+                archiveTrace[archiveTrace.Count - 1]);
+            var markerCenter = new Vector2(
+                plot.xMax,
+                plot.yMax - last * plot.height);
+            Fill(
+                new Rect(
+                    markerCenter.x - 4f,
+                    markerCenter.y - 4f,
+                    8f,
+                    8f),
+                CoiUiPalette.Orange);
         }
         else if (normalizedSamples != null && normalizedSamples.Count >= 2)
         {
@@ -332,7 +328,7 @@ internal static class InstrumentPanelRenderer
                 clipping = TextClipping.Clip,
             };
             emptyStyle.normal.textColor = new Color(0.15f, 0.16f, 0.15f, 0.85f);
-            GUI.Label(
+            NativeGUI.Label(
                 chart,
                 UnmaText.Get("ui.recorder.no_history", "NO HISTORY YET"),
                 emptyStyle);
@@ -346,12 +342,12 @@ internal static class InstrumentPanelRenderer
         };
         paperLabelStyle.normal.textColor = new Color(0.10f, 0.11f, 0.10f, 0.92f);
         paperLabelStyle.alignment = TextAnchor.UpperLeft;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(chart.x + 7f, chart.y + 4f, 140f, 20f),
             UnmaText.Get("ui.recorder.oldest_sample", "OLDEST SAMPLE"),
             paperLabelStyle);
         paperLabelStyle.alignment = TextAnchor.UpperRight;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(chart.xMax - 147f, chart.y + 4f, 140f, 20f),
             UnmaText.Get("ui.common.now", "NOW"),
             paperLabelStyle);
@@ -405,7 +401,7 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         captionStyle.normal.textColor = CoiUiPalette.Text;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(rect.x + 12f, rect.y, rect.width * 0.34f, rect.height),
             caption,
             captionStyle);
@@ -418,7 +414,7 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         valueStyle.normal.textColor = valueColor ?? CoiUiPalette.TextBright;
-        GUI.Label(
+        NativeGUI.Label(
             new Rect(rect.x + rect.width * 0.31f, rect.y, rect.width * 0.69f - 12f, rect.height),
             hasValue
                 ? FormatValue(value) + (string.IsNullOrWhiteSpace(unit)
@@ -508,12 +504,12 @@ internal static class InstrumentPanelRenderer
             {
                 var tube = new Rect(start + i * width + 2f, rect.y + 10f, width - 4f, rect.height - 20f);
                 Fill(tube, new Color(0.10f, 0.055f, 0.025f, 1f));
-                GUI.Label(tube, text[i].ToString(), displayStyle);
+                NativeGUI.Label(tube, text[i].ToString(), displayStyle);
             }
         }
         else
         {
-            GUI.Label(new Rect(rect.x + 5f, rect.y + 4f, rect.width - 10f, rect.height - 8f), text, displayStyle);
+            NativeGUI.Label(new Rect(rect.x + 5f, rect.y + 4f, rect.width - 10f, rect.height - 8f), text, displayStyle);
         }
         var unitStyle = new GUIStyle(labelStyle)
         {
@@ -522,7 +518,7 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         unitStyle.normal.textColor = color;
-        GUI.Label(Inset(rect, 7f), definition.Unit, unitStyle);
+        NativeGUI.Label(Inset(rect, 7f), definition.Unit, unitStyle);
     }
 
     private static void DrawCrt(
@@ -548,7 +544,7 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         valueStyle.normal.textColor = phosphor;
-        GUI.Label(Inset(rect, 7f), FormatValue(value) + " " + definition.Unit, valueStyle);
+        NativeGUI.Label(Inset(rect, 7f), FormatValue(value) + " " + definition.Unit, valueStyle);
     }
 
     private static void DrawRecorder(
@@ -597,7 +593,7 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         style.normal.textColor = color;
-        GUI.Label(Inset(rect, 4f), FormatValue(value) + " " + definition.Unit, style);
+        NativeGUI.Label(Inset(rect, 4f), FormatValue(value) + " " + definition.Unit, style);
     }
 
     private static void DrawArchiveTrace(
@@ -649,18 +645,16 @@ internal static class InstrumentPanelRenderer
 
     private static void Fill(Rect rect, Color color)
     {
-        var previous = GUI.color;
-        GUI.color = color;
-        GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = previous;
+        var previous = NativeGUI.color;
+        NativeGUI.color = color;
+        NativeGUI.DrawTexture(rect, Texture2D.whiteTexture);
+        NativeGUI.color = previous;
     }
 
     private static void Line(Vector2 start, Vector2 end, Color color, float width)
     {
-        // Rotating GUI.matrix around coordinates inside a GUILayout scroll
-        // view escapes Unity's clip stack and leaves needle/trace fragments
-        // elsewhere on screen. A short DDA stroke stays in the active clip
-        // rectangle and also produces an uninterrupted recorder line.
+        // A short DDA stroke stays inside the UI Toolkit canvas clip and also
+        // produces an uninterrupted recorder line.
         var distance = Vector2.Distance(start, end);
         if (distance <= 0.01f)
         {

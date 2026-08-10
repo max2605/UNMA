@@ -7,10 +7,9 @@ using UnityEngine;
 namespace UNMA.Ui;
 
 /// <summary>
-/// Bridges the IMGUI based UNMA windows into Captain of Industry's input
-/// controller chain. IMGUI consumes its own events, but it is not represented
-/// by Unity's EventSystem and would otherwise let world clicks and camera
-/// scrolling pass through.
+/// Bridges UNMA's native UI Toolkit windows into Captain of Industry's input
+/// controller chain so world clicks and camera scrolling cannot pass through
+/// a visible UNMA surface.
 /// </summary>
 public sealed class UnmaInputBlocker : IUnityInputController, IDisposable
 {
@@ -101,7 +100,7 @@ public sealed class UnmaInputBlocker : IUnityInputController, IDisposable
     }
 
     /// <summary>
-    /// Blocks game shortcuts while an IMGUI text field owns keyboard focus.
+    /// Blocks game shortcuts while a native text field owns keyboard focus.
     /// The flag is deliberately independent of mere pointer hover so normal
     /// game shortcuts remain available whenever the user is not typing.
     /// </summary>
@@ -129,7 +128,7 @@ public sealed class UnmaInputBlocker : IUnityInputController, IDisposable
 
     /// <summary>
     /// Returns true for pointer activity over an UNMA surface and for keyboard
-    /// activity while an IMGUI text field is focused. Mere hover does not
+    /// activity while a native text field is focused. Mere hover does not
     /// consume shortcuts. A press that starts inside UNMA remains captured
     /// through drag and release even if the pointer leaves the window.
     /// </summary>
@@ -227,7 +226,7 @@ public sealed class UnmaInputBlocker : IUnityInputController, IDisposable
     {
         // Input.anyKey also includes mouse buttons. Exclude them so the first
         // click outside a text field can both reach the game and release the
-        // IMGUI focus instead of forcing the user to click twice.
+        // text focus instead of forcing the user to click twice.
         return Input.anyKey && !IsTrackedMouseButtonHeld();
     }
 

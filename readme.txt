@@ -1,6 +1,6 @@
 UNMA – Universal Notification and Monitoring Annunciator
 
-Version: 0.9.17
+Version: 0.9.18
 Captain of Industry: 0.8.6c
 Required dependency: MultiLangLib 0.1.0 or newer
 

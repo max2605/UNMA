@@ -15,10 +15,9 @@ using ResizeLabel = UnityEngine.UIElements.Label;
 namespace UNMA.Ui;
 
 /// <summary>
-/// Provides a native Captain of Industry frame and a precisely aligned body
-/// viewport for UNMA's established IMGUI controls. The game owns the title
-/// bar, movement, pinning, navigation, scaling and window input while the
-/// feature-rich UNMA views are rendered as a transparent overlay.
+/// Provides a native Captain of Industry window whose complete body lives in
+/// the same runtime UI Toolkit hierarchy as the frame, so COI owns one
+/// coherent clipping, input and stacking surface for frame and content.
 /// </summary>
 internal sealed class UnmaNativeWindowShell : IDisposable
 {
@@ -91,9 +90,6 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             return Frame.WorldBound.Contains(panelPoint);
         }
 
-        public bool ContainsResizeHandlePoint(Vector2 panelPoint) =>
-            m_resizeHandle.worldBound.Contains(panelPoint);
-
         public void ConfigureResize(
             Action<Vector2> resizeDelta,
             Action resizeCompleted)
@@ -120,10 +116,10 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         {
             RootElement.BringToFront();
             var panelPoint = (Vector2)evt.position;
-            var isImGuiBodyPoint =
+            var isNativeBodyPoint =
                 m_isBodyPoint?.Invoke(panelPoint) == true &&
                 !m_resizeHandle.worldBound.Contains(panelPoint);
-            m_onActivated?.Invoke(isImGuiBodyPoint);
+            m_onActivated?.Invoke(isNativeBodyPoint);
         }
 
         private void HandleResizePointerMove(PointerMoveEvent evt)
@@ -184,6 +180,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     private readonly Action m_onMinimized;
     private readonly Action<float, float> m_onResized;
     private readonly UnmaWindow m_window;
+    private readonly NativeUiSurface m_bodySurface;
     private readonly VisualElement m_bodyElement;
     private readonly VisualElement m_rootElement;
     private readonly VisualElement m_navigationElement;
@@ -241,11 +238,8 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         var bodyWidth = windowWidth - HorizontalBodyInset;
         var bodyHeight = windowHeight - VerticalChromeInset;
 
-        m_bodyElement = new VisualElement
-        {
-            name = "UNMA.NativeBody",
-            pickingMode = PickingMode.Ignore,
-        };
+        m_bodySurface = new NativeUiSurface("UNMA.NativeBody");
+        m_bodyElement = m_bodySurface.RootElement;
         m_bodyElement.style.width = bodyWidth;
         m_bodyElement.style.height = bodyHeight;
         m_bodyElement.style.flexGrow = 1f;
@@ -290,6 +284,20 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     }
 
     public bool IsOpen => !m_disposed && m_window.IsOpen;
+
+    public bool IsBodyKeyboardCaptured =>
+        !m_disposed &&
+        !m_suppressed &&
+        m_window.IsOpen &&
+        m_bodySurface.HasTextInputFocus;
+
+    public void ClearBodyFocus()
+    {
+        if (!m_disposed)
+        {
+            m_bodySurface.ClearFocus();
+        }
+    }
 
     /// <summary>
     /// Current logical window dimensions. Callers can retain this value before
@@ -342,6 +350,14 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         }
     }
 
+    public void RenderBody(Action drawBody, float scale)
+    {
+        if (!m_disposed && !m_suppressed && m_window.IsOpen)
+        {
+            m_bodySurface.Render(drawBody, scale);
+        }
+    }
+
     public bool ContainsPointer(Vector2 screenPointTopLeft)
     {
         if (!IsOpen || m_suppressed)
@@ -359,18 +375,6 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             panel,
             screenPointTopLeft);
         return m_window.ContainsInteractivePoint(panelPoint);
-    }
-
-    public bool IsPointerOverResizeHandle(Vector2 screenPointTopLeft)
-    {
-        if (!IsOpen || m_suppressed || m_window.RootElement.panel == null)
-        {
-            return false;
-        }
-        var panelPoint = RuntimePanelUtils.ScreenToPanel(
-            m_window.RootElement.panel,
-            screenPointTopLeft);
-        return m_window.ContainsResizeHandlePoint(panelPoint);
     }
 
     public void SetSuppressed(bool suppressed)
@@ -395,46 +399,6 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         }
     }
 
-    public bool TryGetBodyScreenRect(out Rect screenRect)
-    {
-        screenRect = default;
-        if (!IsOpen || m_suppressed || m_bodyElement.panel == null)
-        {
-            return false;
-        }
-
-        var bounds = m_bodyElement.worldBound;
-        var panel = m_bodyElement.panel;
-        var panelOrigin = RuntimePanelUtils.ScreenToPanel(
-            panel,
-            Vector2.zero);
-        var panelScreenX = RuntimePanelUtils.ScreenToPanel(
-            panel,
-            new Vector2(Screen.width, 0f));
-        var panelScreenY = RuntimePanelUtils.ScreenToPanel(
-            panel,
-            new Vector2(0f, Screen.height));
-        var panelWidth = panelScreenX.x - panelOrigin.x;
-        var panelHeight = panelScreenY.y - panelOrigin.y;
-        if (!IsFinitePositive(panelWidth) ||
-            !IsFinitePositive(panelHeight) ||
-            !IsFinitePositive(bounds.width) ||
-            !IsFinitePositive(bounds.height))
-        {
-            return false;
-        }
-
-        var scaleX = Screen.width / panelWidth;
-        var scaleY = Screen.height / panelHeight;
-        screenRect = new Rect(
-            (bounds.x - panelOrigin.x) * scaleX,
-            (bounds.y - panelOrigin.y) * scaleY,
-            bounds.width * scaleX,
-            bounds.height * scaleY);
-        return IsFinitePositive(screenRect.width) &&
-               IsFinitePositive(screenRect.height);
-    }
-
     public void Dispose()
     {
         if (m_disposed)
@@ -443,6 +407,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         }
 
         m_disposed = true;
+        m_bodySurface.Dispose();
         m_window.OnCloseStart -= HandleWindowClose;
         m_window.RemoveFromHierarchy();
     }

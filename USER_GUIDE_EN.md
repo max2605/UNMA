@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.17** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.18** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -18,30 +18,59 @@ Required dependency: **MultiLangLib 0.1.0 or newer**.
 4. Enable UNMA in the game's mod menu.
 5. Load or start a game.
 
-To update UNMA, close the game and replace the existing `UNMA` mod folder with
-the folder from the new archive. World-specific panels, rules, alarm states, and
-acknowledgements are stored separately and are not lost when the mod files are
-replaced.
+Before updating UNMA, close the game and back up the existing `Mods/UNMA`
+folder. World-specific data is stored there as `unma-world-<GameId>.json` plus
+backup files, and user-added sounds may be stored under `Sounds/`. Extract the
+new `UNMA` folder over the existing folder and allow release files to be
+replaced. The release archive contains neither world data nor user-added
+sounds. Do not delete the complete old folder first unless you have backed up
+and will restore those files.
 
 UNMA can be added to or removed from an existing save.
 
 ## Quick start
 
 1. Press **F8** to open or close the main UNMA window.
-2. Alternatively, use the compact launcher at the left edge of the screen.
+2. Alternatively, use the floating launcher, which starts near the left edge.
 3. Open **ANNUNCIATOR** to see HOME and your permanent panels.
 4. Press **MASTER QUIT / ACKNOWLEDGE** to acknowledge all new and
    cleared-but-unacknowledged alarms and silence their sounds.
 5. Open **HISTORY** to inspect previous alarm events.
 
-The launcher is shown only while the main window is closed. Drag its arrow
-handle vertically to move it away from other HUD elements. Its position is
-saved per world.
+### Launcher and native windows
 
-The main window, alarm editor, and detached panels use Captain of Industry's
-native frames. They can be moved, pinned, and resized from the lower-right
-handle like game windows. The main window can be collapsed with **MINIMIZE**
-or the native close button; either action restores the compact launcher.
+The launcher is shown only during active gameplay and while the main window is
+closed. Its `+N` suffix is the number of unacknowledged alarms. Drag the narrow
+arrow handle in any direction to move it away from other HUD elements. UNMA
+keeps it inside the visible viewport and saves its position per world.
+
+The launcher, main window, alarm editor, detached panels, controls, and
+instrument drawings all belong to Captain of Industry's native game-UI
+hierarchy. Clicking a UNMA window brings its frame and content to the front as
+one unit. A game window activated afterwards can cover it normally; there is no
+separate UNMA overlay that remains above the game window.
+
+The main window, editor, and detached panels can be moved, pinned, and resized
+from the lower-right handle like other game windows. **MINIMIZE**, the native
+close button, and **F8** close only the main window and restore the launcher;
+an open editor or detached panel remains independent. Window sizes are kept
+inside the current viewport.
+
+Pointer and mouse-wheel input inside a visible UNMA window stays with that
+window instead of reaching the world behind it. While a UNMA text field is
+active, keyboard input goes to that field. Moving focus away from all UNMA text
+fields or closing the focused window releases the keyboard again.
+
+### Main window tabs
+
+| Tab | Purpose |
+| --- | --- |
+| **ANNUNCIATOR** | HOME, global panels, object panels, acknowledgement, and new alarm slots |
+| **INSTRUMENTS** | Live gauges, calculated values, paper recorders, and instrument alarms |
+| **HISTORY** | Completed and current alarm events |
+| **SYSTEM** | Built-in health, food, and worker monitoring |
+| **NOTIFICATION OPTIONS** | Per-notification sound, visibility, logging, and Vanilla behavior |
+| **OPTIONS** | Content scale, alarm colors, sound rescan, and integration diagnostics |
 
 ## Alarm states
 
@@ -58,7 +87,8 @@ Acknowledging an active alarm does not clear its active color. The color
 remains until the monitored condition returns to normal.
 
 Completed `KGQ` history entries remain stored until you delete them. Only
-completed entries can be deleted.
+completed entries can be deleted. Deleting all completed events requires a
+second press within five seconds.
 
 ## Panels and alarm slots
 
@@ -73,13 +103,14 @@ cleared, and empty slots are hidden from HOME.
 Global panels are permanent annunciator boards that can collect game,
 system, provider, and custom alarms.
 
-- Create a panel with **+ PANEL** in **OPTIONS**.
-- Use the gear button to change its name, column count, filters, automatic
-  sources, and slot order.
+- Create a panel with **+ PANEL** beside the global-panel tabs in
+  **ANNUNCIATOR**.
+- Use the adjacent gear button to change its name, column count, filters,
+  automatic sources, and slot order.
 - Add known alarms to free slots and move slots up or down.
 - Newly discovered alarms that match an automatic source or filter are added
   without moving existing slots.
-- Detach a panel to display it as a separate movable in-game board.
+- Detach a panel to display it as a separate movable in-game board; see below.
 
 ### Object panels
 
@@ -94,6 +125,18 @@ The small arrow on an object-bound alarm slot centers the camera on its object
 and opens the corresponding inspector.
 
 Double-click a custom alarm slot to open its rule directly in the editor.
+
+### Detached panels
+
+The currently displayed HOME, global, or object panel can be detached into an
+independent native window. It shows the same panel state rather than creating a
+second alarm state. You may open more than one view of the same panel; detached
+boards display at most five columns.
+
+Closing a detached window removes only that view. It does not delete the panel,
+slots, or alarms. Detached window position and size are not persisted; a newly
+detached view starts at a new default position. The underlying panel remains
+saved per world.
 
 ## Creating a custom alarm
 
@@ -200,16 +243,19 @@ display slots, not duplicate alarm states.
 
 ## Editing, closing, and deleting custom alarms
 
+- The alarm editor is a separate, scrollable native window. It can remain open
+  while the main window is minimized.
 - Double-click a custom slot to edit its rule.
 - If another unsaved draft is already open, UNMA keeps the old draft and shows
   a prominent warning instead of silently replacing it.
-- Closing an editor that contains a draft offers three choices:
+- Closing an editor that contains a draft offers four choices:
   - **SAVE & CLOSE** saves the rule and closes the editor;
   - **MINIMIZE** closes the window but keeps the draft for later;
   - **DISCARD** removes the unsaved changes.
+  - **BACK TO EDITOR** cancels closing and returns to the draft.
 - Use **EMPTY DRAFT** to reset the editor without saving.
-- When editing an existing custom alarm, use **DELETE NOTIFICATION** and press
-  it a second time to confirm deletion.
+- When editing an existing custom alarm, use **DELETE ALARM** and press it a
+  second time to confirm deletion.
 
 ## Vanilla game notifications
 
@@ -243,7 +289,7 @@ invisible everywhere.
 The **SYSTEM** tab contains the built-in health, food, and worker monitoring.
 Each system alarm can be enabled, edited, or restored to its factory defaults.
 Its stages expose measured value, operator, threshold, severity, color, and
-sound.
+sound. Restoring factory defaults requires a second press for confirmation.
 
 The game's health value is not a conventional 0–100 percent scale. `10` is the
 neutral base value, and health-related population loss starts below `0`. UNMA
@@ -261,28 +307,43 @@ synthesized signals. Sounds repeat while an alarm is unacknowledged.
 To add a custom sound, copy a supported PCM WAV or Ogg Vorbis file to:
 
 ```text
-UNMA/Sounds/
+Mods/UNMA/Sounds/
 ```
 
-Restart the game after adding files. Use only audio you created or are licensed
+After adding files, use the re-read action in **OPTIONS**. Restart the game only
+if a valid file is still not listed. Use only audio you created or are licensed
 to use and redistribute.
 
-Sound, volume, and automatic acknowledgement on clear can be configured per
-known alarm type. Custom rules choose these properties directly in the editor.
+Sound and automatic acknowledgement on clear can be configured per known alarm
+type. Volume is a global mod setting. Custom rules choose their sound and
+acknowledgement behavior directly in the editor.
 
 ## Options
 
-The **OPTIONS** tab provides global UI and panel controls.
+The **OPTIONS** page is vertically scrollable. Keep the pointer over the page
+and use the mouse wheel to reach all entries in a small window or at a large
+content scale.
 
-- Scale the complete UNMA interface from 75 to 200 percent.
-- Create and manage global panels.
-- Enable or disable UNMA audio.
-- Adjust alarm volume.
-- Enable or disable built-in system monitoring.
+- Scale the content inside the main, editor, and detached windows from 75 to
+  200 percent in 25-percent steps, or reset it to 100 percent. Native COI
+  frames, navigation chrome, and the launcher continue to follow the game's
+  own UI scale.
+- Edit and save the Warning, Critical, and Emergency colors.
+- View the custom-sound directory and re-read supported WAV and Ogg files
+  without restarting the game.
+- Inspect information about system alarms, detached panels, the alarm state
+  model, and external integrations.
+- Reload provider JSON, API, language, and sound data and inspect integration
+  diagnostics.
 
-UNMA blocks clicks, drags, and mouse-wheel input inside the visible window
-frames from affecting the game world behind them. Outside those frames,
-building selection, camera movement, and zoom remain available.
+Global panels are managed in **ANNUNCIATOR**; alarm stages are edited in
+**SYSTEM**. Audio enablement, volume, polling interval, and built-in monitoring
+are mod settings whose startup defaults are listed below.
+
+UNMA blocks clicks, drags, and mouse-wheel input inside its visible native
+windows from affecting the game world behind them. Outside those windows,
+building selection, camera movement, and zoom remain available. Native text
+fields block game shortcuts only while they own keyboard focus.
 
 The startup defaults in `config.json` are:
 
@@ -322,35 +383,46 @@ game simulation. UNMA does not require an external display to operate.
 
 ## Saved data and removal
 
-UNMA stores world-specific data in `unma-world-<GameId>.json`. The following
-survive saving and reloading:
+UNMA stores world-specific data in
+`Mods/UNMA/unma-world-<GameId>.json`. These files are not part of a release
+archive. The following survive saving and reloading:
 
 - panel definitions and slot order;
 - custom rules and linked panels;
 - acknowledged active alarms;
 - cleared but unacknowledged alarms;
 - completed history events;
-- UI scale, launcher position, and window sizes.
+- instrument panels, instruments, sources, calculations, and display scales;
+- customized system-alarm stages plus Vanilla behavior and sound overrides;
+- content scale, launcher position, and main-window/editor sizes.
 
 If a configuration file is damaged, UNMA creates a backup and replaces it with
 safe defaults.
 
+Captain of Industry may separately retain the positions of movable native
+windows through its own window system. Back up the entire `Mods/UNMA` folder
+before uninstalling if you may want to restore your UNMA setup later.
+
 UNMA can be removed from an existing save because it does not add physical game
-entities. Remove the mod only while the game is closed.
+entities. Deleting the mod folder also deletes UNMA's world files, so retain the
+backup if you may reinstall later. Remove the mod only while the game is closed.
 
 ## Instrument panel: monitoring multiple storages
 
 1. Open the first storage inspector in the game.
 2. Open UNMA with **F8** and select **INSTRUMENTS**.
-3. Choose **USE SOURCE FROM OPEN BUILDING**.
-4. Select a metric such as **Fill level**, set the scale to `0`–`100`, and
-   cycle the type button to the desired instrument.
+3. Choose **SOURCE FROM OPEN BUILDING**.
+4. Select a metric such as **Fill level**, enter the `FROM` and `TO` scale
+   values, open **TYPE**, and choose an instrument from the scrollable preview
+   gallery.
 5. Install the instrument and repeat for the other coal storages.
 
 The small arrow opens the first source and the **X** removes only the
-instrument. **ALARM** creates an alarm rule for that instrument, including a
-calculated value. The editor exposes it as **LINKED VALUES: label** and allows
-other values from the same instrument panel to be added as conditions.
+instrument. If an open draft or saved alarm depends on it, UNMA asks you to
+finish or delete that alarm first. **ALARM** creates an alarm rule for that
+instrument, including a calculated value. The editor exposes it as
+**LINKED VALUES: label** and allows other values from the same instrument panel
+to be added as conditions.
 **INSTRUMENT** is the permanent third source button beside game selection and
 global variables. Every instrument alarm independently selects one or more
 destination panels, and at least one destination must remain selected. A paper
@@ -360,7 +432,12 @@ or all retained samples. The recorder
 advances from left to right without compressing every new value into the
 existing picture.
 
-Use **ADD SOURCE** to add more open buildings that expose the same metric.
+Instrument definitions and panel layouts are saved per world. Recorder samples
+exist only for the current running session and begin again after reloading the
+world.
+
+Use **+ OPEN BUILDING WITH SAME METRIC** to add more open buildings that expose
+the same metric.
 One instrument can display a single value, sum, average, minimum, or maximum.
 Its alarm supports **VALUE**, **DECREASE**, **INCREASE**, and **SUSTAIN**.
 Changes can use an absolute amount or percentage. SUSTAIN requires the chosen
@@ -370,31 +447,40 @@ speed. One failed comparison restarts a sustained interval.
 
 Edgewise meters remain ideal for dense rows; CRTs and paper recorders also
 show a continuously connected short-term trace. Additional named instrument
-panels can be created with **+ PANEL**, and the type selector opens a
-scrollable preview gallery.
+panels can be created with **+ PANEL**. Removing an instrument panel moves its
+instruments to a remaining panel instead of deleting them. The type selector
+opens a scrollable preview gallery.
 
 ## Troubleshooting
 
 - **UNMA does not load:** Confirm that both UNMA and MultiLangLib are installed,
-  enabled, and compatible with Captain of Industry 0.8.6c.
+  enabled, and compatible with Captain of Industry 0.8.6c. Also verify that the
+  path is `Mods/UNMA/manifest.json`, not `Mods/UNMA/UNMA/manifest.json`.
 - **The launcher is missing:** Press **F8**. The launcher is hidden while the
-  main window is open.
+  main window is open and while a game menu suppresses gameplay UI.
+- **A game window covers UNMA:** This is normal native window ordering. Click
+  the desired UNMA window to bring its complete frame and content forward, or
+  pin it with the standard COI control.
+- **Only UNMA content remains above another window while its frame is behind:**
+  Version 0.9.18 removed that legacy split-layer behavior. Close the game,
+  verify that only one `Mods/UNMA` installation exists, update the DLL, and
+  restart.
+- **The bottom of OPTIONS is not visible:** Scroll while the pointer is over the
+  page, enlarge the window, or temporarily reduce the content scale.
 - **An alarm is missing from HOME:** HOME shows only currently active alarms.
   Also check whether the notification is hidden or completely ignored in
   **NOTIFICATION OPTIONS**.
 - **A known Vanilla notification is not listed:** Some types are discovered at
   runtime. Open the relevant object panel; registered potential notifications
   are displayed there before they become active when the game exposes them.
-- **The global-variable picker closes immediately:** Update to UNMA 0.9.11 or
-  newer.
 - **A product metric is missing:** Let the object handle that product once, then
   reopen or refresh its source selection.
 - **A condition shows a missing source:** The object may have been removed, its
   prototype may have changed, or a provider metric may no longer be available.
 - **A percentage rule never triggers:** Verify that its reference value exists
   and is greater than zero.
-- **A custom sound is missing:** Check the file format and location, then restart
-  the game.
+- **A custom sound is missing:** Check the file format and location, use the
+  re-read action in **OPTIONS**, and restart the game if it is still absent.
 - **A draft was not replaced:** This is intentional. Save, discard, or empty the
   existing draft before opening another rule.
 

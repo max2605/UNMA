@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.18 – 2026-08-10
+
+- Launcher, Hauptfenster, Meldungseditor, abgetrennte Panels, Formulare und
+  Instrumente werden vollständig in der nativen COI-UI-Hierarchie gerendert.
+- Die frühere IMGUI-Ebene und der transparente uGUI-Eingabeschutz wurden
+  entfernt. UNMA- und Vanilla-Fenster verwenden damit dieselbe vom Spiel
+  verwaltete Vordergrundreihenfolge.
+- Textfokus, UI-Skalierung und dynamische Listen bleiben auch mit mehreren
+  gleichzeitig geöffneten UNMA-Fenstern stabil.
+- Die Optionsseite ist scrollbar, sodass alle Einstellungen auch in kleinen
+  Fenstern und bei großer UI-Skalierung erreichbar bleiben.
+
 ## 0.9.17 – 2026-08-10
 
 - Instrumentmeldungen wählen ihre Zielpanels jetzt ausdrücklich im
