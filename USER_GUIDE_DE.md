@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.23** und
+Diese Anleitung gilt für **UNMA 0.9.24** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -547,14 +547,17 @@ auch weitere Instrumente desselben Messpults als Bedingungen ergänzt werden.
 globalen Variablen. Jede Instrumentmeldung besitzt eine eigene Zielauswahl:
 Ein oder mehrere Meldungspanels können gewählt werden, wobei mindestens eines
 ausgewählt bleiben muss. Es wird kein Panel mehr stillschweigend übernommen. Für
-Papierschreiber öffnet **ARCHIV** eine große
-Historienansicht für einen Spieltag, einen Spielmonat, ein Spieljahr, zehn
-Jahre, ein Jahrhundert oder die gesamte noch gespeicherte Laufzeit. Der
-Schreiber läuft von links nach rechts; neue Werte
-werden nicht in den vorhandenen Ausschnitt zusammengedrückt.
+Mit **HIST** öffnet jedes Instrument unabhängig von seinem Anzeigetyp eine
+große Historienansicht für einen Spieltag, einen Spielmonat, ein Spieljahr,
+zehn Jahre, ein Jahrhundert oder die gesamte noch gespeicherte Laufzeit. Das
+gewählte Fenster gilt gleichzeitig für Diagramm und Analyse. Angezeigt werden
+aktueller Wert, Minimum, Mittelwert, Maximum, lineare Rate pro Spielmonat und
+R². Bei einem belastbaren Trend folgt eine gerichtete ETA zur oberen oder
+unteren Skalenbegrenzung; zu wenige, stabile, unzuverlässige oder weiter als
+100 Spieljahre entfernte Verläufe werden ausdrücklich benannt.
 
 Instrumentdefinitionen und Panelaufteilung werden je Spielwelt gespeichert.
-Die Messproben des Schreiberarchivs existieren nur während der laufenden
+Die Messproben des Historians existieren nur während der laufenden
 Sitzung und beginnen nach erneutem Laden der Welt von vorn.
 
 Über **+ GEÖFFNETES GEBÄUDE MIT GLEICHEM MESSWERT** können weitere geöffnete

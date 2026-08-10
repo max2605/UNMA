@@ -223,8 +223,11 @@ Schreiber und CRTs führen eine kontinuierlich verbundene Kurve.
 
 Zur Verfügung stehen vertikale und horizontale Profilanzeigen,
 Rundinstrumente, rote und grüne Siebensegmentanzeigen, Nixie-Röhren,
-bernsteinfarbene und grüne CRT-Anzeigen sowie ein Papierschreiber. Sein
-**ARCHIV** öffnet eine große Historienansicht mit mehreren Zeitfenstern;
+bernsteinfarbene und grüne CRT-Anzeigen sowie ein Papierschreiber. **HIST**
+öffnet bei jedem Instrument eine große Historienansicht mit Spielzeitfenstern
+von einem Tag bis zur gesamten Sitzung. Neben aktuellem Wert, Minimum,
+Mittelwert und Maximum zeigt sie die lineare Rate pro Spielmonat, R² und bei
+belastbarem Trend die ETA zur oberen oder unteren Skalenbegrenzung;
 **MELD.** öffnet direkte und berechnete Messwerte als Quelle
 **VERKNÜPFTE WERTE: Schildname**. Weitere Werte desselben Messpults lassen sich
 als Bedingungen ergänzen. Der dritte Quellenbutton **INSTRUMENT** und eine

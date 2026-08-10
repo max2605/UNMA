@@ -17,6 +17,8 @@
              Link="Domain\AlarmHistoryQuery.cs" />
     <Compile Include="..\..\source\Domain\InstrumentValuePolicy.cs"
              Link="Domain\InstrumentValuePolicy.cs" />
+    <Compile Include="..\..\source\Domain\InstrumentForecastPolicy.cs"
+             Link="Domain\InstrumentForecastPolicy.cs" />
     <Compile Include="..\..\source\Domain\GameTimeWindowPolicy.cs"
              Link="Domain\GameTimeWindowPolicy.cs" />
     <Compile Include="..\..\source\Domain\GameTimeStampPolicy.cs"

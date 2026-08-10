@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.23** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.24** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -503,14 +503,16 @@ instrument, including a calculated value. The editor exposes it as
 to be added as conditions.
 **INSTRUMENT** is the permanent third source button beside game selection and
 global variables. Every instrument alarm independently selects one or more
-destination panels, and at least one destination must remain selected. A paper
-recorder's **ARCHIVE** action opens a large history
-view for one game day, one game month, one game year, ten years, one century,
-or all retained samples. The recorder
-advances from left to right without compressing every new value into the
-existing picture.
+destination panels, and at least one destination must remain selected.
+**HIST** opens the same large historian for every instrument type. It offers
+one game day, one game month, one game year, ten years, one century, or all
+retained samples, and applies the selected range to both chart and analysis.
+The footer shows current, minimum, average, maximum, linear rate per game
+month, and R-squared. A reliable rising or falling trend adds a directed ETA
+to the configured scale maximum or minimum; insufficient, stable, unreliable,
+and beyond-100-years results are stated explicitly.
 
-Instrument definitions and panel layouts are saved per world. Recorder samples
+Instrument definitions and panel layouts are saved per world. Historian samples
 exist only for the current running session and begin again after reloading the
 world.
 

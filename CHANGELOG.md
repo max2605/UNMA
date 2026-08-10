@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.24 – 2026-08-10
+
+- Jedes Instrument besitzt jetzt unabhängig vom Anzeigetyp einen gemeinsamen
+  **HIST**-Zugang. Die große Historienansicht verwendet Spielzeitfenster von
+  einem Tag bis zur gesamten sitzungsbasierten Laufzeit.
+- Der Historian zeigt aktuellen Wert, Minimum, Mittelwert und Maximum sowie
+  eine numerisch stabile lineare Rate pro Spielmonat und deren R²-Güte.
+- Bei einem belastbaren steigenden oder fallenden Trend berechnet UNMA eine
+  gerichtete ETA zur oberen beziehungsweise unteren Instrumentenskala. Wenige,
+  stabile, unzuverlässige und über 100 Jahre entfernte Verläufe werden klar
+  getrennt ausgewiesen.
+- Diagramm und Analyse verwenden denselben atomaren Laufzeit-Snapshot und
+  dasselbe inklusive Zeitfenster. Spielzeit-Rücksprünge beginnen eine neue
+  Historienepoche, statt Messpunkte aus einer zukünftigen Zeitleiste zu mischen.
+- Forecast-Ausfall, fehlende Quelle und unzureichende Daten bleiben getrennte
+  Zustände; Diagramm und aktueller Wert werden soweit möglich weiter angezeigt.
+
 ## 0.9.23 – 2026-08-10
 
 - Eigene Regeln können nach einer frei wählbaren aktiven Spielzeit einmalig auf

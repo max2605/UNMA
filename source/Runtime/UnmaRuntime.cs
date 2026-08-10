@@ -243,6 +243,8 @@ public sealed class UnmaRuntime : IDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<InstrumentValueSample>>
         m_instrumentHistory = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InstrumentForecastRange>
+        m_instrumentForecastRanges = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> m_instrumentSignatures =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, SustainedConditionState>
@@ -264,10 +266,41 @@ public sealed class UnmaRuntime : IDisposable
     private readonly HashSet<string> m_escalatedRuleIds =
         new(StringComparer.Ordinal);
     private readonly List<AlarmAttentionRequest> m_attentionRequests = new();
+    private double m_lastInstrumentCaptureTimestampTicks;
 
     private const int MaximumInstrumentHistorySamples = 100000;
     private const double InstrumentHistorySampleIntervalTicks =
         GameTimeWindowPolicy.SimTicksPerDay;
+
+    private readonly struct InstrumentForecastRange
+    {
+        public double Minimum { get; }
+        public double Maximum { get; }
+
+        public InstrumentForecastRange(double minimum, double maximum)
+        {
+            Minimum = minimum;
+            Maximum = maximum;
+        }
+    }
+
+    private static bool IsInstrumentForecastSampleInWindow(
+        double sampleTimestampTicks,
+        double currentTimestampTicks,
+        int windowTicks)
+    {
+        if (sampleTimestampTicks > currentTimestampTicks)
+        {
+            return false;
+        }
+        return windowTicks <= 0 ||
+               sampleTimestampTicks >= currentTimestampTicks - windowTicks;
+    }
+
+    private static bool DidInstrumentClockRollBack(
+        double currentTimestampTicks,
+        double previousTimestampTicks) =>
+        currentTimestampTicks < previousTimestampTicks;
 
     private sealed class NotificationEntityAlias
     {
@@ -4160,6 +4193,78 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public bool TryGetInstrumentForecast(
+        string instrumentId,
+        out InstrumentForecastResult result) =>
+        TryGetInstrumentForecast(instrumentId, 0, out result);
+
+    /// <summary>
+    /// Creates a session-history forecast from one coherent capture epoch.
+    /// Configuration ranges are mirrored together with current values and
+    /// history, avoiding nested configuration/history locks. The pure policy
+    /// evaluates the defensive sample copy after the lock is released and
+    /// incorporates the current aggregate as the newest sample.
+    /// </summary>
+    public bool TryGetInstrumentForecast(
+        string instrumentId,
+        int windowTicks,
+        out InstrumentForecastResult result)
+    {
+        result = default;
+        var canonicalId = instrumentId ?? "";
+        double currentTimestampTicks;
+        double currentValue;
+        InstrumentForecastRange range;
+        InstrumentValueSample[] historySnapshot;
+
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_instrumentForecastRanges.TryGetValue(
+                    canonicalId,
+                    out range) ||
+                !m_lastInstrumentValues.TryGetValue(
+                    canonicalId,
+                    out currentValue))
+            {
+                return false;
+            }
+
+            currentTimestampTicks = m_lastInstrumentCaptureTimestampTicks;
+            if (!m_instrumentHistory.TryGetValue(
+                    canonicalId,
+                    out var history) ||
+                history.Count == 0)
+            {
+                historySnapshot = Array.Empty<InstrumentValueSample>();
+            }
+            else
+            {
+                var selected = new List<InstrumentValueSample>(
+                    history.Count);
+                for (var index = 0; index < history.Count; index++)
+                {
+                    var sample = history[index];
+                    if (IsInstrumentForecastSampleInWindow(
+                            sample.TimestampSeconds,
+                            currentTimestampTicks,
+                            windowTicks))
+                    {
+                        selected.Add(sample);
+                    }
+                }
+                historySnapshot = selected.ToArray();
+            }
+        }
+
+        return InstrumentForecastPolicy.TryAnalyze(
+            historySnapshot,
+            currentTimestampTicks,
+            currentValue,
+            range.Minimum,
+            range.Maximum,
+            out result);
+    }
+
     /// <summary>
     /// Returns a cheap identity for the retained history without copying its
     /// samples. UI caches use the first/last sample in addition to the count
@@ -6312,9 +6417,26 @@ public sealed class UnmaRuntime : IDisposable
             StringComparer.Ordinal);
         lock (m_instrumentValuesGate)
         {
+            var clockRolledBack = DidInstrumentClockRollBack(
+                timestampSeconds,
+                m_lastInstrumentCaptureTimestampTicks);
             m_lastInstrumentValues.Clear();
+            m_instrumentForecastRanges.Clear();
+            if (clockRolledBack)
+            {
+                // Any backwards jump starts a new session-history epoch,
+                // even when it lands between daily samples or exactly on the
+                // latest retained sample. The last capture timestamp is the
+                // authoritative clock edge for detecting that transition.
+                m_instrumentHistory.Clear();
+            }
+            m_lastInstrumentCaptureTimestampTicks = timestampSeconds;
             foreach (var instrument in instruments)
             {
+                m_instrumentForecastRanges[instrument.Id] =
+                    new InstrumentForecastRange(
+                        instrument.Minimum,
+                        instrument.Maximum);
                 var signature = InstrumentValuePolicy.DefinitionSignature(
                     instrument);
                 if (!m_instrumentSignatures.TryGetValue(
@@ -6348,6 +6470,16 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     history = new List<InstrumentValueSample>();
                     m_instrumentHistory[pair.Key] = history;
+                }
+                else if (history.Count > 0 &&
+                         history[history.Count - 1].TimestampSeconds >
+                         timestampSeconds)
+                {
+                    // Loading or rewinding to an earlier game tick starts a
+                    // new in-memory epoch. Samples from the previous future
+                    // would otherwise distort statistics until time caught
+                    // up again.
+                    history.Clear();
                 }
                 if (history.Count == 0 ||
                     timestampSeconds -

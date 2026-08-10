@@ -52,7 +52,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         0.12f, 0.18f, 0.24f, 0.22f, 0.36f, 0.48f, 0.45f, 0.61f,
         0.70f, 0.66f, 0.79f,
     };
-    private static readonly int[] s_recorderArchiveRanges =
+    private static readonly int[] s_historianRanges =
     {
         GameTimeWindowPolicy.SimTicksPerDay,
         GameTimeWindowPolicy.SimTicksPerMonth,
@@ -126,9 +126,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private readonly Dictionary<string, List<float>> m_instrumentSamples =
         new(StringComparer.Ordinal);
     private readonly List<InstrumentHistoryBucket>
-        m_recorderArchiveBucketScratch = new(4096);
-    private readonly InstrumentPanelRenderer.RecorderArchiveTrace
-        m_recorderArchiveTrace = new();
+        m_historianBucketScratch = new(4096);
+    private readonly InstrumentPanelRenderer.HistorianTrace
+        m_historianTrace = new();
     private readonly Dictionary<string, double> m_instrumentValues =
         new(StringComparer.Ordinal);
     private readonly HashSet<string> m_invalidInstruments =
@@ -260,22 +260,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
         2);
     private string m_pendingInstrumentPanelDeleteId = "";
     private float m_pendingInstrumentPanelDeleteUntil;
-    private string m_recorderFullscreenInstrumentId = "";
-    private int m_recorderArchiveRangeIndex = 1;
-    private Vector2 m_recorderPreviousWindowSize;
-    private bool m_recorderPreviousWindowSizeValid;
-    private string m_recorderArchiveCacheInstrumentId = "";
-    private int m_recorderArchiveCacheWindowSeconds = -1;
-    private int m_recorderArchiveCachePixelColumns = -1;
-    private bool m_recorderArchiveCacheHasHistory;
-    private InstrumentHistoryState m_recorderArchiveCacheHistoryState;
-    private int m_recorderArchiveCacheFallbackCount = -1;
-    private float m_recorderArchiveCacheFallbackFirst;
-    private float m_recorderArchiveCacheFallbackLast;
-    private double m_recorderArchiveCacheScaleMinimum;
-    private double m_recorderArchiveCacheScaleMaximum;
-    private double m_recorderArchiveCacheObservedMinimum;
-    private double m_recorderArchiveCacheObservedMaximum;
+    private string m_historianInstrumentId = "";
+    private int m_historianRangeIndex = 1;
+    private Vector2 m_historianPreviousWindowSize;
+    private bool m_historianPreviousWindowSizeValid;
+    private string m_historianCacheInstrumentId = "";
+    private int m_historianCacheWindowTicks = -1;
+    private int m_historianCachePixelColumns = -1;
+    private bool m_historianCacheHasHistory;
+    private InstrumentHistoryState m_historianCacheHistoryState;
+    private double m_historianCacheScaleMinimum;
+    private double m_historianCacheScaleMaximum;
     private SystemAlarmDefinition m_systemAlarmDraft;
     private readonly Dictionary<string, string> m_systemThresholdTexts =
         new(StringComparer.Ordinal);
@@ -955,6 +950,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void SelectMainTab(int tab)
     {
+        if (tab != TabInstruments &&
+            !string.IsNullOrWhiteSpace(m_historianInstrumentId))
+        {
+            ExitInstrumentHistorian();
+        }
         m_tab = tab;
         m_clearGuiFocusPending = true;
     }
@@ -1145,9 +1145,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawInstruments()
     {
-        if (!string.IsNullOrWhiteSpace(m_recorderFullscreenInstrumentId))
+        if (!string.IsNullOrWhiteSpace(m_historianInstrumentId))
         {
-            DrawRecorderArchiveView();
+            DrawInstrumentHistorianView();
             return;
         }
 
@@ -1378,21 +1378,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 {
                     NavigateToEntity(instrument.EntityId);
                 }
-                if (instrument.DisplayType ==
-                        InstrumentDisplayType.PaperRecorder &&
-                    NativeGUI.Button(
+                if (NativeGUI.Button(
                         new Rect(rect.x + 34f, rect.y + 30f, 68f, 22f),
-                        UnmaText.Get("ui.recorder.archive", "ARCHIVE"),
+                        UnmaText.Get("ui.historian.short", "HIST"),
                         m_buttonStyle))
                 {
-                    EnterRecorderArchive(instrument);
+                    EnterInstrumentHistorian(instrument);
                 }
                 if (NativeGUI.Button(
                         new Rect(
-                            rect.x + (instrument.DisplayType ==
-                                InstrumentDisplayType.PaperRecorder
-                                ? 106f
-                                : 34f),
+                            rect.x + 106f,
                             rect.y + 30f,
                             58f,
                             22f),
@@ -2008,11 +2003,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_instrumentValues.Remove(instrumentId);
         m_invalidInstruments.Remove(instrumentId);
         if (string.Equals(
-                m_recorderFullscreenInstrumentId,
+                m_historianInstrumentId,
                 instrumentId,
                 StringComparison.Ordinal))
         {
-            ExitRecorderArchive();
+            ExitInstrumentHistorian();
         }
         SaveConfiguration(UnmaText.Get(
             "ui.instrument.status.removed",
@@ -2057,25 +2052,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
     }
 
-    private void EnterRecorderArchive(InstrumentDefinition instrument)
+    private void EnterInstrumentHistorian(InstrumentDefinition instrument)
     {
-        if (instrument == null ||
-            instrument.DisplayType != InstrumentDisplayType.PaperRecorder)
+        if (instrument == null)
         {
             return;
         }
 
-        m_recorderFullscreenInstrumentId = instrument.Id;
-        m_recorderArchiveRangeIndex = Math.Max(
+        m_historianInstrumentId = instrument.Id;
+        m_historianRangeIndex = Math.Max(
             0,
             Math.Min(
-                m_recorderArchiveRangeIndex,
-                s_recorderArchiveRanges.Length - 1));
+                m_historianRangeIndex,
+                s_historianRanges.Length - 1));
         if (m_nativeWindowShell != null)
         {
-            m_recorderPreviousWindowSize =
+            m_historianPreviousWindowSize =
                 m_nativeWindowShell.MaximizeTemporarily();
-            m_recorderPreviousWindowSizeValid = true;
+            m_historianPreviousWindowSizeValid = true;
             var maximizedSize = m_nativeWindowShell.CurrentSize;
             m_windowRect.width = maximizedSize.x;
             m_windowRect.height = maximizedSize.y;
@@ -2152,10 +2146,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             instrument.Title));
     }
 
-    private void ExitRecorderArchive()
+    private void ExitInstrumentHistorian()
     {
-        m_recorderFullscreenInstrumentId = "";
-        if (!m_recorderPreviousWindowSizeValid)
+        m_historianInstrumentId = "";
+        if (!m_historianPreviousWindowSizeValid)
         {
             return;
         }
@@ -2163,65 +2157,64 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (m_nativeWindowShell != null)
         {
             m_nativeWindowShell.SetTemporarySize(
-                m_recorderPreviousWindowSize);
-            m_windowRect.width = m_recorderPreviousWindowSize.x;
-            m_windowRect.height = m_recorderPreviousWindowSize.y;
+                m_historianPreviousWindowSize);
+            m_windowRect.width = m_historianPreviousWindowSize.x;
+            m_windowRect.height = m_historianPreviousWindowSize.y;
         }
-        m_recorderPreviousWindowSizeValid = false;
+        m_historianPreviousWindowSizeValid = false;
     }
 
-    private void DrawRecorderArchiveView()
+    private void DrawInstrumentHistorianView()
     {
         var instrument = m_runtime.Configuration.Instruments.FirstOrDefault(
             item => string.Equals(
                 item.Id,
-                m_recorderFullscreenInstrumentId,
+                m_historianInstrumentId,
                 StringComparison.Ordinal));
-        if (instrument == null ||
-            instrument.DisplayType != InstrumentDisplayType.PaperRecorder)
+        if (instrument == null)
         {
-            ExitRecorderArchive();
+            ExitInstrumentHistorian();
             return;
         }
 
         NativeGUILayout.Label(
             UnmaText.Format(
-                "ui.recorder.archive_title",
-                "PAPER RECORDER ARCHIVE · {0}",
+                "ui.historian.title",
+                "INSTRUMENT HISTORIAN · {0}",
                 instrument.Title),
             m_sectionStyle);
         NativeGUILayout.Space(6f);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
-            UnmaText.Get("ui.recorder.time_range", "TIME RANGE"),
+            UnmaText.Get("ui.historian.time_range", "GAME-TIME RANGE"),
             m_smallLabelStyle,
             NativeGUILayout.Width(90f),
             NativeGUILayout.Height(30f));
         for (var index = 0;
-             index < s_recorderArchiveRanges.Length;
+             index < s_historianRanges.Length;
              index++)
         {
             if (NativeGUILayout.Button(
-                    GetRecorderArchiveRangeLabel(index),
-                    index == m_recorderArchiveRangeIndex
+                    GetHistorianRangeLabel(index),
+                    index == m_historianRangeIndex
                         ? m_primaryButtonStyle
                         : m_buttonStyle,
                     NativeGUILayout.Width(76f),
                     NativeGUILayout.Height(30f)))
             {
-                m_recorderArchiveRangeIndex = index;
+                m_historianRangeIndex = index;
             }
         }
         NativeGUILayout.FlexibleSpace();
         if (NativeGUILayout.Button(
                 UnmaText.Get(
-                    "ui.recorder.back_to_panel",
+                    "ui.historian.back_to_panel",
                     "BACK TO INSTRUMENT PANEL"),
                 m_buttonStyle,
                 NativeGUILayout.Width(190f),
                 NativeGUILayout.Height(30f)))
         {
-            ExitRecorderArchive();
+            ExitInstrumentHistorian();
             NativeGUILayout.EndHorizontal();
             return;
         }
@@ -2233,16 +2226,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
             out var current);
         var isValid = !m_invalidInstruments.Contains(instrument.Id) &&
                       hasCurrentValue;
-        var selectedRange = s_recorderArchiveRanges[
-            m_recorderArchiveRangeIndex];
+        var selectedRangeTicks = s_historianRanges[
+            m_historianRangeIndex];
         var chartRect = NativeGUILayoutUtility.GetRect(
             520f,
             Mathf.Max(320f, m_windowRect.height - 180f),
             NativeGUILayout.ExpandWidth(true),
             NativeGUILayout.ExpandHeight(true));
-        var windowSeconds = selectedRange;
-        // The paper itself has 24 horizontal pixels fewer than the allocated
-        // archive rect. Capping the bucket count to that physical width keeps
+        // The chart has 24 horizontal pixels fewer than the allocated rect.
+        // Capping the bucket count to that physical width keeps
         // rendering cost proportional to what can actually be seen.
         var pixelColumns = Mathf.Clamp(
             Mathf.FloorToInt(chartRect.width - 48f),
@@ -2250,170 +2242,115 @@ public sealed class UnmaOverlayController : MonoBehaviour
             4096);
         if (isValid)
         {
-            RefreshRecorderArchiveCache(
+            RefreshHistorianCache(
                 instrument,
-                windowSeconds,
+                selectedRangeTicks,
                 pixelColumns);
         }
         else
         {
-            m_recorderArchiveTrace.Clear();
-            m_recorderArchiveCacheInstrumentId = "";
+            m_historianTrace.Clear();
+            m_historianCacheInstrumentId = "";
         }
-        var observedMin = isValid && m_recorderArchiveTrace.Count > 0
-            ? Math.Min(current, m_recorderArchiveCacheObservedMinimum)
-            : current;
-        var observedMax = isValid && m_recorderArchiveTrace.Count > 0
-            ? Math.Max(current, m_recorderArchiveCacheObservedMaximum)
-            : current;
-        InstrumentPanelRenderer.DrawRecorderArchive(
+        var forecast = default(InstrumentForecastResult);
+        var hasForecast = isValid && m_runtime.TryGetInstrumentForecast(
+            instrument.Id,
+            selectedRangeTicks,
+            out forecast);
+        if (hasForecast)
+        {
+            current = forecast.CurrentValue;
+        }
+        InstrumentPanelRenderer.DrawHistorian(
             chartRect,
             instrument,
-            m_recorderArchiveTrace,
+            m_historianTrace,
             current,
-            observedMin,
-            observedMax,
-            GetRecorderArchiveRangeLabel(m_recorderArchiveRangeIndex),
+            forecast,
+            hasForecast,
+            GetHistorianRangeLabel(m_historianRangeIndex),
             m_labelStyle,
             m_smallLabelStyle,
             isValid);
     }
 
-    private static string GetRecorderArchiveRangeLabel(int index)
+    private static string GetHistorianRangeLabel(int index)
     {
         return index switch
         {
-            0 => UnmaText.Get("ui.recorder.range.one_day", "1 DAY"),
-            1 => UnmaText.Get("ui.recorder.range.one_month", "1 MONTH"),
-            2 => UnmaText.Get("ui.recorder.range.one_year", "1 YEAR"),
-            3 => UnmaText.Get("ui.recorder.range.ten_years", "10 YEARS"),
+            0 => UnmaText.Get("ui.historian.range.one_day", "1 DAY"),
+            1 => UnmaText.Get("ui.historian.range.one_month", "1 MONTH"),
+            2 => UnmaText.Get("ui.historian.range.one_year", "1 YEAR"),
+            3 => UnmaText.Get("ui.historian.range.ten_years", "10 YEARS"),
             4 => UnmaText.Get(
-                "ui.recorder.range.one_century",
+                "ui.historian.range.one_century",
                 "100 YEARS"),
-            _ => UnmaText.Get("ui.recorder.range.maximum", "MAX"),
+            _ => UnmaText.Get("ui.historian.range.maximum", "MAX"),
         };
     }
 
-    private void RefreshRecorderArchiveCache(
+    private void RefreshHistorianCache(
         InstrumentDefinition instrument,
-        int windowSeconds,
+        int windowTicks,
         int pixelColumns)
     {
         var hasHistory = m_runtime.TryGetInstrumentHistoryState(
             instrument.Id,
             out var historyState);
-        m_instrumentSamples.TryGetValue(
-            instrument.Id,
-            out var fallbackSamples);
-        var fallbackCount = fallbackSamples?.Count ?? 0;
-        var fallbackFirst = fallbackCount > 0 ? fallbackSamples[0] : 0f;
-        var fallbackLast = fallbackCount > 0
-            ? fallbackSamples[fallbackCount - 1]
-            : 0f;
-
         var cacheMatches = string.Equals(
-                               m_recorderArchiveCacheInstrumentId,
+                               m_historianCacheInstrumentId,
                                instrument.Id,
                                StringComparison.Ordinal) &&
-                           m_recorderArchiveCacheWindowSeconds ==
-                           windowSeconds &&
-                           m_recorderArchiveCachePixelColumns ==
+                           m_historianCacheWindowTicks == windowTicks &&
+                           m_historianCachePixelColumns ==
                            pixelColumns &&
-                           m_recorderArchiveCacheHasHistory == hasHistory &&
-                           m_recorderArchiveCacheScaleMinimum.Equals(
+                           m_historianCacheHasHistory == hasHistory &&
+                           m_historianCacheScaleMinimum.Equals(
                                instrument.Minimum) &&
-                           m_recorderArchiveCacheScaleMaximum.Equals(
+                           m_historianCacheScaleMaximum.Equals(
                                instrument.Maximum);
         if (cacheMatches && hasHistory)
         {
-            cacheMatches = RecorderHistoryStateEquals(
-                m_recorderArchiveCacheHistoryState,
+            cacheMatches = HistorianHistoryStateEquals(
+                m_historianCacheHistoryState,
                 historyState);
-        }
-        else if (cacheMatches)
-        {
-            cacheMatches = m_recorderArchiveCacheFallbackCount ==
-                           fallbackCount &&
-                           m_recorderArchiveCacheFallbackFirst.Equals(
-                               fallbackFirst) &&
-                           m_recorderArchiveCacheFallbackLast.Equals(
-                               fallbackLast);
         }
         if (cacheMatches)
         {
             return;
         }
 
-        m_recorderArchiveTrace.Clear();
-        m_recorderArchiveCacheInstrumentId = instrument.Id;
-        m_recorderArchiveCacheWindowSeconds = windowSeconds;
-        m_recorderArchiveCachePixelColumns = pixelColumns;
-        m_recorderArchiveCacheHasHistory = hasHistory;
-        m_recorderArchiveCacheHistoryState = historyState;
-        m_recorderArchiveCacheFallbackCount = fallbackCount;
-        m_recorderArchiveCacheFallbackFirst = fallbackFirst;
-        m_recorderArchiveCacheFallbackLast = fallbackLast;
-        m_recorderArchiveCacheScaleMinimum = instrument.Minimum;
-        m_recorderArchiveCacheScaleMaximum = instrument.Maximum;
-        m_recorderArchiveCacheObservedMinimum = 0d;
-        m_recorderArchiveCacheObservedMaximum = 0d;
+        m_historianTrace.Clear();
+        m_historianCacheInstrumentId = instrument.Id;
+        m_historianCacheWindowTicks = windowTicks;
+        m_historianCachePixelColumns = pixelColumns;
+        m_historianCacheHasHistory = hasHistory;
+        m_historianCacheHistoryState = historyState;
+        m_historianCacheScaleMinimum = instrument.Minimum;
+        m_historianCacheScaleMaximum = instrument.Maximum;
 
         if (hasHistory && m_runtime.CopyDecimatedInstrumentHistory(
                 instrument.Id,
-                windowSeconds,
+                windowTicks,
                 pixelColumns,
-                m_recorderArchiveBucketScratch,
+                m_historianBucketScratch,
                 out historyState,
-                out var observedMinimum,
-                out var observedMaximum))
+                out _,
+                out _))
         {
-            m_recorderArchiveCacheHistoryState = historyState;
-            m_recorderArchiveCacheObservedMinimum = observedMinimum;
-            m_recorderArchiveCacheObservedMaximum = observedMaximum;
-            foreach (var bucket in m_recorderArchiveBucketScratch)
+            m_historianCacheHistoryState = historyState;
+            foreach (var bucket in m_historianBucketScratch)
             {
-                m_recorderArchiveTrace.Add(
-                    NormalizeRecorderArchiveValue(instrument, bucket.FirstValue),
-                    NormalizeRecorderArchiveValue(instrument, bucket.MinimumValue),
-                    NormalizeRecorderArchiveValue(instrument, bucket.MaximumValue),
-                    NormalizeRecorderArchiveValue(instrument, bucket.LastValue));
+                m_historianTrace.Add(
+                    NormalizeHistorianValue(instrument, bucket.FirstValue),
+                    NormalizeHistorianValue(instrument, bucket.MinimumValue),
+                    NormalizeHistorianValue(instrument, bucket.MaximumValue),
+                    NormalizeHistorianValue(instrument, bucket.LastValue));
             }
-            return;
-        }
-
-        if (fallbackCount == 0)
-        {
-            return;
-        }
-
-        m_recorderArchiveCacheObservedMinimum = instrument.Minimum +
-            fallbackSamples.Min() * (instrument.Maximum - instrument.Minimum);
-        m_recorderArchiveCacheObservedMaximum = instrument.Minimum +
-            fallbackSamples.Max() * (instrument.Maximum - instrument.Minimum);
-        var columnCount = Math.Min(pixelColumns, fallbackCount);
-        for (var column = 0; column < columnCount; column++)
-        {
-            var bucketStart = (int)((long)column * fallbackCount /
-                                    columnCount);
-            var bucketEnd = (int)((long)(column + 1) * fallbackCount /
-                                  columnCount);
-            bucketEnd = Math.Max(bucketStart + 1, bucketEnd);
-            var first = fallbackSamples[bucketStart];
-            var last = fallbackSamples[bucketEnd - 1];
-            var minimum = first;
-            var maximum = first;
-            for (var index = bucketStart + 1;
-                 index < bucketEnd;
-                 index++)
-            {
-                minimum = Math.Min(minimum, fallbackSamples[index]);
-                maximum = Math.Max(maximum, fallbackSamples[index]);
-            }
-            m_recorderArchiveTrace.Add(first, minimum, maximum, last);
         }
     }
 
-    private static bool RecorderHistoryStateEquals(
+    private static bool HistorianHistoryStateEquals(
         InstrumentHistoryState left,
         InstrumentHistoryState right) =>
         left.SampleCount == right.SampleCount &&
@@ -2422,7 +2359,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         left.FirstValue.Equals(right.FirstValue) &&
         left.LastValue.Equals(right.LastValue);
 
-    private static float NormalizeRecorderArchiveValue(
+    private static float NormalizeHistorianValue(
         InstrumentDefinition instrument,
         double value)
     {
@@ -7439,7 +7376,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
         }
         m_isOpen = true;
-        m_tab = TabBoard;
+        SelectMainTab(TabBoard);
         OpenRuleEditorWindow();
 
         var firstCondition = rule.Conditions.FirstOrDefault();
@@ -7706,7 +7643,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         m_lastNavigatedAlarmSlotId =
             PanelSlotProjection.StableAlarmId(alarm);
-        m_tab = TabBoard;
+        SelectMainTab(TabBoard);
         m_isOpen = true;
         if (PanelTopologyPolicy.IsEntityPanel(panel))
         {
@@ -7800,7 +7737,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         m_isOpen = true;
-        m_tab = TabBoard;
+        SelectMainTab(TabBoard);
         if (PanelTopologyPolicy.IsEntityPanel(panel))
         {
             m_activeEntityPanelId = panel.Id;
@@ -8247,7 +8184,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         CancelEntityAssignment();
         m_openEntityPanelAfterInspectionId = entity.Id.Value;
         m_isOpen = true;
-        m_tab = TabBoard;
+        SelectMainTab(TabBoard);
         RequestEntityInspection(
             entity.Id.Value,
             false,
@@ -8474,7 +8411,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             m_activeEntityPanelId = entityPanel.Id;
             m_isOpen = true;
-            m_tab = TabBoard;
+            SelectMainTab(TabBoard);
             m_boardScroll = Vector2.zero;
             SetStatus(
                 UnmaText.Get("auto.8a42487f2b31") + inspection.Title + UnmaText.Get("auto.70834308d14f"));

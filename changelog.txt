@@ -1,3 +1,11 @@
+v0.9.24 | 2026-08-10
+Instrument historian and directed ETA
+* Added HIST to every instrument type with shared game-time ranges from one day through the complete session history.
+* Added current, minimum, average, maximum, linear rate per game month, and R-squared fit statistics.
+* Added reliable rising/falling ETA toward the configured scale maximum or minimum, with explicit insufficient, stable, unreliable, and beyond-100-years states.
+* Kept chart and forecast on one coherent runtime snapshot and the same inclusive time window.
+* Started a fresh session-history epoch on every game-clock rollback so future-timeline samples cannot contaminate analysis.
+
 v0.9.23 | 2026-08-10
 Escalation and operator attention
 * Added one-shot, game-time custom-alarm escalation to a strictly higher severity with an optional inherited or explicit sound.

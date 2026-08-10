@@ -1,36 +1,36 @@
-# UNMA v0.9.23 – Escalation and safe operator attention
+# UNMA v0.9.24 – Instrument historian and directed ETA
 
-UNMA v0.9.23 lets a persistent custom alarm escalate once after a selected
-amount of Captain of Industry game time. The escalated state can use a higher
-severity, a different sound, and a deliberately limited operator action.
+UNMA v0.9.24 turns every instrument into a session historian. One shared view
+combines the retained game-time chart with descriptive statistics, a robust
+linear trend, and a deliberately bounded ETA toward the configured scale.
 
-## What changed in v0.9.23
+## What changed in v0.9.24
 
-- Custom alarms can escalate after an **AFTER** duration to a strictly higher
-  severity.
-- The escalation sound may inherit the base sound or use any available sound.
-- Escalation starts a new occurrence, requiring acknowledgement again and
-  leaving occurrence-bound audio snooze behind.
-- An optional action opens the matching UNMA panel and scrolls to the alarm.
-- A second action may also end only the temporary five-minute mute. It never
-  moves the camera, opens an entity inspector, changes global audio, alters a
-  per-slot snooze, acknowledges an alarm, or controls a machine.
-- Built-in system-alarm stages expose the same safe actions when an already
-  active alarm advances to a new stage.
-- A bounded queue removes stale or acknowledged requests and selects the most
-  severe, strongest, newest valid occurrence.
-- Existing worlds migrate with escalation and actions disabled while all
-  v0.9.22 timing memories continue unchanged.
+- **HIST** is available on every edgewise meter, round gauge, digital display,
+  CRT, nixie tube, and paper recorder.
+- Select one game day, one game month, one game year, ten years, one century,
+  or the complete retained session. Chart and analysis use the same inclusive
+  game-time window.
+- The historian shows current, minimum, average, maximum, rate per game month,
+  and the R-squared quality of the linear fit.
+- Reliable rising trends project toward the scale maximum; falling trends
+  project toward the scale minimum.
+- Insufficient data, stable movement, unreliable fits, and ETAs beyond 100
+  game years are stated explicitly instead of presenting false precision.
+- A game-clock rollback starts a new in-memory history epoch, preventing
+  samples from a future timeline from entering the analysis.
+- A missing analysis does not hide the chart or current value when those are
+  still available.
 
 ## Compatibility and safety
 
 - Captain of Industry: **0.8.6c**
-- UNMA: **0.9.23**
+- UNMA: **0.9.24**
 - Required dependency: **MultiLangLib 0.1.0 or newer**
 - Optional dependency: **Keybind Framework 2.0.2 or newer**
 - Can be added to or removed from existing saves.
-- Existing configurations migrate automatically. Escalation and operator
-  actions remain opt-in, and saved alarm-timing state is preserved.
+- Existing configurations require no schema migration. Historian samples are
+  intentionally session-only and restart when the world is loaded again.
 
 ## Download and documentation
 
@@ -41,5 +41,4 @@ and back up `Mods/UNMA` before updating.
 - [English User Guide](https://coigame.com/Topic/1926/User-Guide)
 - [Deutsche Benutzeranleitung](https://coigame.com/Topic/1927/Benutzeranleitung)
 
-Escalate the persistent fault, bring the right panel forward, and keep the
-operator in control.
+Read the process, judge the trend, and keep the operator in control.

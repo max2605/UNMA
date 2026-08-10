@@ -15,6 +15,8 @@ $timingMemoryPolicyTypeName = "UNMA.Domain.AlarmTimingMemoryPolicy"
 $escalationPolicyTypeName = "UNMA.Domain.AlarmEscalationPolicy"
 $attentionQueuePolicyTypeName = "UNMA.Domain.AlarmAttentionQueuePolicy"
 $attentionRequestTypeName = "UNMA.Domain.AlarmAttentionRequest"
+$forecastPolicyTypeName = "UNMA.Domain.InstrumentForecastPolicy"
+$forecastResultTypeName = "UNMA.Domain.InstrumentForecastResult"
 $entityTypeName = "Mafi.Core.Entities.IEntity"
 $entitiesManagerTypeName = "Mafi.Core.Entities.IEntitiesManager"
 $nonSaveableEventTypeName = "Mafi.IEventNonSaveable``1"
@@ -346,6 +348,10 @@ $attentionRequestType = $assembly.GetType(
     $attentionRequestTypeName,
     $true,
     $false)
+$forecastResultType = $assembly.GetType(
+    $forecastResultTypeName,
+    $true,
+    $false)
 $bindingFlags = [System.Reflection.BindingFlags]::Instance -bor
     [System.Reflection.BindingFlags]::Static -bor
     [System.Reflection.BindingFlags]::Public -bor
@@ -367,6 +373,14 @@ $tryTakeAttentionRequest = @(
     $methods | Where-Object Name -eq "TryTakeAttentionRequest")
 $shouldEnqueueAttention = @(
     $methods | Where-Object Name -eq "ShouldEnqueueAttentionRequest")
+$tryGetInstrumentForecast = @(
+    $methods | Where-Object Name -eq "TryGetInstrumentForecast")
+$captureInstrumentValues = @(
+    $methods | Where-Object Name -eq "CaptureInstrumentValues")
+$forecastWindowHelper = @(
+    $methods | Where-Object Name -eq "IsInstrumentForecastSampleInWindow")
+$instrumentClockRollbackHelper = @(
+    $methods | Where-Object Name -eq "DidInstrumentClockRollBack")
 Assert-Condition ($initialize.Count -eq 1) "Initialize was not found exactly once."
 Assert-Condition ($dispose.Count -eq 1) "Dispose was not found exactly once."
 Assert-Condition `
@@ -387,6 +401,18 @@ Assert-Condition `
 Assert-Condition `
     ($shouldEnqueueAttention.Count -eq 1) `
     "ShouldEnqueueAttentionRequest was not found exactly once."
+Assert-Condition `
+    ($tryGetInstrumentForecast.Count -eq 2) `
+    "TryGetInstrumentForecast must expose exactly two overloads."
+Assert-Condition `
+    ($captureInstrumentValues.Count -eq 1) `
+    "CaptureInstrumentValues was not found exactly once."
+Assert-Condition `
+    ($forecastWindowHelper.Count -eq 1) `
+    "Forecast window helper was not found exactly once."
+Assert-Condition `
+    ($instrumentClockRollbackHelper.Count -eq 1) `
+    "Instrument clock rollback helper was not found exactly once."
 
 $restoredStageSelectorCalls = @(
     Read-MethodInstructions $restoreAlarmTimingStates[0] | Where-Object {
@@ -518,6 +544,193 @@ Assert-Condition `
     "RestoreAlarmTimingStates must use the exact escalation occurrence ID."
 Write-Host `
     "UNMA escalation runtime IL/reflection regression passed."
+
+# Historian consumers use one runtime query rather than independently reading
+# range, current value, and samples. Keep its window-aware contract and pure
+# policy hand-off stable for the UI.
+$windowForecast = @($tryGetInstrumentForecast | Where-Object {
+    $parameters = @($_.GetParameters())
+    $parameters.Count -eq 3 -and
+        $parameters[0].ParameterType -eq [string] -and
+        $parameters[1].ParameterType -eq [int] -and
+        $parameters[2].IsOut -and
+        $parameters[2].ParameterType.IsByRef -and
+        $parameters[2].ParameterType.GetElementType() -eq
+            $forecastResultType
+})
+$defaultForecast = @($tryGetInstrumentForecast | Where-Object {
+    $parameters = @($_.GetParameters())
+    $parameters.Count -eq 2 -and
+        $parameters[0].ParameterType -eq [string] -and
+        $parameters[1].IsOut -and
+        $parameters[1].ParameterType.IsByRef -and
+        $parameters[1].ParameterType.GetElementType() -eq
+            $forecastResultType
+})
+Assert-Condition `
+    ($windowForecast.Count -eq 1 -and
+        $windowForecast[0].IsPublic -and
+        $windowForecast[0].ReturnType -eq [bool]) `
+    "Window-aware TryGetInstrumentForecast contract changed."
+Assert-Condition `
+    ($defaultForecast.Count -eq 1 -and
+        $defaultForecast[0].IsPublic -and
+        $defaultForecast[0].ReturnType -eq [bool]) `
+    "Default TryGetInstrumentForecast contract changed."
+$forecastPolicyCalls = @(
+    Read-MethodInstructions $windowForecast[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $forecastPolicyTypeName `
+            "TryAnalyze"
+    })
+Assert-Condition `
+    ($forecastPolicyCalls.Count -eq 1) `
+    "Window-aware forecast query must call the pure policy exactly once."
+$forecastInstructions = @(
+    Read-MethodInstructions $windowForecast[0])
+$defaultForecastInstructions = @(
+    Read-MethodInstructions $defaultForecast[0])
+$defaultDelegations = @($defaultForecastInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "TryGetInstrumentForecast"
+})
+Assert-Condition `
+    ($defaultDelegations.Count -eq 1) `
+    "Default forecast overload must delegate exactly once."
+$defaultPolicyCalls = @($defaultForecastInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $forecastPolicyTypeName `
+        "TryAnalyze"
+})
+Assert-Condition `
+    ($defaultPolicyCalls.Count -eq 0) `
+    "Default forecast overload must not analyze independently."
+$configurationGateField = $runtimeType.GetField(
+    "m_configurationGate",
+    $bindingFlags)
+$configurationGateLoads = @($forecastInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.FieldInfo] -and
+        (Test-SameField $_.Operand $configurationGateField)
+})
+Assert-Condition `
+    ($configurationGateLoads.Count -eq 0) `
+    "Forecast query must not acquire or read the configuration lock."
+$instrumentValuesGateField = $runtimeType.GetField(
+    "m_instrumentValuesGate",
+    $bindingFlags)
+$requiredForecastSnapshotFields = @(
+    $instrumentValuesGateField,
+    $runtimeType.GetField("m_instrumentForecastRanges", $bindingFlags),
+    $runtimeType.GetField("m_lastInstrumentValues", $bindingFlags),
+    $runtimeType.GetField("m_instrumentHistory", $bindingFlags),
+    $runtimeType.GetField(
+        "m_lastInstrumentCaptureTimestampTicks",
+        $bindingFlags))
+foreach ($snapshotField in $requiredForecastSnapshotFields) {
+    Assert-Condition `
+        ($null -ne $snapshotField) `
+        "A required forecast snapshot field is missing."
+    $snapshotFieldLoads = @($forecastInstructions | Where-Object {
+        $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $snapshotField)
+    })
+    Assert-Condition `
+        ($snapshotFieldLoads.Count -ge 1) `
+        "Forecast query no longer reads '$($snapshotField.Name)'."
+}
+$monitorEnterCalls = @($forecastInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Enter"
+})
+$monitorExitCalls = @($forecastInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Exit"
+})
+Assert-Condition `
+    ($monitorEnterCalls.Count -eq 1 -and $monitorExitCalls.Count -eq 1) `
+    "Forecast snapshot must use exactly one balanced monitor section."
+Assert-Condition `
+    ($forecastPolicyCalls[0].Offset -gt $monitorExitCalls[0].Offset) `
+    "Forecast policy must run only after leaving the snapshot monitor."
+$forecastWindowCalls = @($forecastInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "IsInstrumentForecastSampleInWindow"
+})
+Assert-Condition `
+    ($forecastWindowCalls.Count -eq 1) `
+    "Forecast query must apply the shared inclusive window helper."
+$forecastGameCalls = @($forecastInstructions | Where-Object {
+    if ($_.Operand -isnot [System.Reflection.MethodBase] -or
+        $null -eq $_.Operand.DeclaringType) {
+        return $false
+    }
+    $declaringName = $_.Operand.DeclaringType.FullName
+    return $declaringName -like "Mafi.*" -or
+        $declaringName -like "UnityEngine.*"
+})
+Assert-Condition `
+    ($forecastGameCalls.Count -eq 0) `
+    "Forecast query must not call Mafi or Unity APIs while snapshotting."
+$windowMethod = $forecastWindowHelper[0]
+Assert-Condition `
+    ([bool]$windowMethod.Invoke(
+        $null,
+        @([double]60d, [double]100d, [int]40))) `
+    "Forecast lower window bound must be inclusive."
+Assert-Condition `
+    (-not [bool]$windowMethod.Invoke(
+        $null,
+        @([double]59.999d, [double]100d, [int]40))) `
+    "Forecast sample below the lower bound must be excluded."
+Assert-Condition `
+    ([bool]$windowMethod.Invoke(
+        $null,
+        @([double]100d, [double]100d, [int]40))) `
+    "Forecast current-tick bound must be inclusive."
+Assert-Condition `
+    (-not [bool]$windowMethod.Invoke(
+        $null,
+        @([double]100.001d, [double]100d, [int]40))) `
+    "Forecast future samples must be excluded."
+Assert-Condition `
+    ([bool]$windowMethod.Invoke(
+        $null,
+        @([double]-1000d, [double]100d, [int]0))) `
+    "Full-history forecast must retain older samples."
+
+$rollbackMethod = $instrumentClockRollbackHelper[0]
+Assert-Condition `
+    ([bool]$rollbackMethod.Invoke(
+        $null,
+        @([double]5d, [double]10d))) `
+    "A rewind inside the sampling interval must start a new epoch."
+Assert-Condition `
+    ([bool]$rollbackMethod.Invoke(
+        $null,
+        @([double]0d, [double]10d))) `
+    "A rewind onto the last sample tick must start a new epoch."
+Assert-Condition `
+    (-not [bool]$rollbackMethod.Invoke(
+        $null,
+        @([double]10d, [double]10d))) `
+    "An unchanged capture tick must not start a new epoch."
+$rollbackCalls = @(
+    Read-MethodInstructions $captureInstrumentValues[0] |
+        Where-Object {
+            Test-IsMethodInstruction `
+                $_ `
+                $runtimeTypeName `
+                "DidInstrumentClockRollBack"
+        })
+Assert-Condition `
+    ($rollbackCalls.Count -eq 1) `
+    "CaptureInstrumentValues must evaluate clock rollback exactly once."
+Write-Host `
+    "UNMA instrument forecast runtime IL/reflection regression passed."
 
 # Atomic configuration rollback must not silently miss a newly added
 # DataMember. Validate the compiled IL rather than maintaining a fragile

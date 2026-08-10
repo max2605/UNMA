@@ -21,6 +21,7 @@ internal static class Program
         TestComparisons();
         TestComparableValues();
         TestInstrumentValuePolicy();
+        TestInstrumentForecastPolicy();
         TestBooleanLogic();
         TestAlarmLatch();
         TestAlarmTimingPolicy();
@@ -2545,6 +2546,362 @@ internal static class Program
         AreEqual(33, normalizedCalculated.Sources[1].EntityId);
         AreEqual(22, normalizedCalculated.EntityId);
         AreEqual("2 QUELLEN · SUMME", normalizedCalculated.EntityTitle);
+    }
+
+    private static void TestInstrumentForecastPolicy()
+    {
+        var risingHistory = new[]
+        {
+            new InstrumentValueSample(300d, 16d),
+            new InstrumentValueSample(0d, 10d),
+            new InstrumentValueSample(600d, 999d),
+            new InstrumentValueSample(300d, 14d),
+            new InstrumentValueSample(300d, 15d),
+        };
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            risingHistory,
+            600d,
+            20d,
+            0d,
+            100d,
+            out var rising));
+        AreEqual(InstrumentForecastStatus.Moving, rising.Status);
+        AreEqual(InstrumentForecastDirection.Rising, rising.Direction);
+        AreEqual(InstrumentForecastEtaStatus.Available, rising.EtaStatus);
+        AreEqual(3, rising.SampleCount);
+        AreClose(600d, rising.DurationTicks);
+        AreClose(20d, rising.CurrentValue);
+        AreClose(10d, rising.MinimumValue);
+        AreClose(15d, rising.AverageValue);
+        AreClose(20d, rising.MaximumValue);
+        AreClose(10d, rising.RatePerMonth);
+        AreClose(1d, rising.RSquared);
+        AreClose(100d, rising.TargetValue);
+        AreClose(4800d, rising.EtaTicks);
+        IsTrue(rising.HasTrend);
+        IsTrue(rising.HasEta);
+        IsFalse(rising.HorizonExceeded);
+
+        // Reordering history and duplicate values must not affect analysis.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(300d, 14d),
+                new InstrumentValueSample(300d, 15d),
+                new InstrumentValueSample(600d, -999d),
+                new InstrumentValueSample(0d, 10d),
+                new InstrumentValueSample(300d, 16d),
+            },
+            600d,
+            20d,
+            0d,
+            100d,
+            out var reordered));
+        AreEqual(rising.Status, reordered.Status);
+        AreEqual(rising.Direction, reordered.Direction);
+        AreEqual(rising.EtaStatus, reordered.EtaStatus);
+        AreEqual(rising.SampleCount, reordered.SampleCount);
+        AreClose(rising.DurationTicks, reordered.DurationTicks);
+        AreClose(rising.MinimumValue, reordered.MinimumValue);
+        AreClose(rising.AverageValue, reordered.AverageValue);
+        AreClose(rising.MaximumValue, reordered.MaximumValue);
+        AreClose(rising.RatePerMonth, reordered.RatePerMonth);
+        AreClose(rising.RSquared, reordered.RSquared);
+        AreClose(rising.EtaTicks, reordered.EtaTicks);
+
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 90d),
+                new InstrumentValueSample(300d, 80d),
+            },
+            600d,
+            70d,
+            0d,
+            100d,
+            out var falling));
+        AreEqual(InstrumentForecastStatus.Moving, falling.Status);
+        AreEqual(InstrumentForecastDirection.Falling, falling.Direction);
+        AreEqual(InstrumentForecastEtaStatus.Available, falling.EtaStatus);
+        AreClose(-20d, falling.RatePerMonth);
+        AreClose(0d, falling.TargetValue);
+        AreClose(2100d, falling.EtaTicks);
+
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[] { new InstrumentValueSample(0d, 1d) },
+            100d,
+            2d,
+            0d,
+            10d,
+            out var tooFew));
+        AreEqual(InstrumentForecastStatus.InsufficientData, tooFew.Status);
+        AreEqual(2, tooFew.SampleCount);
+        IsFalse(tooFew.HasTrend);
+        IsFalse(tooFew.HasEta);
+
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(100d, 1d),
+                new InstrumentValueSample(110d, 2d),
+            },
+            120d,
+            3d,
+            0d,
+            10d,
+            out var tooShort));
+        AreEqual(InstrumentForecastStatus.InsufficientData, tooShort.Status);
+        AreEqual(3, tooShort.SampleCount);
+        AreClose(20d, tooShort.DurationTicks);
+
+        // Exactly two game days is enough for a forecast.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 0d),
+                new InstrumentValueSample(20d, 2d),
+            },
+            40d,
+            4d,
+            0d,
+            100d,
+            out var minimumWindow));
+        AreEqual(InstrumentForecastStatus.Moving, minimumWindow.Status);
+        AreClose(60d, minimumWindow.RatePerMonth);
+
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 50d),
+                new InstrumentValueSample(300d, 50.025d),
+            },
+            600d,
+            50.05d,
+            0d,
+            100d,
+            out var stable));
+        AreEqual(InstrumentForecastStatus.Stable, stable.Status);
+        AreEqual(InstrumentForecastDirection.None, stable.Direction);
+        AreEqual(InstrumentForecastEtaStatus.None, stable.EtaStatus);
+        AreClose(0.05d, stable.RatePerMonth);
+        AreClose(1d, stable.RSquared);
+
+        // Constant data has a perfect fit but remains stable and ETA-free.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 25d),
+                new InstrumentValueSample(300d, 25d),
+            },
+            600d,
+            25d,
+            0d,
+            100d,
+            out var constant));
+        AreEqual(InstrumentForecastStatus.Stable, constant.Status);
+        AreClose(0d, constant.RatePerMonth);
+        AreClose(1d, constant.RSquared);
+
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 0d),
+                new InstrumentValueSample(150d, 100d),
+                new InstrumentValueSample(300d, 0d),
+                new InstrumentValueSample(450d, 100d),
+            },
+            600d,
+            1d,
+            0d,
+            100d,
+            out var noisy));
+        AreEqual(InstrumentForecastStatus.Unreliable, noisy.Status);
+        AreEqual(InstrumentForecastDirection.Rising, noisy.Direction);
+        IsTrue(noisy.RSquared <
+               InstrumentForecastPolicy.MinimumReliableRSquared);
+        AreEqual(InstrumentForecastEtaStatus.None, noisy.EtaStatus);
+        IsFalse(noisy.HasEta);
+
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 50d),
+                new InstrumentValueSample(150d, 50.08d),
+                new InstrumentValueSample(300d, 49.95d),
+                new InstrumentValueSample(450d, 50.04d),
+            },
+            600d,
+            50d,
+            0d,
+            100d,
+            out var noisyAndFlat));
+        AreEqual(InstrumentForecastStatus.Unreliable, noisyAndFlat.Status);
+        AreEqual(InstrumentForecastDirection.None, noisyAndFlat.Direction);
+        AreEqual(InstrumentForecastEtaStatus.None, noisyAndFlat.EtaStatus);
+
+        // A projected boundary farther than 100 game years is signalled but
+        // intentionally does not expose a concrete ETA.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, -1000.11d),
+                new InstrumentValueSample(300d, -1000.055d),
+            },
+            600d,
+            -1000d,
+            0d,
+            100d,
+            out var beyondHorizon));
+        AreEqual(InstrumentForecastStatus.Moving, beyondHorizon.Status);
+        AreEqual(
+            InstrumentForecastEtaStatus.BeyondHorizon,
+            beyondHorizon.EtaStatus);
+        IsTrue(beyondHorizon.HorizonExceeded);
+        IsFalse(beyondHorizon.HasEta);
+        AreClose(0d, beyondHorizon.EtaTicks);
+
+        // A boundary already reached is never projected in reverse.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 90d),
+                new InstrumentValueSample(300d, 100d),
+            },
+            600d,
+            110d,
+            0d,
+            100d,
+            out var aboveMaximum));
+        AreEqual(InstrumentForecastDirection.Rising, aboveMaximum.Direction);
+        AreEqual(InstrumentForecastEtaStatus.None, aboveMaximum.EtaStatus);
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 10d),
+                new InstrumentValueSample(300d, 0d),
+            },
+            600d,
+            -10d,
+            0d,
+            100d,
+            out var belowMinimum));
+        AreEqual(InstrumentForecastDirection.Falling, belowMinimum.Direction);
+        AreEqual(InstrumentForecastEtaStatus.None, belowMinimum.EtaStatus);
+
+        // Large absolute ticks must not reduce the fit precision.
+        const double largeTick = 1000000000000d;
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(largeTick, 10d),
+                new InstrumentValueSample(largeTick + 300d, 15d),
+            },
+            largeTick + 600d,
+            20d,
+            0d,
+            100d,
+            out var largeTickForecast));
+        AreClose(10d, largeTickForecast.RatePerMonth);
+        AreClose(1d, largeTickForecast.RSquared);
+
+        // Scaling Y before covariance keeps very large finite values usable.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 1.00000e150d),
+                new InstrumentValueSample(300d, 1.00001e150d),
+            },
+            600d,
+            1.00002e150d,
+            0d,
+            2e150d,
+            out var largeValueForecast));
+        IsTrue(Math.Abs(
+            largeValueForecast.RatePerMonth / 2e145d - 1d) < 0.000000001d);
+        AreClose(1d, largeValueForecast.RSquared);
+
+        // Historical duplicates alone do not satisfy the unique sample gate.
+        IsTrue(InstrumentForecastPolicy.TryAnalyze(
+            new[]
+            {
+                new InstrumentValueSample(0d, 1d),
+                new InstrumentValueSample(0d, 2d),
+                new InstrumentValueSample(0d, 3d),
+            },
+            40d,
+            4d,
+            0d,
+            10d,
+            out var duplicateTicks));
+        AreEqual(
+            InstrumentForecastStatus.InsufficientData,
+            duplicateTicks.Status);
+        AreEqual(2, duplicateTicks.SampleCount);
+        AreClose(2d, duplicateTicks.MinimumValue);
+
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            null,
+            40d,
+            1d,
+            0d,
+            10d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            Array.Empty<InstrumentValueSample>(),
+            double.NaN,
+            1d,
+            0d,
+            10d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            Array.Empty<InstrumentValueSample>(),
+            40d,
+            double.PositiveInfinity,
+            0d,
+            10d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            Array.Empty<InstrumentValueSample>(),
+            40d,
+            1d,
+            10d,
+            0d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            Array.Empty<InstrumentValueSample>(),
+            40d,
+            1d,
+            0d,
+            double.NaN,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            new[] { new InstrumentValueSample(double.NaN, 1d) },
+            40d,
+            1d,
+            0d,
+            10d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            new[] { new InstrumentValueSample(0d, double.NaN) },
+            40d,
+            1d,
+            0d,
+            10d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            new[] { new InstrumentValueSample(41d, 1d) },
+            40d,
+            1d,
+            0d,
+            10d,
+            out _));
+        IsFalse(InstrumentForecastPolicy.TryAnalyze(
+            Array.Empty<InstrumentValueSample>(),
+            40d,
+            1d,
+            -double.MaxValue,
+            double.MaxValue,
+            out _));
     }
 
     private static void TestBooleanLogic()
