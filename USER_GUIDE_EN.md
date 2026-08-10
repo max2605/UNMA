@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.18** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.0** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -8,6 +8,8 @@ history, monitors important settlement values, and lets you build custom alarm
 rules for game objects or global game variables.
 
 Required dependency: **MultiLangLib 0.1.0 or newer**.
+Optional dependency: **Keybind Framework 2.0.2 or newer** for configurable
+primary and secondary shortcuts. UNMA remains fully usable without it.
 
 ## Installation and updates
 
@@ -32,10 +34,25 @@ UNMA can be added to or removed from an existing save.
 
 1. Press **F8** to open or close the main UNMA window.
 2. Alternatively, use the floating launcher, which starts near the left edge.
-3. Open **ANNUNCIATOR** to see HOME and your permanent panels.
-4. Press **MASTER QUIT / ACKNOWLEDGE** to acknowledge all new and
-   cleared-but-unacknowledged alarms and silence their sounds.
-5. Open **HISTORY** to inspect previous alarm events.
+3. Open **ANNUNCIATOR** to see HOME and your permanent panels. Select **ALL**,
+   **UNASSIGNED**, or an operational area to filter that board.
+4. Use the **Q** button on one slot, **PANEL ACK** for the displayed panel, or
+   **MASTER ACK** for every new and cleared-but-unacknowledged alarm.
+5. Press **NEXT ALARM** or **Left Shift + F8** to cycle through the panel's
+   unacknowledged alarms and focus their game object where available.
+6. Open **HISTORY** to inspect previous alarm events.
+
+### Configurable shortcuts
+
+When the optional **Keybind Framework 2.0.2+** is active, its settings page
+offers primary and secondary bindings for opening UNMA, acknowledging all
+alarms, selecting the next unacknowledged alarm, and muting alarm audio for
+five real-time minutes. The built-in fallbacks are **F8** for the main window
+and **Left Shift + F8** for the next alarm; the two potentially disruptive
+actions start unbound. Muting audio never acknowledges or clears an alarm.
+UNMA suppresses all four bindings while any native UNMA text field owns
+keyboard focus, so a rebound letter key cannot trigger an operator action
+while text is being entered.
 
 ### Launcher and native windows
 
@@ -90,13 +107,101 @@ Completed `KGQ` history entries remain stored until you delete them. Only
 completed entries can be deleted. Deleting all completed events requires a
 second press within five seconds.
 
+The **HISTORY** toolbar searches message, detail, source, panel ID, and alarm
+ID at the same time. Repeatedly press the state and severity buttons to cycle
+their filters; both filters combine with the search. New events show the game
+date of their latest raise, clear, or acknowledgement transition. Entries from
+older UNMA versions remain visible with an unknown date.
+
+**CSV** and **JSON** export exactly the currently filtered rows to
+`%LOCALAPPDATA%\UNMA\exports`. CSV uses RFC 4180 quoting and JSON preserves the
+raw game-tick timestamps for further analysis. Export does not remove or
+change any history entry.
+
 ## Panels and alarm slots
 
 ### HOME
 
 HOME is a live overview of alarms that are currently active. It shows `K` and
-`KQ` alarms from all sources but does not own permanent slots. Inactive,
-cleared, and empty slots are hidden from HOME.
+`KQ` alarms from all sources under **ALL** but does not own permanent slots.
+Inactive, cleared, and empty slots are hidden from HOME.
+
+### Operational areas
+
+Operational areas organize global panels without creating another alarm,
+history event, historian stream, or audio state. The filter row offers
+**ALL**, **UNASSIGNED**, and every user-defined area:
+
+- **ALL** preserves the complete board and HOME behavior.
+- **UNASSIGNED** shows global panels that do not belong to an area.
+- A concrete area shows only its member panels. Its HOME collects their active
+  alarms and deduplicates them into one tile per underlying alarm.
+
+The selected area chip shows its panel, active-alarm, and unacknowledged-alarm
+counts. **AREA ACK** and **AREA NEXT** operate only on alarms visible through
+the selected area or **UNASSIGNED** view. **MASTER ACK** always remains the
+explicit global action.
+
+Acknowledgement still belongs to the underlying alarm occurrence, not to an
+area view. If the same alarm is visible through panels in several areas,
+acknowledging it in one area acknowledges it everywhere. UNMA does not create
+duplicate state or history for those views.
+
+Open **⚙ AREAS** to create, rename, reorder, or mark areas for deletion. These
+changes stay in one draft and are applied atomically only when saved. Deleting
+an area never deletes its panels, slots, rules, or alarm states; its panels
+become **UNASSIGNED**. Save, discard, or return to the draft when UNMA warns
+about unsaved area or panel settings.
+
+Assign a global panel from its gear-button settings. A duplicated panel keeps
+the source panel's area. A new panel inherits the currently selected concrete
+area; when created under **ALL** or **UNASSIGNED**, it starts unassigned.
+Object panels and HOME are not assigned to areas.
+
+### Incident Lens
+
+The **INCIDENT LENS** appears only above the HOME dashboard. Its collapsed bar
+shows the global pressure level and counts; **EXPAND** opens a read-only view
+of temporal clusters among the active alarms in the current dashboard scope.
+It does not appear on permanent global or object panels.
+
+The grouping is deliberately a heuristic. Consecutive active alarm
+occurrences whose raise times are no more than two game days apart form one
+temporal incident cluster. **FIRST SIGNAL** is only the earliest observed
+member of that cluster. It is not a confirmed cause, root cause, or proof that
+one member triggered another.
+
+Cluster membership follows the selected **ALL**, **UNASSIGNED**, or concrete
+operational-area filter. The pressure indicator is intentionally global so an
+operator cannot hide an island-wide storm by narrowing the board. It examines
+the last ten game days and weights each occurrence by severity:
+
+| Severity | Weight |
+| --- | ---: |
+| Notice | 1 |
+| Warning | 2 |
+| Critical | 4 |
+| Emergency | 8 |
+
+Pressure below 8 is **NORMAL**, 8–15 is **ELEVATED**, 16–31 is **STORM**, and
+32 or more is **SEVERE**. The same summary reports both recent occurrences and
+distinct alarm IDs; repeated occurrences therefore increase the first count
+without pretending to be additional alarm types.
+
+The expanded view renders at most six incident cards and eight members per
+card. A `+ N MORE` line preserves the full counts when the display cap is
+reached. **FOCUS** navigates to a member that is still visible and, where
+available, its game object. Focus never acknowledges, hides, clears, deletes,
+or silences an alarm and never changes history or audio state.
+
+Incident snapshots are transient, derived results recalculated from the
+current alarm and history snapshots. They add no saved fields and require
+no new schema migration in 0.10.0. For performance, the UI requests at most
+one result per frame and filter. Runtime history is copied only when its
+revision changes, global pressure is bounded to the newest 8,192 occurrences,
+and sorting plus analysis run outside the alarm lock. If revisions keep
+changing, UNMA returns a coherent uncached result after at most two attempts
+instead of blocking the render path.
 
 ### Global panels
 
@@ -107,6 +212,10 @@ system, provider, and custom alarms.
   **ANNUNCIATOR**.
 - Use the adjacent gear button to change its name, column count, filters,
   automatic sources, and slot order.
+- **DUPLICATE PANEL** creates an independent copy of that configuration,
+  including its slot order, filters, and custom alarms. Cloned custom alarms
+  receive new IDs and start disabled for safety; live alarm state and history
+  are not copied. The new panel retains the source panel's area assignment.
 - Add known alarms to free slots and move slots up or down.
 - Newly discovered alarms that match an automatic source or filter are added
   without moving existing slots.
@@ -123,6 +232,17 @@ panel.
 
 The small arrow on an object-bound alarm slot centers the camera on its object
 and opens the corresponding inspector.
+
+The **Q** button acknowledges only that visible slot. **PANEL ACK** acknowledges
+all unacknowledged states represented by the current panel, including every
+underlying event combined into an object slot. **MASTER ACK** remains the
+explicit global action.
+
+The **Z** button snoozes only that slot's alarm audio for one game month. Its
+badge changes to **AUDIO Z · 1 MONTH** and **R** resumes audio immediately.
+Snoozing an aggregated slot covers every current occurrence behind it, but never
+acknowledges, hides, clears, or removes an alarm from counters or history. A
+later occurrence receives a new sequence and is audible again.
 
 Double-click a custom alarm slot to open its rule directly in the editor.
 
@@ -222,6 +342,42 @@ UNMA calculates `measured value / reference value × 100`. A missing, zero, or
 negative reference value is treated as unavailable and does not activate the
 condition. Values above 100 percent are not artificially limited.
 
+### Alarm timing and hysteresis
+
+Every custom rule can use three durations based on Captain of Industry's game
+calendar:
+
+- **ACTIVATION DELAY** requires the combined AND/OR condition to remain true
+  before the alarm comes in;
+- **RESET DELAY** requires it to remain false before the alarm clears;
+- **MINIMUM ACTIVE** keeps an activated alarm standing for at least the chosen
+  duration.
+
+Set a value to `0` for the previous immediate behavior. Each normal numeric
+condition also has a **HYSTERESIS** value. It creates a dead band around the
+threshold so a fluctuating measurement does not repeatedly activate and clear
+the alarm. Timers and hysteresis latches are saved per world and continue after
+loading. Trend increase/decrease conditions intentionally do not use
+hysteresis.
+
+### Escalation and operator attention
+
+Enable **ESCALATION** on a custom rule when an alarm that remains active should
+be raised to a strictly higher severity after a selected game-time duration.
+Choose an explicit escalation sound or keep **INHERIT BASE SOUND**. Escalation
+starts a new occurrence, so it requires acknowledgement again and does not
+inherit an occurrence-bound audio snooze from the earlier state.
+
+The optional operator action can open the matching UNMA panel and scroll to
+the alarm. A second mode also ends only UNMA's temporary five-minute mute. It
+never moves the camera, opens an entity inspector, changes the global audio
+setting, modifies a slot snooze, acknowledges an alarm, or controls a machine.
+
+System-alarm stages expose the same actions. They run only when an already
+active system alarm advances into a new stage, not on its initial activation.
+For a staged escalation, configure a lower immediate stage and a higher stage
+with an activation delay.
+
 ### Rules with several conditions or objects
 
 After adding the first row, you can select another object in the game and click
@@ -288,8 +444,11 @@ invisible everywhere.
 
 The **SYSTEM** tab contains the built-in health, food, and worker monitoring.
 Each system alarm can be enabled, edited, or restored to its factory defaults.
-Its stages expose measured value, operator, threshold, severity, color, and
-sound. Restoring factory defaults requires a second press for confirmation.
+Its stages expose measured value, operator, threshold, hysteresis, activation
+and reset delay, minimum active time, severity, color, sound, and an optional
+operator action. Each stage is timed independently before the highest
+applicable severity and priority is displayed. Restoring factory defaults
+requires a second press for confirmation.
 
 The game's health value is not a conventional 0–100 percent scale. `10` is the
 neutral base value, and health-related population loss starts below `0`. UNMA
@@ -327,7 +486,9 @@ content scale.
 - Scale the content inside the main, editor, and detached windows from 75 to
   200 percent in 25-percent steps, or reset it to 100 percent. Native COI
   frames, navigation chrome, and the launcher continue to follow the game's
-  own UI scale.
+  own UI scale. Window minimums grow with the selected content scale within
+  the available viewport; panel and area settings also stack their controls
+  so required actions remain reachable at 200 percent.
 - Edit and save the Warning, Critical, and Emergency colors.
 - View the custom-sound directory and re-read supported WAV and Ogg files
   without restarting the game.
@@ -387,7 +548,7 @@ UNMA stores world-specific data in
 `Mods/UNMA/unma-world-<GameId>.json`. These files are not part of a release
 archive. The following survive saving and reloading:
 
-- panel definitions and slot order;
+- panel definitions, slot order, operational areas, and area assignments;
 - custom rules and linked panels;
 - acknowledged active alarms;
 - cleared but unacknowledged alarms;
@@ -395,6 +556,15 @@ archive. The following survive saving and reloading:
 - instrument panels, instruments, sources, calculations, and display scales;
 - customized system-alarm stages plus Vanilla behavior and sound overrides;
 - content scale, launcher position, and main-window/editor sizes.
+
+Schema 20 migrates configurations from earlier UNMA versions with every
+existing panel unassigned. Their previous **ALL** board behavior therefore
+remains unchanged until areas are deliberately created and assigned.
+The Incident Lens stores no configuration or result of its own, so 0.10.0
+remains on schema 20. If a configuration from a newer UNMA schema is found,
+this version leaves the main file and its backup artifacts byte-for-byte
+untouched, uses safe defaults, and blocks configuration writes for the session
+instead of discarding unknown future fields.
 
 If a configuration file is damaged, UNMA creates a backup and replaces it with
 safe defaults.
@@ -425,14 +595,16 @@ instrument, including a calculated value. The editor exposes it as
 to be added as conditions.
 **INSTRUMENT** is the permanent third source button beside game selection and
 global variables. Every instrument alarm independently selects one or more
-destination panels, and at least one destination must remain selected. A paper
-recorder's **ARCHIVE** action opens a large history
-view for one game day, one game month, one game year, ten years, one century,
-or all retained samples. The recorder
-advances from left to right without compressing every new value into the
-existing picture.
+destination panels, and at least one destination must remain selected.
+**HIST** opens the same large historian for every instrument type. It offers
+one game day, one game month, one game year, ten years, one century, or all
+retained samples, and applies the selected range to both chart and analysis.
+The footer shows current, minimum, average, maximum, linear rate per game
+month, and R-squared. A reliable rising or falling trend adds a directed ETA
+to the configured scale maximum or minimum; insufficient, stable, unreliable,
+and beyond-100-years results are stated explicitly.
 
-Instrument definitions and panel layouts are saved per world. Recorder samples
+Instrument definitions and panel layouts are saved per world. Historian samples
 exist only for the current running session and begin again after reloading the
 world.
 

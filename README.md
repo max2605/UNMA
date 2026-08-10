@@ -27,6 +27,31 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
   `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
   vollständig ausgeblendet.
+- Benutzerdefinierte Betriebsbereiche gruppieren globale Panels, ohne deren
+  Alarm-, Verlaufs- oder Audiologik zu verändern. **ALLE**, **NICHT
+  ZUGEORDNET** und jeder konkrete Bereich filtern Panelleiste und HOME; das
+  gefilterte HOME führt aktive Meldungen seiner Mitgliedspanels zu genau einem
+  Schlitz je Alarm zusammen.
+- **BEREICH QUITT.** und **BEREICH WEITER** gelten für den aktuellen Bereich;
+  **ALLES QUITTIEREN** bleibt global. Quittiert wird immer der gemeinsame
+  Alarmzustand: Ist derselbe Alarm in mehreren Bereichen sichtbar, erscheint
+  die Quittierung deshalb überall und erzeugt keinen zweiten Verlauf.
+- Die ausschließlich auf HOME sichtbare **INCIDENT-LINSE** gruppiert aktive
+  Meldungen als zeitliche Heuristik: Liegen aufeinanderfolgende Kommen-Zeitpunkte
+  höchstens zwei Spieltage auseinander, gehören sie zu einem Cluster.
+  **ERSTES SIGNAL** ist nur dessen früheste Meldung und keine bestätigte
+  Ursache oder Ursachenanalyse.
+- Incident-Cluster respektieren **ALLE**, **NICHT ZUGEORDNET** und konkrete
+  Betriebsbereiche. Der davon unabhängige globale Druck zählt Vorkommen der
+  letzten zehn Spieltage mit den Gewichten Hinweis 1, Warnung 2, Kritisch 4
+  und Notfall 8. Unter 8 ist er **NORMAL**, ab 8 **ERHÖHT**, ab 16 **STURM**
+  und ab 32 **SCHWER**; zusätzlich erscheinen Vorkommen und verschiedene
+  Alarmkennungen.
+- Die erweiterte Linse zeigt höchstens sechs Incident-Karten und acht
+  Mitglieder pro Karte; weitere bleiben gezählt. **FOKUS** navigiert nur zu
+  einer noch sichtbaren Meldung beziehungsweise ihrem Objekt. Dabei wird
+  nichts quittiert, versteckt oder gelöscht; Ton und Verlauf bleiben
+  unverändert.
 - Dauerhaft feste Meldeschlitze je Fachpanel: Eine stabile Alarm-ID behält ihren
   Platz auch zwischen `NORMAL`, `KOMMT`, `STEHT` und `GEGANGEN`. Wiederholte
   Vanilla-Ereignisse derselben Meldungsart und Entität erscheinen genau einmal;
@@ -69,6 +94,14 @@ Zielversion: Captain of Industry **0.8.6c**.
   das zugehörige Gebäude/Fahrzeug und öffnet dessen Inspector.
 - AWL-artige Bedingungstabelle mit sichtbarem Ist-Wert, verständlicher Kennung,
   allen sechs Vergleichszeichen, Soll-Wert und UND-/ODER-Verknüpfung.
+- Spielzeitbasierte Auslöse- und Rücksetzverzögerung sowie Mindestaktivzeit je
+  eigener Regel und Systemalarmstufe. Eine Hysterese je numerischer Bedingung
+  hält Grenzwerte stabil; laufende Timer und Latches überleben Save/Load.
+- Eigene Regeln können nach frei wählbarer aktiver Spielzeit einmalig auf eine
+  höhere Stufe und einen anderen Ton eskalieren. Optional öffnet UNMA dann das
+  passende Panel und beendet ausschließlich die vorübergehende
+  Fünf-Minuten-Stummschaltung. Systemstufen bieten dieselben sicheren
+  Operatoraktionen beim Wechsel eines bereits aktiven Alarms.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
   werden für Lager, Förderer/Rohre und Fahrzeugfracht automatisch empfohlen.
 - Bedingungen können statt eines Spielobjekts auch **GLOBALE VARIABLEN** wie
@@ -102,25 +135,56 @@ Zielversion: Captain of Industry **0.8.6c**.
   Bedingungen können absolut (`< 400`) oder automatisch relativ zur summierten
   Produktkapazität (`< 50 %`) definiert werden.
 - Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
+- `Z` pausiert den Ton eines Meldeschlitzes für einen Spielmonat, `R` setzt ihn
+  fort. Die Funktion arbeitet auch für zusammengefasste Objektmeldungen und
+  verändert weder Quittierung noch Sichtbarkeit, Zähler oder Verlauf.
 - Beliebig viele Panels mit klar getrennter Auswahl, Bearbeitung und Neuanlage,
   Spaltenzahl, festen hoch/runter sortierbaren Schlitzen, gezieltem Hinzufügen
   bekannter Meldungen sowie Vanilla-/System-Automatik und kommagetrennten
   Suchfiltern. Neu entdeckte passende Meldungsarten werden einmalig hinten
   angehängt und verschieben vorhandene Plätze nicht.
+- Globale Panels lassen sich als unabhängige Vorlage duplizieren. Reihenfolge,
+  Filter und eigene Regeln werden tief kopiert; kopierte Regeln erhalten neue
+  Kennungen und starten deaktiviert, während Livezustand und Verlauf unberührt
+  bleiben. Das Duplikat übernimmt den Bereich seines Quellpanels.
+- Im Bereichseditor lassen sich bis zu 64 Bereiche als gemeinsamer Entwurf
+  anlegen, umbenennen, umsortieren und löschen. Erst Speichern wendet den
+  gesamten Entwurf atomar an; beim Löschen werden die betroffenen Panels nur
+  **NICHT ZUGEORDNET**. Die Panel-Einstellungen weisen ein Panel direkt zu.
+  Ein neues Panel übernimmt einen konkret ausgewählten Bereich, beginnt unter
+  **ALLE** oder **NICHT ZUGEORDNET** jedoch unzugeordnet.
 - Persistente UI-Skalierung von 75 bis 200 Prozent für 1080p- und 4K-Monitore.
   Klicks, Drags und Mausradbewegungen werden nur innerhalb der sichtbaren
   UNMA-Rahmen abgefangen. Außerhalb bleiben Gebäudeauswahl, Kartenbewegung und
-  Zoom auch bei geöffnetem UNMA-Fenster verfügbar.
+  Zoom auch bei geöffnetem UNMA-Fenster verfügbar. Schmale beziehungsweise
+  auf 200 Prozent skalierte Fenster vergrößern ihre Mindestarbeitsfläche im
+  verfügbaren Viewport; Panel- und Bereichseinstellungen stapeln zusätzlich
+  ihre Bedienelemente. Ungespeicherte Entwürfe werden vor Schließen oder
+  Wechseln ausdrücklich geschützt.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
   (gekommen, gegangen und quittiert). `K` blinkt rot, `KG` blinkt mit
   schwarzer Schrift auf weißem Hintergrund; `KQ` und `KGQ` stehen schwarz auf
-  weiß. Nur abgeschlossene `KGQ`-Einträge lassen sich ausdrücklich löschen.
+  weiß. Suche, Zustands- und Stufenfilter grenzen den Verlauf ein; neue
+  Ereignisse führen Spielzeitmarken für Kommen, Gehen und Quittieren. Die
+  gefilterte Ansicht lässt sich als RFC-4180-CSV oder JSON exportieren. Nur
+  abgeschlossene `KGQ`-Einträge lassen sich ausdrücklich löschen.
 - Spielstandsbezogene Persistenz in `unma-world-<GameId>.json`; Entity-Regeln
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
   Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern
-  und Neuladen.
+  und Neuladen. Schema 20 übernimmt ältere Konfigurationen mit unzugeordneten
+  Panels und unverändertem **ALLE**-Verhalten. Die Incident-Linse bleibt ein
+  vorübergehender, aus aktuellen Alarm- und Verlaufssnapshots abgeleiteter
+  Zustand und benötigt in 0.10.0 weder neue Speicherfelder noch eine weitere
+  Schema-Migration. Eine erkannte Konfiguration aus einem neueren Schema bleibt
+  bytegenau unangetastet; UNMA arbeitet dann mit sicheren Vorgaben und sperrt
+  Schreibvorgänge für die Sitzung. Ein revisionsgebundener
+  Verlaufscache wird nur bei Änderungen neu aufgebaut und begrenzt den
+  globalen Druck auf die neuesten 8.192 Vorkommen; Sortierung und Analyse
+  laufen außerhalb des Alarm-Locks. Wechselt die Revision fortlaufend, liefert
+  UNMA nach höchstens zwei Versuchen einen konsistenten lokalen Snapshot, statt
+  den Renderpfad zu blockieren.
 - Beim endgültigen Abriss beziehungsweise Zerstören einer überwachten Entity
   löscht UNMA deren eigene Regel samt festem Schlitz und aktivem Zustand
   automatisch. Bei einer Sammelmeldung wird die ganze UND-/ODER-Regel entfernt,
@@ -136,11 +200,18 @@ Zielversion: Captain of Industry **0.8.6c**.
    Die Schaltfläche erscheint nur bei geschlossener Zentrale und lässt sich am
    `↕`-Griff aus anderen HUD-Bereichen herausziehen; ihre Position wird
    gespeichert.
-3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Für die dauerhaft
-   definierte Schlitztafel ein Fachpanel wählen.
-4. `MASTER QUIT · QUITTIEREN` quittiert alle kommenden und bereits gegangenen
-   Meldungen und stoppt deren Ton. Bei einer weiterhin anstehenden Meldung
-   bleibt die Aktivfarbe sichtbar, bis die Ursache verschwindet.
+3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Über **ALLE**,
+   **NICHT ZUGEORDNET** oder einen Betriebsbereich Panelleiste und HOME
+   eingrenzen. Die **INCIDENT-LINSE** bei Bedarf erweitern, um die zeitlichen
+   Cluster dieses Bereichs zu prüfen; für die dauerhaft definierte
+   Schlitztafel ein Fachpanel wählen.
+4. Mit `Q` nur einen Schlitz, mit `PANEL QUITTIEREN` die sichtbare Tafel oder
+   mit **BEREICH QUITT.** den ausgewählten Bereich oder mit `ALLES QUITTIEREN`
+   sämtliche kommenden und gegangenen Meldungen quittieren. **BEREICH
+   WEITER**, `NÄCHSTER ALARM` beziehungsweise standardmäßig
+   `Umschalt links + F8` springt zyklisch durch unquittierte Meldungen.
+   Bei einer weiterhin anstehenden Meldung bleibt die Aktivfarbe sichtbar,
+   bis die Ursache verschwindet.
 5. In **VERLAUF** zeigt eine eigene Zeile je Alarmereignis den Zustand `K`,
    `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
    gespeichert, bis sie dort ausdrücklich gelöscht werden.
@@ -166,7 +237,8 @@ Zielversion: Captain of Industry **0.8.6c**.
    oder auf die Werkvorgabe zurückgesetzt werden.
 11. Unter **OPTIONEN** lässt sich die gesamte UNMA-Oberfläche von 75 bis
     200 Prozent skalieren. `+ PANEL` legt eine globale Tafel an; das Zahnrad
-    daneben öffnet deren getrennte Einstellungen.
+    daneben öffnet deren getrennte Einstellungen samt Bereichszuordnung. Über
+    **⚙ BEREICHE** werden Betriebsbereiche gemeinsam verwaltet.
 
 Die Gesundheitsanzeige des Spiels ist keine klassische 0–100-%-Skala:
 `10` ist der neutrale Basiswert und erst unter `0` entsteht ein
@@ -202,8 +274,11 @@ Schreiber und CRTs führen eine kontinuierlich verbundene Kurve.
 
 Zur Verfügung stehen vertikale und horizontale Profilanzeigen,
 Rundinstrumente, rote und grüne Siebensegmentanzeigen, Nixie-Röhren,
-bernsteinfarbene und grüne CRT-Anzeigen sowie ein Papierschreiber. Sein
-**ARCHIV** öffnet eine große Historienansicht mit mehreren Zeitfenstern;
+bernsteinfarbene und grüne CRT-Anzeigen sowie ein Papierschreiber. **HIST**
+öffnet bei jedem Instrument eine große Historienansicht mit Spielzeitfenstern
+von einem Tag bis zur gesamten Sitzung. Neben aktuellem Wert, Minimum,
+Mittelwert und Maximum zeigt sie die lineare Rate pro Spielmonat, R² und bei
+belastbarem Trend die ETA zur oberen oder unteren Skalenbegrenzung;
 **MELD.** öffnet direkte und berechnete Messwerte als Quelle
 **VERKNÜPFTE WERTE: Schildname**. Weitere Werte desselben Messpults lassen sich
 als Bedingungen ergänzen. Der dritte Quellenbutton **INSTRUMENT** und eine
@@ -266,15 +341,22 @@ Voraussetzungen:
 
 - Captain of Industry 0.8.6c;
 - MultiLangLib 0.1.0 oder neuer als aktivierte Mod-Abhängigkeit;
+- optional Keybind Framework 2.0.2 oder neuer für frei konfigurierbare primäre
+  und sekundäre Tastenkürzel;
 - .NET Framework 4.8 Reference Assemblies;
 - Visual Studio Build Tools 2022 oder `dotnet` mit passenden Referenzen.
 
 ```powershell
 $env:COI_ROOT = 'C:\Program Files (x86)\Steam\steamapps\common\Captain of Industry'
-dotnet build .\source\UNMA.csproj -c Release
+.\build.ps1 -Configuration Release
 ```
 
-Der Release-Build kopiert `UNMA.dll` automatisch in den Mod-Stammordner.
+Der normale Release-Build schreibt ausschließlich nach
+`source\bin\Release\UNMA.dll`. Erst `build.ps1 -Deploy` kopiert die geprüfte
+DLL ausdrücklich in den aktiven Mod-Stamm; dieser Schalter darf nur bei
+geschlossenem Captain of Industry verwendet werden. `package.ps1` erzeugt
+anschließend ein reproduzierbares Archiv, `tests\verify-release.ps1` prüft
+Versionskonsistenz, Inhalt und SHA-256-Werte.
 
 ## Lizenz
 

@@ -1,6 +1,7 @@
 param(
     [string]$Configuration = "Release",
-    [string]$GameRoot = "C:\Program Files (x86)\Steam\steamapps\common\Captain of Industry"
+    [string]$GameRoot = "C:\Program Files (x86)\Steam\steamapps\common\Captain of Industry",
+    [switch]$Deploy
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,14 +10,17 @@ if (-not (Test-Path -LiteralPath $GameRoot)) {
     throw "Captain of Industry wurde nicht gefunden: $GameRoot"
 }
 
-dotnet build $projectPath -c $Configuration "/p:COI_ROOT=$GameRoot"
+$deployValue = if ($Deploy) { "true" } else { "false" }
+dotnet build $projectPath -c $Configuration "/p:COI_ROOT=$GameRoot" "/p:DeployToModRoot=$deployValue"
 
 if ($LASTEXITCODE -ne 0) {
     throw "UNMA-Build fehlgeschlagen (Exitcode $LASTEXITCODE)."
 }
 
 if ($Configuration -eq "Release") {
-    $deployedAssemblyPath = Join-Path $PSScriptRoot "UNMA.dll"
+    $builtAssemblyPath = Join-Path `
+        $PSScriptRoot `
+        "source\bin\Release\UNMA.dll"
     $managedPath = Join-Path $GameRoot "Captain of Industry_Data\Managed"
     $saveEventVerificationPath = Join-Path `
         $PSScriptRoot `
@@ -32,7 +36,7 @@ if ($Configuration -eq "Release") {
         -NonInteractive `
         -ExecutionPolicy Bypass `
         -File $saveEventVerificationPath `
-        -AssemblyPath $deployedAssemblyPath `
+        -AssemblyPath $builtAssemblyPath `
         -ManagedPath $managedPath
     if ($LASTEXITCODE -ne 0) {
         throw "UNMA-Save-Event-Prüfung fehlgeschlagen " +
@@ -40,4 +44,9 @@ if ($Configuration -eq "Release") {
     }
 }
 
-Write-Host "UNMA-Build erfolgreich: $(Join-Path $PSScriptRoot 'UNMA.dll')"
+$outputAssembly = if ($Deploy) {
+    Join-Path $PSScriptRoot "UNMA.dll"
+} else {
+    Join-Path $PSScriptRoot "source\bin\$Configuration\UNMA.dll"
+}
+Write-Host "UNMA-Build erfolgreich: $outputAssembly"

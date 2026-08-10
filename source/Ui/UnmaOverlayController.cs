@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Mafi.Core.Entities;
 using Mafi;
 using Mafi.Unity;
@@ -14,6 +16,7 @@ using Mafi.Unity.UiToolkit;
 using UnityEngine;
 using UNMA.Audio;
 using UNMA.Domain;
+using UNMA.Integration;
 using UNMA.Localization;
 using UNMA.Runtime;
 
@@ -44,12 +47,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private const int TabInstruments = 5;
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
+    private const int MaximumAlarmAreas = 64;
+    private const int MaximumIncidentCards = 6;
+    private const int MaximumIncidentMembersPerCard = 8;
     private static readonly float[] s_instrumentPreviewSamples =
     {
         0.12f, 0.18f, 0.24f, 0.22f, 0.36f, 0.48f, 0.45f, 0.61f,
         0.70f, 0.66f, 0.79f,
     };
-    private static readonly int[] s_recorderArchiveRanges =
+    private static readonly int[] s_historianRanges =
     {
         GameTimeWindowPolicy.SimTicksPerDay,
         GameTimeWindowPolicy.SimTicksPerMonth,
@@ -58,11 +64,46 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GameTimeWindowPolicy.SimTicksPerYear * 100,
         0,
     };
+    private static readonly AlarmHistoryStateFilter[] s_historyStateFilters =
+    {
+        AlarmHistoryStateFilter.All,
+        AlarmHistoryStateFilter.Open,
+        AlarmHistoryStateFilter.Completed,
+        AlarmHistoryStateFilter.K,
+        AlarmHistoryStateFilter.KQ,
+        AlarmHistoryStateFilter.KG,
+        AlarmHistoryStateFilter.KGQ,
+    };
+    private static readonly AlarmSeverity?[] s_historySeverityFilters =
+    {
+        null,
+        AlarmSeverity.Notice,
+        AlarmSeverity.Warning,
+        AlarmSeverity.Critical,
+        AlarmSeverity.Emergency,
+    };
     private enum EditorWindowMode
     {
         Rule,
         PanelCreation,
         PanelSettings,
+        AlarmAreas,
+    }
+
+    private enum TimingDisplayUnit
+    {
+        Tick,
+        Day,
+        Month,
+        Year,
+        Decade,
+        Century,
+    }
+
+    private sealed class TimingDraftValue
+    {
+        public string AmountText = "0";
+        public TimingDisplayUnit Unit = TimingDisplayUnit.Tick;
     }
 
     private static readonly FieldInfo s_menuDepthField =
@@ -82,14 +123,26 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private readonly List<string> m_draftConditionThresholdTexts = new();
     private readonly Dictionary<ConditionDefinition, string>
         m_draftTrendWindowTexts = new();
+    private readonly Dictionary<ConditionDefinition, string>
+        m_draftHysteresisTexts = new();
     private readonly Dictionary<string, PanelViewCacheEntry> m_panelViewCache =
         new(StringComparer.Ordinal);
+    private int m_alarmAreaViewCacheFrame = -1;
+    private AlarmAreaFilter m_alarmAreaViewCacheFilter = AlarmAreaFilter.All;
+    private IReadOnlyList<AlarmView> m_alarmAreaViewCache =
+        Array.Empty<AlarmView>();
+    private bool m_alarmAreaViewCacheSucceeded;
+    private int m_incidentSnapshotCacheFrame = -1;
+    private AlarmAreaFilter m_incidentSnapshotCacheFilter =
+        AlarmAreaFilter.All;
+    private AlarmIncidentSnapshot m_incidentSnapshotCache;
+    private bool m_incidentSnapshotCacheSucceeded;
     private readonly Dictionary<string, List<float>> m_instrumentSamples =
         new(StringComparer.Ordinal);
     private readonly List<InstrumentHistoryBucket>
-        m_recorderArchiveBucketScratch = new(4096);
-    private readonly InstrumentPanelRenderer.RecorderArchiveTrace
-        m_recorderArchiveTrace = new();
+        m_historianBucketScratch = new(4096);
+    private readonly InstrumentPanelRenderer.HistorianTrace
+        m_historianTrace = new();
     private readonly Dictionary<string, double> m_instrumentValues =
         new(StringComparer.Ordinal);
     private readonly HashSet<string> m_invalidInstruments =
@@ -110,7 +163,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Rect m_entityAlarmWindowRect = new(180f, 110f, 1080f, 720f);
     private Rect m_lastPersistedEditorWindowRect;
     private Vector2 m_boardScroll;
+    private Vector2 m_boardActionsScroll;
+    private Vector2 m_incidentLensStatsScroll;
+    private Vector2 m_incidentLensScroll;
     private Vector2 m_panelTabsScroll;
+    private Vector2 m_alarmAreaTabsScroll;
+    private Vector2 m_panelSettingsAreaScroll;
     private Vector2 m_historyScroll;
     private Vector2 m_editorScroll;
     private Vector2 m_entityAlarmScroll;
@@ -128,6 +186,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private float m_nextPanelSlotCandidateRefresh;
     private float m_nextInstrumentRefresh;
     private bool m_isOpen;
+    private bool m_incidentLensExpanded;
     private bool m_entityAlarmWindowOpen;
     private bool m_editorClosePromptOpen;
     private EditorWindowMode m_editorWindowMode;
@@ -137,6 +196,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_panelSettingsIncludeVanilla;
     private bool m_panelSettingsIncludeSystem;
     private string m_panelSettingsFilter = "";
+    private string m_panelSettingsAreaId = "";
+    private readonly List<AlarmAreaDefinition> m_alarmAreaDraft = new();
+    private AlarmAreaFilter m_alarmAreaFilter = AlarmAreaFilter.All;
+    private string m_newAlarmAreaName = "";
+    private string m_pendingAlarmAreaDeleteId = "";
+    private float m_pendingAlarmAreaDeleteUntil;
     private string m_activeEntityPanelId = "";
     private int m_openEntityPanelAfterInspectionId = -1;
     private bool m_openEntityAlarmAfterInspection;
@@ -182,10 +247,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_originalDraftSoundId = "auto";
     private bool m_draftSoundChanged;
     private bool m_draftAutoAcknowledgeOnClear;
+    private readonly TimingDraftValue m_draftActivationDelay = new();
+    private readonly TimingDraftValue m_draftResetDelay = new();
+    private readonly TimingDraftValue m_draftMinimumActive = new();
+    private bool m_draftEscalationEnabled;
+    private readonly TimingDraftValue m_draftEscalationAfter = new();
+    private AlarmSeverity m_draftEscalationSeverity = AlarmSeverity.Critical;
+    private string m_draftEscalationSoundId = "";
+    private AlarmOperatorAction m_draftEscalationOperatorAction;
     private string m_editingRuleId = "";
     private string m_draftTargetPanelId = "";
     private string m_lastAlarmTileClickId = "";
     private float m_lastAlarmTileClickAt;
+    private string m_lastNavigatedAlarmSlotId = "";
+    private float m_audioMutedUntil;
     private string m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     private string m_panelSlotFilter = "";
     private string m_soundOverrideFilter = "";
@@ -211,24 +286,23 @@ public sealed class UnmaOverlayController : MonoBehaviour
         2);
     private string m_pendingInstrumentPanelDeleteId = "";
     private float m_pendingInstrumentPanelDeleteUntil;
-    private string m_recorderFullscreenInstrumentId = "";
-    private int m_recorderArchiveRangeIndex = 1;
-    private Vector2 m_recorderPreviousWindowSize;
-    private bool m_recorderPreviousWindowSizeValid;
-    private string m_recorderArchiveCacheInstrumentId = "";
-    private int m_recorderArchiveCacheWindowSeconds = -1;
-    private int m_recorderArchiveCachePixelColumns = -1;
-    private bool m_recorderArchiveCacheHasHistory;
-    private InstrumentHistoryState m_recorderArchiveCacheHistoryState;
-    private int m_recorderArchiveCacheFallbackCount = -1;
-    private float m_recorderArchiveCacheFallbackFirst;
-    private float m_recorderArchiveCacheFallbackLast;
-    private double m_recorderArchiveCacheScaleMinimum;
-    private double m_recorderArchiveCacheScaleMaximum;
-    private double m_recorderArchiveCacheObservedMinimum;
-    private double m_recorderArchiveCacheObservedMaximum;
+    private string m_historianInstrumentId = "";
+    private int m_historianRangeIndex = 1;
+    private Vector2 m_historianPreviousWindowSize;
+    private bool m_historianPreviousWindowSizeValid;
+    private string m_historianCacheInstrumentId = "";
+    private int m_historianCacheWindowTicks = -1;
+    private int m_historianCachePixelColumns = -1;
+    private bool m_historianCacheHasHistory;
+    private InstrumentHistoryState m_historianCacheHistoryState;
+    private double m_historianCacheScaleMinimum;
+    private double m_historianCacheScaleMaximum;
     private SystemAlarmDefinition m_systemAlarmDraft;
     private readonly Dictionary<string, string> m_systemThresholdTexts =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> m_systemHysteresisTexts =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TimingDraftValue> m_systemTimingDrafts =
         new(StringComparer.Ordinal);
     private string m_pendingSystemResetId = "";
     private float m_pendingSystemResetUntil;
@@ -246,6 +320,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private long m_historyCacheRevision = -1;
     private IReadOnlyList<AlarmHistoryDefinition> m_historyCache =
         Array.Empty<AlarmHistoryDefinition>();
+    private string m_historySearchText = "";
+    private AlarmHistoryStateFilter m_historyStateFilter =
+        AlarmHistoryStateFilter.All;
+    private AlarmSeverity? m_historySeverityFilter;
 
     private GUIStyle m_panelStyle;
     private GUIStyle m_headerStyle;
@@ -375,6 +453,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         m_isUiSuppressedByMenu = !IsGameplayActive();
+        // Read native focus before polling UNMA's reflection-based shortcuts.
+        // COI's input controller blocks game shortcuts while a TextField owns
+        // focus, but UNMA polls its configurable bindings directly and must
+        // therefore honor the same capture explicitly.
+        var nativeTextInputFocused = IsNativeTextInputFocused();
+        m_inputBlocker?.SetKeyboardCaptured(nativeTextInputFocused);
         var pointerOverUnma = !m_isUiSuppressedByMenu &&
                               IsPointerOverAnyUnmaSurface();
         m_inputBlocker?.SetBlockingEnabled(!m_isUiSuppressedByMenu);
@@ -388,6 +472,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_inspectorAlarmButtons?.Update();
             m_inputBlocker?.EnsureActive();
+            if (m_runtime.TryTakeAttentionRequest(out var attentionRequest))
+            {
+                HandleAttentionRequest(attentionRequest);
+            }
         }
 
         if (m_runtime.TryTakeCompletedInspection(out var inspection))
@@ -431,14 +519,51 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 Time.realtimeSinceStartup + 1f;
         }
 
-        if (!m_isUiSuppressedByMenu && Input.GetKeyDown(KeyCode.F8))
+        if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.ToggleWindowId,
+                KeybindFrameworkBridge.ToggleWindowDefault))
         {
             m_isOpen = !m_isOpen;
             SynchronizeNativeWindowVisibility();
             SynchronizeNativeLauncher();
         }
 
-        var audible = m_testAlarm != null &&
+        if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.AcknowledgeAllId,
+                KeybindFrameworkBridge.AcknowledgeAllDefault))
+        {
+            AcknowledgeAllAlarms();
+        }
+
+        if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.NextUnacknowledgedAlarmId,
+                KeybindFrameworkBridge.NextUnacknowledgedAlarmDefault))
+        {
+            NavigateToNextUnacknowledgedAlarm(CurrentPanel);
+        }
+
+        if (!m_isUiSuppressedByMenu &&
+            !nativeTextInputFocused &&
+            KeybindFrameworkBridge.IsPressed(
+                KeybindFrameworkBridge.MuteAudioFiveMinutesId,
+                KeybindFrameworkBridge.MuteAudioFiveMinutesDefault))
+        {
+            m_audioMutedUntil = Time.realtimeSinceStartup + 300f;
+            m_audio.StopAlarm();
+            SetStatus(UnmaText.Get(
+                "audio.muted_five_minutes",
+                "Alarm audio muted for five minutes."));
+        }
+
+        var audible = Time.realtimeSinceStartup < m_audioMutedUntil
+            ? null
+            : m_testAlarm != null &&
                       Time.realtimeSinceStartup < m_testAlarmUntil
             ? m_testAlarm
             : m_runtime.GetAudibleAlarm();
@@ -474,13 +599,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         EnsureStyles();
+        var scale = UiScale;
         if (m_isOpen && m_nativeWindowShell?.IsOpen == true)
         {
-            m_nativeWindowShell.RenderBody(RenderMainBodyContent, UiScale);
+            m_nativeWindowShell.SetContentScale(scale);
+            var currentSize = m_nativeWindowShell.CurrentSize;
+            m_windowRect.width = currentSize.x;
+            m_windowRect.height = currentSize.y;
+            m_nativeWindowShell.RenderBody(RenderMainBodyContent, scale);
         }
         if (m_entityAlarmWindowOpen && m_nativeEditorShell?.IsOpen == true)
         {
-            m_nativeEditorShell.RenderBody(RenderEditorBodyContent, UiScale);
+            m_nativeEditorShell.SetContentScale(scale);
+            var currentSize = m_nativeEditorShell.CurrentSize;
+            m_entityAlarmWindowRect.width = currentSize.x;
+            m_entityAlarmWindowRect.height = currentSize.y;
+            m_nativeEditorShell.RenderBody(RenderEditorBodyContent, scale);
         }
         foreach (var detached in m_detachedPanels)
         {
@@ -496,9 +630,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 continue;
             }
 
+            detached.NativeShell.SetContentScale(scale);
+            var currentSize = detached.NativeShell.CurrentSize;
+            detached.Rect.width = currentSize.x;
+            detached.Rect.height = currentSize.y;
             detached.NativeShell.RenderBody(
                 () => RenderDetachedBodyContent(detached, panel),
-                UiScale);
+                scale);
         }
 
         if (!m_nativeOverlayDrawLogged)
@@ -577,12 +715,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void UpdateNativeKeyboardInputCapture()
     {
-        var textInputFocused =
+        m_inputBlocker?.SetKeyboardCaptured(IsNativeTextInputFocused());
+    }
+
+    private bool IsNativeTextInputFocused()
+    {
+        return
             m_nativeWindowShell?.IsBodyKeyboardCaptured == true ||
             m_nativeEditorShell?.IsBodyKeyboardCaptured == true ||
             m_detachedPanels.Any(panel =>
                 panel.NativeShell?.IsBodyKeyboardCaptured == true);
-        m_inputBlocker?.SetKeyboardCaptured(textInputFocused);
     }
 
 
@@ -861,6 +1003,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void SelectMainTab(int tab)
     {
+        if (tab != TabInstruments &&
+            !string.IsNullOrWhiteSpace(m_historianInstrumentId))
+        {
+            ExitInstrumentHistorian();
+        }
         m_tab = tab;
         m_clearGuiFocusPending = true;
     }
@@ -900,8 +1047,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var isEntityPanel = PanelTopologyPolicy.IsEntityPanel(panel);
+        if (!isEntityPanel)
+        {
+            DrawAlarmAreaFilter();
+            EnsureCurrentPanelVisibleInArea();
+            panel = CurrentPanel;
+            if (panel == null)
+            {
+                return;
+            }
+        }
+
         NativeGUILayout.BeginHorizontal();
-        if (PanelTopologyPolicy.IsEntityPanel(panel))
+        if (isEntityPanel)
         {
             if (NativeGUILayout.Button(
                     UnmaText.Get("auto.c76615f2e3a1"),
@@ -920,6 +1079,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         else
         {
             var globalPanels = GlobalPanels;
+            var visiblePanels = GetVisibleGlobalPanels();
             m_panelTabsScroll = NativeGUILayout.BeginScrollView(
                 m_panelTabsScroll,
                 false,
@@ -927,23 +1087,33 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 NativeGUILayout.Height(52f),
                 NativeGUILayout.ExpandWidth(true));
             NativeGUILayout.BeginHorizontal();
-            for (var index = 0; index < globalPanels.Count; index++)
+            foreach (var candidate in visiblePanels)
             {
-                var candidate = globalPanels[index];
+                var globalIndex = globalPanels.FindIndex(item =>
+                    string.Equals(
+                        item.Id,
+                        candidate.Id,
+                        StringComparison.Ordinal));
+                if (globalIndex < 0)
+                {
+                    continue;
+                }
+                var tabLabel = GetAreaAwarePanelTabLabel(candidate);
                 var tabWidth = Mathf.Clamp(
-                    (candidate.Name?.Length ?? 0) *
+                    (tabLabel?.Length ?? 0) *
                     Mathf.Max(7f, m_buttonStyle.fontSize * 0.58f) + 24f,
                     110f,
-                    230f);
+                    280f);
                 if (NativeGUILayout.Button(
-                        candidate.Name,
-                        index == m_currentPanelIndex
+                        tabLabel,
+                        globalIndex == m_currentPanelIndex
                             ? m_primaryButtonStyle
                             : m_buttonStyle,
                         NativeGUILayout.Width(tabWidth),
                         NativeGUILayout.Height(30f)))
                 {
-                    m_currentPanelIndex = index;
+                    m_currentPanelIndex = globalIndex;
+                    m_lastNavigatedAlarmSlotId = "";
                     m_boardScroll = Vector2.zero;
                 }
             }
@@ -969,30 +1139,77 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndHorizontal();
 
         DrawEntityAssignmentBanner(panel);
-        var alarms = GetPanelViews(panel);
-        var activeCount = panel.IsDashboard
-            ? alarms.Count
-            : m_runtime.ActiveCount;
-        var unacknowledgedCount = panel.IsDashboard
-            ? alarms.Count(alarm => !alarm.IsAcknowledged)
-            : m_runtime.UnacknowledgedCount;
+        var alarms = GetBoardViews(panel);
+        var activeCount = alarms.Count(alarm => alarm.IsActive);
+        var unacknowledgedCount = alarms.Count(alarm =>
+            alarm.RequiresAcknowledgement);
+        var incidentLensAvailable = false;
+        var incidentLensHeight = panel.IsDashboard
+            ? DrawIncidentLens(panel, alarms, out incidentLensAvailable)
+            : 0f;
+        var compactActions = m_windowRect.width < 760f;
         NativeGUILayout.Space(6f);
         NativeGUILayout.BeginHorizontal();
-        NativeGUILayout.Label(
-            UnmaText.Get("auto.397544fe1d24") + activeCount +
-            UnmaText.Get("auto.ac9ef4c5783a") + unacknowledgedCount,
-            m_sectionStyle,
-            NativeGUILayout.Height(34f));
+        var showBoardCountLabel = !panel.IsDashboard ||
+                                  !incidentLensAvailable;
+        if (showBoardCountLabel)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get("auto.397544fe1d24") + activeCount +
+                UnmaText.Get("auto.ac9ef4c5783a") + unacknowledgedCount,
+                m_sectionStyle,
+                NativeGUILayout.Height(34f));
+        }
+        if (compactActions && showBoardCountLabel)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
+        var scopedDashboard = IsAreaScopedDashboard(panel);
+        var scopeActionWidth = compactActions
+            ? Math.Max(118f, (m_windowRect.width - 70f) * 0.5f)
+            : 160f;
         if (NativeGUILayout.Button(
-                UnmaText.Get("auto.e47523e046af"),
+                scopedDashboard
+                    ? UnmaText.Get("board.acknowledge_area", "AREA ACK")
+                    : UnmaText.Get("board.acknowledge_panel", "PANEL ACK"),
                 m_dangerButtonStyle,
-                NativeGUILayout.Width(245f),
+                NativeGUILayout.Width(scopeActionWidth),
                 NativeGUILayout.Height(34f)))
         {
-            m_runtime.AcknowledgeAll();
-            m_audio.StopAlarm();
-            SetStatus(
-                UnmaText.Get("auto.dc2bb45a2f14"));
+            AcknowledgePanelAlarms(panel);
+        }
+        if (NativeGUILayout.Button(
+                scopedDashboard
+                    ? UnmaText.Get("board.next_area_alarm", "AREA NEXT")
+                    : UnmaText.Get("board.next_alarm", "NEXT ALARM"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(compactActions
+                    ? scopeActionWidth
+                    : 150f),
+                NativeGUILayout.Height(34f)))
+        {
+            NavigateToNextUnacknowledgedAlarm(panel);
+        }
+        NativeGUILayout.EndHorizontal();
+
+        if (compactActions)
+        {
+            m_boardActionsScroll = NativeGUILayout.BeginScrollView(
+                m_boardActionsScroll,
+                false,
+                false,
+                NativeGUILayout.Height(42f),
+                NativeGUILayout.ExpandWidth(true));
+        }
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get("board.acknowledge_master", "MASTER ACK"),
+                m_dangerButtonStyle,
+                NativeGUILayout.Width(compactActions ? 140f : 160f),
+                NativeGUILayout.Height(34f)))
+        {
+            AcknowledgeAllAlarms();
         }
         if (NativeGUILayout.Button(
                 UnmaText.Get("auto.c70a06d3a782"),
@@ -1002,7 +1219,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             DetachPanel(panel.Id);
         }
-        if (!panel.IsDashboard && NativeGUILayout.Button(
+        if (!panel.IsDashboard &&
+            NativeGUILayout.Button(
                 UnmaText.Get("auto.1cc8d34d4b3e"),
                 m_primaryButtonStyle,
                 NativeGUILayout.Width(175f),
@@ -1011,9 +1229,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             OpenNewRuleEditor(panel);
         }
         NativeGUILayout.EndHorizontal();
+        if (compactActions)
+        {
+            NativeGUILayout.EndScrollView();
+        }
 
         DrawStatusMessage();
-        if (!m_entityAssignmentPending)
+        if (!m_entityAssignmentPending &&
+            (!compactActions || m_windowRect.height >= 340f))
         {
             NativeGUILayout.Label(
                 UnmaText.Get("auto.22344e5e1ac7"),
@@ -1025,7 +1248,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             panel.Columns,
             m_windowRect.width - 54f,
             m_boardScroll.y,
-            Math.Max(220f, m_windowRect.height - 190f),
+            Math.Max(
+                m_windowRect.height < 360f ? 32f : 220f,
+                m_windowRect.height -
+                (isEntityPanel ? 190f : 232f) -
+                (compactActions
+                    ? panel.IsDashboard && incidentLensAvailable
+                        ? 8f
+                        : 42f
+                    : 0f) -
+                incidentLensHeight),
             panel.IsDashboard ? null : panel,
             panel,
             m_entityAssignmentPending && !panel.IsDashboard,
@@ -1036,11 +1268,766 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndScrollView();
     }
 
+    private float DrawIncidentLens(
+        PanelDefinition dashboard,
+        IReadOnlyList<AlarmView> visibleAlarms,
+        out bool hasSnapshot)
+    {
+        const float barHeight = 42f;
+        var filter = NormalizeAlarmAreaFilter();
+        var available = TryGetCachedAlarmIncidentSnapshot(
+            filter,
+            out var snapshot) &&
+                        snapshot?.IsTimeValid == true;
+        hasSnapshot = available;
+        var compact = m_windowRect.width < 760f;
+
+        NativeGUILayout.Space(4f);
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.incident.title", "INCIDENT LENS"),
+            m_sectionStyle,
+            NativeGUILayout.Width(compact ? 96f : 125f),
+            NativeGUILayout.Height(34f));
+        if (available)
+        {
+            NativeGUILayout.Label(
+                StormLevelLabel(snapshot.StormLevel),
+                IncidentStormStyle(snapshot.StormLevel),
+                NativeGUILayout.Width(compact ? 84f : 105f),
+                NativeGUILayout.Height(34f));
+            var pressureText = UnmaText.Format(
+                "ui.incident.pressure_summary",
+                "READ-ONLY · GLOBAL PRESSURE {0} · RECENT {1}: " +
+                "{2} OCCURRENCES · {3} DISTINCT ALARMS · " +
+                "SCOPE {4}: {5} ACTIVE · {6} UNACK",
+                snapshot.AlarmPressure,
+                FormatIncidentDuration(snapshot.PressureWindowTicks),
+                snapshot.RecentOccurrenceCount,
+                snapshot.RecentDistinctAlarmCount,
+                GetAlarmAreaFilterName(filter),
+                snapshot.ActiveAlarmCount,
+                snapshot.ActiveUnacknowledgedCount);
+            m_incidentLensStatsScroll = NativeGUILayout.BeginScrollView(
+                m_incidentLensStatsScroll,
+                false,
+                false,
+                NativeGUILayout.Height(36f),
+                NativeGUILayout.ExpandWidth(true));
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                pressureText,
+                m_smallLabelStyle,
+                NativeGUILayout.Width(Mathf.Clamp(
+                    pressureText.Length * 7f + 20f,
+                    360f,
+                    820f)),
+                NativeGUILayout.Height(30f));
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.EndScrollView();
+        }
+        else
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.incident.unavailable",
+                    "INCIDENT ANALYSIS UNAVAILABLE"),
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.Height(34f));
+        }
+
+        var guiWasEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = guiWasEnabled && available;
+        if (NativeGUILayout.Button(
+                m_incidentLensExpanded
+                    ? UnmaText.Get("ui.incident.collapse", "COLLAPSE")
+                    : UnmaText.Get("ui.incident.expand", "EXPAND"),
+                m_incidentLensExpanded
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                NativeGUILayout.Width(compact ? 92f : 112f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_incidentLensExpanded = !m_incidentLensExpanded;
+            m_incidentLensScroll = Vector2.zero;
+        }
+        NativeGUI.enabled = guiWasEnabled;
+        NativeGUILayout.EndHorizontal();
+
+        if (!available || !m_incidentLensExpanded)
+        {
+            return barHeight;
+        }
+
+        var detailHeight = Mathf.Clamp(
+            m_windowRect.height * 0.32f,
+            72f,
+            300f);
+        m_incidentLensScroll = NativeGUILayout.BeginScrollView(
+            m_incidentLensScroll,
+            NativeGUILayout.Height(detailHeight),
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.incident.heuristic_hint",
+                "READ-ONLY HEURISTIC · Temporal correlation is not a confirmed cause."),
+            m_warningBannerStyle,
+            NativeGUILayout.Height(42f));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.incident.focus_hint",
+                "Member controls only focus visible alarms. They never acknowledge, hide, or silence alarms."),
+            m_smallLabelStyle);
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "ui.incident.scope_summary",
+                "SCOPE {0} · {1} ACTIVE · {2} UNACK · {3} INCIDENTS",
+                GetAlarmAreaFilterName(filter),
+                snapshot.ActiveAlarmCount,
+                snapshot.ActiveUnacknowledgedCount,
+                snapshot.Incidents?.Count ?? 0),
+            m_smallLabelStyle);
+        NativeGUILayout.Space(4f);
+
+        var incidents = snapshot.Incidents ?? Array.Empty<AlarmIncident>();
+        if (incidents.Count == 0)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.incident.none",
+                    "No active temporal incident clusters in this scope."),
+                m_labelStyle);
+        }
+        var incidentCount = Math.Min(MaximumIncidentCards, incidents.Count);
+        for (var index = 0; index < incidentCount; index++)
+        {
+            DrawIncidentCard(
+                index,
+                incidents[index],
+                snapshot,
+                dashboard,
+                visibleAlarms);
+        }
+        if (incidents.Count > incidentCount)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Format(
+                    "ui.incident.more_incidents",
+                    "+ {0} MORE INCIDENTS",
+                    incidents.Count - incidentCount),
+                m_smallLabelStyle);
+        }
+        NativeGUILayout.EndScrollView();
+        return barHeight + detailHeight + 4f;
+    }
+
+    private void DrawIncidentCard(
+        int index,
+        AlarmIncident incident,
+        AlarmIncidentSnapshot snapshot,
+        PanelDefinition dashboard,
+        IReadOnlyList<AlarmView> visibleAlarms)
+    {
+        if (incident == null)
+        {
+            return;
+        }
+
+        NativeGUILayout.Space(6f);
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "ui.incident.card_title",
+                "INCIDENT {0} · {1}",
+                index + 1,
+                SeverityLabel(incident.Severity)),
+            IncidentSeverityStyle(incident.Severity),
+            NativeGUILayout.Height(30f));
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "ui.incident.card_stats",
+                "{0} MEMBERS · {1} UNACK · AGE {2} · SPAN {3}",
+                incident.MemberCount,
+                incident.UnacknowledgedCount,
+                FormatIncidentDuration(
+                    snapshot.CurrentGameTick - incident.FirstRaisedAtTicks),
+                FormatIncidentDuration(
+                    incident.LastRaisedAtTicks - incident.FirstRaisedAtTicks)),
+            m_smallLabelStyle);
+
+        var compactCard = m_windowRect.width < 760f;
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.incident.first_signal", "FIRST SIGNAL"),
+            m_labelStyle,
+            NativeGUILayout.Width(compactCard ? 112f : 145f));
+        if (compactCard)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
+        if (incident.FirstSignal != null &&
+            NativeGUILayout.Button(
+                IncidentMemberLabel(
+                    incident.FirstSignal,
+                    snapshot.CurrentGameTick),
+                m_primaryButtonStyle,
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.Height(30f)))
+        {
+            FocusIncidentMember(
+                dashboard,
+                incident.FirstSignal,
+                visibleAlarms);
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.incident.members", "MEMBERS"),
+            m_smallLabelStyle);
+        var members = incident.Members ?? Array.Empty<AlarmIncidentMember>();
+        var memberCount = Math.Min(
+            MaximumIncidentMembersPerCard,
+            members.Count);
+        for (var memberIndex = 0;
+             memberIndex < memberCount;
+             memberIndex++)
+        {
+            var member = members[memberIndex];
+            if (member == null)
+            {
+                continue;
+            }
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                (memberIndex + 1) + ".",
+                m_smallLabelStyle,
+                NativeGUILayout.Width(28f));
+            if (NativeGUILayout.Button(
+                    IncidentMemberLabel(member, snapshot.CurrentGameTick),
+                    m_buttonStyle,
+                    NativeGUILayout.ExpandWidth(true),
+                    NativeGUILayout.Height(30f)))
+            {
+                FocusIncidentMember(dashboard, member, visibleAlarms);
+            }
+            NativeGUILayout.EndHorizontal();
+        }
+        if (members.Count > memberCount)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Format(
+                    "ui.incident.more_members",
+                    "+ {0} MORE MEMBERS",
+                    members.Count - memberCount),
+                m_smallLabelStyle);
+        }
+    }
+
+    private bool TryGetCachedAlarmIncidentSnapshot(
+        AlarmAreaFilter filter,
+        out AlarmIncidentSnapshot snapshot)
+    {
+        if (m_incidentSnapshotCacheFrame == Time.frameCount &&
+            AlarmAreaFiltersEqual(m_incidentSnapshotCacheFilter, filter))
+        {
+            snapshot = m_incidentSnapshotCache;
+            return m_incidentSnapshotCacheSucceeded;
+        }
+
+        m_incidentSnapshotCacheFrame = Time.frameCount;
+        m_incidentSnapshotCacheFilter = filter;
+        m_incidentSnapshotCacheSucceeded =
+            m_runtime.TryGetAlarmIncidentSnapshot(filter, out snapshot);
+        m_incidentSnapshotCache = snapshot;
+        return m_incidentSnapshotCacheSucceeded;
+    }
+
+    private void FocusIncidentMember(
+        PanelDefinition dashboard,
+        AlarmIncidentMember member,
+        IReadOnlyList<AlarmView> visibleAlarms)
+    {
+        if (dashboard?.IsDashboard != true || member == null)
+        {
+            return;
+        }
+        var visible = visibleAlarms ?? Array.Empty<AlarmView>();
+        var alarm = visible.FirstOrDefault(candidate =>
+                        candidate != null &&
+                        candidate.Sequence == member.Sequence &&
+                        string.Equals(
+                            PanelSlotProjection.StableAlarmId(candidate),
+                            member.StableAlarmId,
+                            StringComparison.Ordinal)) ??
+                    visible.FirstOrDefault(candidate =>
+                        candidate != null && string.Equals(
+                            PanelSlotProjection.StableAlarmId(candidate),
+                            member.StableAlarmId,
+                            StringComparison.Ordinal));
+        if (alarm == null)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.incident.focus_unavailable",
+                "This incident member is no longer visible."));
+            return;
+        }
+
+        m_lastNavigatedAlarmSlotId =
+            PanelSlotProjection.StableAlarmId(alarm);
+        SelectMainTab(TabBoard);
+        m_isOpen = true;
+        SelectGlobalPanel(dashboard, true);
+        var alarmIndex = visible.ToList().FindIndex(candidate =>
+            candidate != null &&
+            candidate.Sequence == alarm.Sequence &&
+            string.Equals(
+                PanelSlotProjection.StableAlarmId(candidate),
+                m_lastNavigatedAlarmSlotId,
+                StringComparison.Ordinal));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, dashboard.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (TileHeight + 6f) - 12f);
+        }
+        if (m_runtime.TryResolveNavigationEntity(
+                dashboard,
+                alarm,
+                out var entity))
+        {
+            NavigateToEntity(entity);
+        }
+        SetStatus(UnmaText.Format(
+            "ui.incident.focused",
+            "Focused incident member: {0}",
+            alarm.Name ?? UnmaText.Get("ui.common.alarm", "ALARM")));
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeLauncher();
+    }
+
+    private static string IncidentMemberLabel(
+        AlarmIncidentMember member,
+        double currentGameTick)
+    {
+        if (member == null)
+        {
+            return "";
+        }
+        return UnmaText.Get("ui.incident.focus", "FOCUS") + " · " +
+               SeverityLabel(member.Severity) + " · " +
+               (string.IsNullOrWhiteSpace(member.Name)
+                   ? UnmaText.Get("ui.common.alarm", "ALARM")
+                   : member.Name) + " · " +
+               (member.RequiresAcknowledgement
+                   ? UnmaText.Get("ui.incident.unack", "UNACK")
+                   : UnmaText.Get("ui.incident.ack", "ACK")) + " · " +
+               UnmaText.Format(
+                   "ui.incident.member_age",
+                   "AGE {0}",
+                   FormatIncidentDuration(
+                       currentGameTick - member.RaisedAtTicks));
+    }
+
+    private static string FormatIncidentDuration(double ticks)
+    {
+        if (double.IsNaN(ticks) || double.IsInfinity(ticks))
+        {
+            return UnmaText.Get("ui.incident.time_unavailable", "N/A");
+        }
+        ticks = Math.Max(0d, ticks);
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerYear)
+        {
+            return UnmaText.Format(
+                "ui.incident.duration_years",
+                "{0} YEARS",
+                Math.Max(1, (int)Math.Floor(
+                    ticks / GameTimeWindowPolicy.SimTicksPerYear)));
+        }
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerMonth)
+        {
+            return UnmaText.Format(
+                "ui.incident.duration_months",
+                "{0} MONTHS",
+                Math.Max(1, (int)Math.Floor(
+                    ticks / GameTimeWindowPolicy.SimTicksPerMonth)));
+        }
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerDay)
+        {
+            return UnmaText.Format(
+                "ui.incident.duration_days",
+                "{0} DAYS",
+                Math.Max(1, (int)Math.Floor(
+                    ticks / GameTimeWindowPolicy.SimTicksPerDay)));
+        }
+        return UnmaText.Format(
+            "ui.incident.duration_ticks",
+            "{0} TICKS",
+            Math.Max(0, (int)Math.Floor(ticks)));
+    }
+
+    private static string StormLevelLabel(AlarmStormLevel level)
+    {
+        return level switch
+        {
+            AlarmStormLevel.Severe => UnmaText.Get(
+                "ui.incident.level_severe",
+                "SEVERE"),
+            AlarmStormLevel.Storm => UnmaText.Get(
+                "ui.incident.level_storm",
+                "STORM"),
+            AlarmStormLevel.Elevated => UnmaText.Get(
+                "ui.incident.level_elevated",
+                "ELEVATED"),
+            _ => UnmaText.Get("ui.incident.level_normal", "NORMAL"),
+        };
+    }
+
+    private GUIStyle IncidentStormStyle(AlarmStormLevel level)
+    {
+        return level == AlarmStormLevel.Storm ||
+               level == AlarmStormLevel.Severe
+            ? m_dangerButtonStyle
+            : level == AlarmStormLevel.Elevated
+                ? m_primaryButtonStyle
+                : m_buttonStyle;
+    }
+
+    private GUIStyle IncidentSeverityStyle(AlarmSeverity severity)
+    {
+        return severity >= AlarmSeverity.Critical
+            ? m_dangerButtonStyle
+            : severity >= AlarmSeverity.Warning
+                ? m_primaryButtonStyle
+                : m_buttonStyle;
+    }
+
+    private void DrawAlarmAreaFilter()
+    {
+        var filter = NormalizeAlarmAreaFilter();
+        var compact = m_windowRect.width < 820f;
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("board.area_filter", "AREA"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(compact ? 58f : 76f),
+            NativeGUILayout.Height(30f));
+        m_alarmAreaTabsScroll = NativeGUILayout.BeginScrollView(
+            m_alarmAreaTabsScroll,
+            false,
+            false,
+            NativeGUILayout.Height(42f),
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.BeginHorizontal();
+        DrawAlarmAreaFilterButton(
+            AlarmAreaFilter.All,
+            UnmaText.Get("board.area_all", "ALL"),
+            filter);
+        DrawAlarmAreaFilterButton(
+            AlarmAreaFilter.Unassigned,
+            UnmaText.Get("board.area_unassigned", "UNASSIGNED"),
+            filter);
+        foreach (var area in m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>())
+        {
+            if (area == null || string.IsNullOrWhiteSpace(area.Id))
+            {
+                continue;
+            }
+            DrawAlarmAreaFilterButton(
+                AlarmAreaFilter.ForArea(area.Id),
+                area.Name,
+                filter);
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.EndScrollView();
+        if (NativeGUILayout.Button(
+                compact
+                    ? "⚙"
+                    : UnmaText.Get("board.area_manage", "⚙ AREAS"),
+                m_buttonStyle,
+                NativeGUILayout.Width(compact ? 42f : 122f),
+                NativeGUILayout.Height(30f)))
+        {
+            OpenAlarmAreasEditor();
+        }
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawAlarmAreaFilterButton(
+        AlarmAreaFilter candidate,
+        string name,
+        AlarmAreaFilter selected)
+    {
+        var panelCount = AlarmAreaPolicy.Select(GlobalPanels, candidate)
+            .Count(AlarmAreaPolicy.IsAssignablePanel);
+        var isSelected = AlarmAreaFiltersEqual(candidate, selected);
+        var displayName = string.IsNullOrWhiteSpace(name)
+            ? UnmaText.Get("ui.area.default_name", "AREA")
+            : name.Trim();
+        var label = UnmaText.Format(
+            "board.area_filter_item",
+            "{0} · {1} PANELS",
+            displayName,
+            panelCount);
+        if (isSelected && TryGetCachedAlarmAreaDashboardViews(
+                candidate,
+                out var scopedViews))
+        {
+            scopedViews ??= Array.Empty<AlarmView>();
+            label = UnmaText.Format(
+                "board.area_filter_item_selected",
+                "{0} · {1} PANELS · {2} ACTIVE · {3} UNACK",
+                displayName,
+                panelCount,
+                scopedViews.Count(view => view.IsActive),
+                scopedViews.Count(view => view.RequiresAcknowledgement));
+        }
+        var width = Mathf.Clamp(
+            label.Length * Mathf.Max(7f, m_buttonStyle.fontSize * 0.58f) + 24f,
+            116f,
+            isSelected ? 380f : 290f);
+        if (NativeGUILayout.Button(
+                label,
+                isSelected
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                NativeGUILayout.Width(width),
+                NativeGUILayout.Height(30f)))
+        {
+            SelectAlarmAreaFilter(candidate);
+        }
+    }
+
+    private void SelectAlarmAreaFilter(AlarmAreaFilter requested)
+    {
+        var next = AlarmAreaPolicy.NormalizeFilter(
+            requested,
+            m_runtime.Configuration.AlarmAreas);
+        if (AlarmAreaFiltersEqual(next, NormalizeAlarmAreaFilter()))
+        {
+            return;
+        }
+
+        var current = CurrentPanel;
+        m_alarmAreaFilter = next;
+        var visiblePanels = GetVisibleGlobalPanels();
+        if (current == null ||
+            !visiblePanels.Any(panel => string.Equals(
+                panel.Id,
+                current.Id,
+                StringComparison.Ordinal)))
+        {
+            var fallback = visiblePanels.FirstOrDefault(panel =>
+                               panel.IsDashboard) ??
+                           visiblePanels.FirstOrDefault();
+            SelectGlobalPanel(fallback, false);
+        }
+        m_lastNavigatedAlarmSlotId = "";
+        m_boardScroll = Vector2.zero;
+        m_incidentLensScroll = Vector2.zero;
+    }
+
+    private void SelectGlobalPanel(
+        PanelDefinition panel,
+        bool revealOutsideCurrentArea)
+    {
+        if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return;
+        }
+
+        if (revealOutsideCurrentArea &&
+            !panel.IsDashboard &&
+            !GetVisibleGlobalPanels().Any(candidate => string.Equals(
+                candidate.Id,
+                panel.Id,
+                StringComparison.Ordinal)))
+        {
+            var areaId = panel.AreaId?.Trim() ?? "";
+            if (areaId.Length == 0)
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.Unassigned;
+            }
+            else if ((m_runtime.Configuration.AlarmAreas ??
+                      new List<AlarmAreaDefinition>()).Any(area =>
+                         area != null && string.Equals(
+                             area.Id,
+                             areaId,
+                             StringComparison.Ordinal)))
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.ForArea(areaId);
+            }
+            else
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.All;
+            }
+        }
+
+        m_activeEntityPanelId = "";
+        var panelIndex = GlobalPanels.FindIndex(candidate => string.Equals(
+            candidate.Id,
+            panel.Id,
+            StringComparison.Ordinal));
+        if (panelIndex >= 0)
+        {
+            m_currentPanelIndex = panelIndex;
+        }
+    }
+
+    private void EnsureCurrentPanelVisibleInArea()
+    {
+        var current = CurrentPanel;
+        if (current == null || PanelTopologyPolicy.IsEntityPanel(current))
+        {
+            return;
+        }
+        var visible = GetVisibleGlobalPanels();
+        if (visible.Any(panel => string.Equals(
+                panel.Id,
+                current.Id,
+                StringComparison.Ordinal)))
+        {
+            return;
+        }
+        SelectGlobalPanel(
+            visible.FirstOrDefault(panel => panel.IsDashboard) ??
+            visible.FirstOrDefault(),
+            false);
+        m_boardScroll = Vector2.zero;
+    }
+
+    private AlarmAreaFilter NormalizeAlarmAreaFilter()
+    {
+        m_alarmAreaFilter = AlarmAreaPolicy.NormalizeFilter(
+            m_alarmAreaFilter,
+            m_runtime.Configuration.AlarmAreas);
+        return m_alarmAreaFilter;
+    }
+
+    private List<PanelDefinition> GetVisibleGlobalPanels()
+    {
+        var globalPanels = GlobalPanels;
+        var filter = NormalizeAlarmAreaFilter();
+        if (filter.Kind == AlarmAreaFilterKind.All)
+        {
+            return globalPanels;
+        }
+
+        var visible = AlarmAreaPolicy.Select(globalPanels, filter).ToList();
+        var dashboard = globalPanels.FirstOrDefault(panel =>
+            panel != null && panel.IsDashboard);
+        if (dashboard != null)
+        {
+            visible.Insert(0, dashboard);
+        }
+        return visible;
+    }
+
+    private string GetAreaAwarePanelTabLabel(PanelDefinition panel)
+    {
+        if (panel == null || !panel.IsDashboard)
+        {
+            return panel?.Name ?? "";
+        }
+        var filter = NormalizeAlarmAreaFilter();
+        if (filter.Kind == AlarmAreaFilterKind.All)
+        {
+            return panel.Name;
+        }
+        return UnmaText.Format(
+            "board.dashboard_scope",
+            "{0} · {1}",
+            panel.Name,
+            GetAlarmAreaFilterName(filter));
+    }
+
+    private string GetAlarmAreaFilterName(AlarmAreaFilter filter)
+    {
+        switch (filter.Kind)
+        {
+            case AlarmAreaFilterKind.Unassigned:
+                return UnmaText.Get(
+                    "board.area_unassigned",
+                    "UNASSIGNED");
+            case AlarmAreaFilterKind.Area:
+                return m_runtime.Configuration.AlarmAreas?
+                           .FirstOrDefault(area => area != null &&
+                               string.Equals(
+                                   area.Id,
+                                   filter.AreaId,
+                                   StringComparison.Ordinal))?.Name ??
+                       UnmaText.Get("ui.area.default_name", "AREA");
+            default:
+                return UnmaText.Get("board.area_all", "ALL");
+        }
+    }
+
+    private string GetCurrentConcreteAlarmAreaId()
+    {
+        var filter = NormalizeAlarmAreaFilter();
+        return filter.Kind == AlarmAreaFilterKind.Area
+            ? filter.AreaId ?? ""
+            : "";
+    }
+
+    private IReadOnlyList<AlarmView> GetBoardViews(PanelDefinition panel)
+    {
+        if (!IsAreaScopedDashboard(panel))
+        {
+            return GetPanelViews(panel);
+        }
+        return TryGetCachedAlarmAreaDashboardViews(
+            NormalizeAlarmAreaFilter(),
+            out var views)
+            ? views ?? Array.Empty<AlarmView>()
+            : Array.Empty<AlarmView>();
+    }
+
+    private bool TryGetCachedAlarmAreaDashboardViews(
+        AlarmAreaFilter filter,
+        out IReadOnlyList<AlarmView> views)
+    {
+        if (m_alarmAreaViewCacheFrame == Time.frameCount &&
+            AlarmAreaFiltersEqual(m_alarmAreaViewCacheFilter, filter))
+        {
+            views = m_alarmAreaViewCache;
+            return m_alarmAreaViewCacheSucceeded;
+        }
+
+        m_alarmAreaViewCacheFrame = Time.frameCount;
+        m_alarmAreaViewCacheFilter = filter;
+        m_alarmAreaViewCacheSucceeded = m_runtime.TryGetDashboardViews(
+            filter,
+            out views);
+        m_alarmAreaViewCache = views ?? Array.Empty<AlarmView>();
+        views = m_alarmAreaViewCache;
+        return m_alarmAreaViewCacheSucceeded;
+    }
+
+    private bool IsAreaScopedDashboard(PanelDefinition panel)
+    {
+        return panel?.IsDashboard == true &&
+               NormalizeAlarmAreaFilter().Kind != AlarmAreaFilterKind.All;
+    }
+
+    private static bool AlarmAreaFiltersEqual(
+        AlarmAreaFilter left,
+        AlarmAreaFilter right)
+    {
+        return left.Kind == right.Kind &&
+               string.Equals(
+                   left.AreaId ?? "",
+                   right.AreaId ?? "",
+                   StringComparison.Ordinal);
+    }
+
     private void DrawInstruments()
     {
-        if (!string.IsNullOrWhiteSpace(m_recorderFullscreenInstrumentId))
+        if (!string.IsNullOrWhiteSpace(m_historianInstrumentId))
         {
-            DrawRecorderArchiveView();
+            DrawInstrumentHistorianView();
             return;
         }
 
@@ -1271,21 +2258,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 {
                     NavigateToEntity(instrument.EntityId);
                 }
-                if (instrument.DisplayType ==
-                        InstrumentDisplayType.PaperRecorder &&
-                    NativeGUI.Button(
+                if (NativeGUI.Button(
                         new Rect(rect.x + 34f, rect.y + 30f, 68f, 22f),
-                        UnmaText.Get("ui.recorder.archive", "ARCHIVE"),
+                        UnmaText.Get("ui.historian.short", "HIST"),
                         m_buttonStyle))
                 {
-                    EnterRecorderArchive(instrument);
+                    EnterInstrumentHistorian(instrument);
                 }
                 if (NativeGUI.Button(
                         new Rect(
-                            rect.x + (instrument.DisplayType ==
-                                InstrumentDisplayType.PaperRecorder
-                                ? 106f
-                                : 34f),
+                            rect.x + 106f,
                             rect.y + 30f,
                             58f,
                             22f),
@@ -1901,11 +2883,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_instrumentValues.Remove(instrumentId);
         m_invalidInstruments.Remove(instrumentId);
         if (string.Equals(
-                m_recorderFullscreenInstrumentId,
+                m_historianInstrumentId,
                 instrumentId,
                 StringComparison.Ordinal))
         {
-            ExitRecorderArchive();
+            ExitInstrumentHistorian();
         }
         SaveConfiguration(UnmaText.Get(
             "ui.instrument.status.removed",
@@ -1950,25 +2932,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
     }
 
-    private void EnterRecorderArchive(InstrumentDefinition instrument)
+    private void EnterInstrumentHistorian(InstrumentDefinition instrument)
     {
-        if (instrument == null ||
-            instrument.DisplayType != InstrumentDisplayType.PaperRecorder)
+        if (instrument == null)
         {
             return;
         }
 
-        m_recorderFullscreenInstrumentId = instrument.Id;
-        m_recorderArchiveRangeIndex = Math.Max(
+        m_historianInstrumentId = instrument.Id;
+        m_historianRangeIndex = Math.Max(
             0,
             Math.Min(
-                m_recorderArchiveRangeIndex,
-                s_recorderArchiveRanges.Length - 1));
+                m_historianRangeIndex,
+                s_historianRanges.Length - 1));
         if (m_nativeWindowShell != null)
         {
-            m_recorderPreviousWindowSize =
+            m_historianPreviousWindowSize =
                 m_nativeWindowShell.MaximizeTemporarily();
-            m_recorderPreviousWindowSizeValid = true;
+            m_historianPreviousWindowSizeValid = true;
             var maximizedSize = m_nativeWindowShell.CurrentSize;
             m_windowRect.width = maximizedSize.x;
             m_windowRect.height = maximizedSize.y;
@@ -1979,6 +2960,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void OpenInstrumentAlarmEditor(InstrumentDefinition instrument)
     {
         if (instrument == null)
+        {
+            return;
+        }
+        if (BlockEditorSwitchFromConfigurationDraft())
         {
             return;
         }
@@ -2034,9 +3019,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftConditions.Add(condition);
         m_draftConditionThresholdTexts.Add(
             condition.Threshold.ToString(
-                "0.###",
+                "R",
                 CultureInfo.CurrentCulture));
         m_draftTrendWindowTexts[condition] = "1";
+        EnsureDraftHysteresisText(condition);
         OpenRuleEditorWindow();
         SetStatus(UnmaText.Format(
             "ui.instrument.status.alarm_prepared",
@@ -2044,10 +3030,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             instrument.Title));
     }
 
-    private void ExitRecorderArchive()
+    private void ExitInstrumentHistorian()
     {
-        m_recorderFullscreenInstrumentId = "";
-        if (!m_recorderPreviousWindowSizeValid)
+        m_historianInstrumentId = "";
+        if (!m_historianPreviousWindowSizeValid)
         {
             return;
         }
@@ -2055,65 +3041,64 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (m_nativeWindowShell != null)
         {
             m_nativeWindowShell.SetTemporarySize(
-                m_recorderPreviousWindowSize);
-            m_windowRect.width = m_recorderPreviousWindowSize.x;
-            m_windowRect.height = m_recorderPreviousWindowSize.y;
+                m_historianPreviousWindowSize);
+            m_windowRect.width = m_historianPreviousWindowSize.x;
+            m_windowRect.height = m_historianPreviousWindowSize.y;
         }
-        m_recorderPreviousWindowSizeValid = false;
+        m_historianPreviousWindowSizeValid = false;
     }
 
-    private void DrawRecorderArchiveView()
+    private void DrawInstrumentHistorianView()
     {
         var instrument = m_runtime.Configuration.Instruments.FirstOrDefault(
             item => string.Equals(
                 item.Id,
-                m_recorderFullscreenInstrumentId,
+                m_historianInstrumentId,
                 StringComparison.Ordinal));
-        if (instrument == null ||
-            instrument.DisplayType != InstrumentDisplayType.PaperRecorder)
+        if (instrument == null)
         {
-            ExitRecorderArchive();
+            ExitInstrumentHistorian();
             return;
         }
 
         NativeGUILayout.Label(
             UnmaText.Format(
-                "ui.recorder.archive_title",
-                "PAPER RECORDER ARCHIVE · {0}",
+                "ui.historian.title",
+                "INSTRUMENT HISTORIAN · {0}",
                 instrument.Title),
             m_sectionStyle);
         NativeGUILayout.Space(6f);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
-            UnmaText.Get("ui.recorder.time_range", "TIME RANGE"),
+            UnmaText.Get("ui.historian.time_range", "GAME-TIME RANGE"),
             m_smallLabelStyle,
             NativeGUILayout.Width(90f),
             NativeGUILayout.Height(30f));
         for (var index = 0;
-             index < s_recorderArchiveRanges.Length;
+             index < s_historianRanges.Length;
              index++)
         {
             if (NativeGUILayout.Button(
-                    GetRecorderArchiveRangeLabel(index),
-                    index == m_recorderArchiveRangeIndex
+                    GetHistorianRangeLabel(index),
+                    index == m_historianRangeIndex
                         ? m_primaryButtonStyle
                         : m_buttonStyle,
                     NativeGUILayout.Width(76f),
                     NativeGUILayout.Height(30f)))
             {
-                m_recorderArchiveRangeIndex = index;
+                m_historianRangeIndex = index;
             }
         }
         NativeGUILayout.FlexibleSpace();
         if (NativeGUILayout.Button(
                 UnmaText.Get(
-                    "ui.recorder.back_to_panel",
+                    "ui.historian.back_to_panel",
                     "BACK TO INSTRUMENT PANEL"),
                 m_buttonStyle,
                 NativeGUILayout.Width(190f),
                 NativeGUILayout.Height(30f)))
         {
-            ExitRecorderArchive();
+            ExitInstrumentHistorian();
             NativeGUILayout.EndHorizontal();
             return;
         }
@@ -2125,16 +3110,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
             out var current);
         var isValid = !m_invalidInstruments.Contains(instrument.Id) &&
                       hasCurrentValue;
-        var selectedRange = s_recorderArchiveRanges[
-            m_recorderArchiveRangeIndex];
+        var selectedRangeTicks = s_historianRanges[
+            m_historianRangeIndex];
         var chartRect = NativeGUILayoutUtility.GetRect(
             520f,
             Mathf.Max(320f, m_windowRect.height - 180f),
             NativeGUILayout.ExpandWidth(true),
             NativeGUILayout.ExpandHeight(true));
-        var windowSeconds = selectedRange;
-        // The paper itself has 24 horizontal pixels fewer than the allocated
-        // archive rect. Capping the bucket count to that physical width keeps
+        // The chart has 24 horizontal pixels fewer than the allocated rect.
+        // Capping the bucket count to that physical width keeps
         // rendering cost proportional to what can actually be seen.
         var pixelColumns = Mathf.Clamp(
             Mathf.FloorToInt(chartRect.width - 48f),
@@ -2142,170 +3126,115 @@ public sealed class UnmaOverlayController : MonoBehaviour
             4096);
         if (isValid)
         {
-            RefreshRecorderArchiveCache(
+            RefreshHistorianCache(
                 instrument,
-                windowSeconds,
+                selectedRangeTicks,
                 pixelColumns);
         }
         else
         {
-            m_recorderArchiveTrace.Clear();
-            m_recorderArchiveCacheInstrumentId = "";
+            m_historianTrace.Clear();
+            m_historianCacheInstrumentId = "";
         }
-        var observedMin = isValid && m_recorderArchiveTrace.Count > 0
-            ? Math.Min(current, m_recorderArchiveCacheObservedMinimum)
-            : current;
-        var observedMax = isValid && m_recorderArchiveTrace.Count > 0
-            ? Math.Max(current, m_recorderArchiveCacheObservedMaximum)
-            : current;
-        InstrumentPanelRenderer.DrawRecorderArchive(
+        var forecast = default(InstrumentForecastResult);
+        var hasForecast = isValid && m_runtime.TryGetInstrumentForecast(
+            instrument.Id,
+            selectedRangeTicks,
+            out forecast);
+        if (hasForecast)
+        {
+            current = forecast.CurrentValue;
+        }
+        InstrumentPanelRenderer.DrawHistorian(
             chartRect,
             instrument,
-            m_recorderArchiveTrace,
+            m_historianTrace,
             current,
-            observedMin,
-            observedMax,
-            GetRecorderArchiveRangeLabel(m_recorderArchiveRangeIndex),
+            forecast,
+            hasForecast,
+            GetHistorianRangeLabel(m_historianRangeIndex),
             m_labelStyle,
             m_smallLabelStyle,
             isValid);
     }
 
-    private static string GetRecorderArchiveRangeLabel(int index)
+    private static string GetHistorianRangeLabel(int index)
     {
         return index switch
         {
-            0 => UnmaText.Get("ui.recorder.range.one_day", "1 DAY"),
-            1 => UnmaText.Get("ui.recorder.range.one_month", "1 MONTH"),
-            2 => UnmaText.Get("ui.recorder.range.one_year", "1 YEAR"),
-            3 => UnmaText.Get("ui.recorder.range.ten_years", "10 YEARS"),
+            0 => UnmaText.Get("ui.historian.range.one_day", "1 DAY"),
+            1 => UnmaText.Get("ui.historian.range.one_month", "1 MONTH"),
+            2 => UnmaText.Get("ui.historian.range.one_year", "1 YEAR"),
+            3 => UnmaText.Get("ui.historian.range.ten_years", "10 YEARS"),
             4 => UnmaText.Get(
-                "ui.recorder.range.one_century",
+                "ui.historian.range.one_century",
                 "100 YEARS"),
-            _ => UnmaText.Get("ui.recorder.range.maximum", "MAX"),
+            _ => UnmaText.Get("ui.historian.range.maximum", "MAX"),
         };
     }
 
-    private void RefreshRecorderArchiveCache(
+    private void RefreshHistorianCache(
         InstrumentDefinition instrument,
-        int windowSeconds,
+        int windowTicks,
         int pixelColumns)
     {
         var hasHistory = m_runtime.TryGetInstrumentHistoryState(
             instrument.Id,
             out var historyState);
-        m_instrumentSamples.TryGetValue(
-            instrument.Id,
-            out var fallbackSamples);
-        var fallbackCount = fallbackSamples?.Count ?? 0;
-        var fallbackFirst = fallbackCount > 0 ? fallbackSamples[0] : 0f;
-        var fallbackLast = fallbackCount > 0
-            ? fallbackSamples[fallbackCount - 1]
-            : 0f;
-
         var cacheMatches = string.Equals(
-                               m_recorderArchiveCacheInstrumentId,
+                               m_historianCacheInstrumentId,
                                instrument.Id,
                                StringComparison.Ordinal) &&
-                           m_recorderArchiveCacheWindowSeconds ==
-                           windowSeconds &&
-                           m_recorderArchiveCachePixelColumns ==
+                           m_historianCacheWindowTicks == windowTicks &&
+                           m_historianCachePixelColumns ==
                            pixelColumns &&
-                           m_recorderArchiveCacheHasHistory == hasHistory &&
-                           m_recorderArchiveCacheScaleMinimum.Equals(
+                           m_historianCacheHasHistory == hasHistory &&
+                           m_historianCacheScaleMinimum.Equals(
                                instrument.Minimum) &&
-                           m_recorderArchiveCacheScaleMaximum.Equals(
+                           m_historianCacheScaleMaximum.Equals(
                                instrument.Maximum);
         if (cacheMatches && hasHistory)
         {
-            cacheMatches = RecorderHistoryStateEquals(
-                m_recorderArchiveCacheHistoryState,
+            cacheMatches = HistorianHistoryStateEquals(
+                m_historianCacheHistoryState,
                 historyState);
-        }
-        else if (cacheMatches)
-        {
-            cacheMatches = m_recorderArchiveCacheFallbackCount ==
-                           fallbackCount &&
-                           m_recorderArchiveCacheFallbackFirst.Equals(
-                               fallbackFirst) &&
-                           m_recorderArchiveCacheFallbackLast.Equals(
-                               fallbackLast);
         }
         if (cacheMatches)
         {
             return;
         }
 
-        m_recorderArchiveTrace.Clear();
-        m_recorderArchiveCacheInstrumentId = instrument.Id;
-        m_recorderArchiveCacheWindowSeconds = windowSeconds;
-        m_recorderArchiveCachePixelColumns = pixelColumns;
-        m_recorderArchiveCacheHasHistory = hasHistory;
-        m_recorderArchiveCacheHistoryState = historyState;
-        m_recorderArchiveCacheFallbackCount = fallbackCount;
-        m_recorderArchiveCacheFallbackFirst = fallbackFirst;
-        m_recorderArchiveCacheFallbackLast = fallbackLast;
-        m_recorderArchiveCacheScaleMinimum = instrument.Minimum;
-        m_recorderArchiveCacheScaleMaximum = instrument.Maximum;
-        m_recorderArchiveCacheObservedMinimum = 0d;
-        m_recorderArchiveCacheObservedMaximum = 0d;
+        m_historianTrace.Clear();
+        m_historianCacheInstrumentId = instrument.Id;
+        m_historianCacheWindowTicks = windowTicks;
+        m_historianCachePixelColumns = pixelColumns;
+        m_historianCacheHasHistory = hasHistory;
+        m_historianCacheHistoryState = historyState;
+        m_historianCacheScaleMinimum = instrument.Minimum;
+        m_historianCacheScaleMaximum = instrument.Maximum;
 
         if (hasHistory && m_runtime.CopyDecimatedInstrumentHistory(
                 instrument.Id,
-                windowSeconds,
+                windowTicks,
                 pixelColumns,
-                m_recorderArchiveBucketScratch,
+                m_historianBucketScratch,
                 out historyState,
-                out var observedMinimum,
-                out var observedMaximum))
+                out _,
+                out _))
         {
-            m_recorderArchiveCacheHistoryState = historyState;
-            m_recorderArchiveCacheObservedMinimum = observedMinimum;
-            m_recorderArchiveCacheObservedMaximum = observedMaximum;
-            foreach (var bucket in m_recorderArchiveBucketScratch)
+            m_historianCacheHistoryState = historyState;
+            foreach (var bucket in m_historianBucketScratch)
             {
-                m_recorderArchiveTrace.Add(
-                    NormalizeRecorderArchiveValue(instrument, bucket.FirstValue),
-                    NormalizeRecorderArchiveValue(instrument, bucket.MinimumValue),
-                    NormalizeRecorderArchiveValue(instrument, bucket.MaximumValue),
-                    NormalizeRecorderArchiveValue(instrument, bucket.LastValue));
+                m_historianTrace.Add(
+                    NormalizeHistorianValue(instrument, bucket.FirstValue),
+                    NormalizeHistorianValue(instrument, bucket.MinimumValue),
+                    NormalizeHistorianValue(instrument, bucket.MaximumValue),
+                    NormalizeHistorianValue(instrument, bucket.LastValue));
             }
-            return;
-        }
-
-        if (fallbackCount == 0)
-        {
-            return;
-        }
-
-        m_recorderArchiveCacheObservedMinimum = instrument.Minimum +
-            fallbackSamples.Min() * (instrument.Maximum - instrument.Minimum);
-        m_recorderArchiveCacheObservedMaximum = instrument.Minimum +
-            fallbackSamples.Max() * (instrument.Maximum - instrument.Minimum);
-        var columnCount = Math.Min(pixelColumns, fallbackCount);
-        for (var column = 0; column < columnCount; column++)
-        {
-            var bucketStart = (int)((long)column * fallbackCount /
-                                    columnCount);
-            var bucketEnd = (int)((long)(column + 1) * fallbackCount /
-                                  columnCount);
-            bucketEnd = Math.Max(bucketStart + 1, bucketEnd);
-            var first = fallbackSamples[bucketStart];
-            var last = fallbackSamples[bucketEnd - 1];
-            var minimum = first;
-            var maximum = first;
-            for (var index = bucketStart + 1;
-                 index < bucketEnd;
-                 index++)
-            {
-                minimum = Math.Min(minimum, fallbackSamples[index]);
-                maximum = Math.Max(maximum, fallbackSamples[index]);
-            }
-            m_recorderArchiveTrace.Add(first, minimum, maximum, last);
         }
     }
 
-    private static bool RecorderHistoryStateEquals(
+    private static bool HistorianHistoryStateEquals(
         InstrumentHistoryState left,
         InstrumentHistoryState right) =>
         left.SampleCount == right.SampleCount &&
@@ -2314,7 +3243,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         left.FirstValue.Equals(right.FirstValue) &&
         left.LastValue.Equals(right.LastValue);
 
-    private static float NormalizeRecorderArchiveValue(
+    private static float NormalizeHistorianValue(
         InstrumentDefinition instrument,
         double value)
     {
@@ -2400,11 +3329,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawHistory()
     {
-        var entries = GetHistoryEntries();
+        var allEntries = GetHistoryEntries();
+        var entries = new AlarmHistoryQuery
+        {
+            SearchText = m_historySearchText,
+            StateFilter = m_historyStateFilter,
+            SeverityFilter = m_historySeverityFilter,
+        }.Apply(allEntries);
 
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
-            UnmaText.Get("auto.2cf87f46efd8") + entries.Count + UnmaText.Get("auto.79c82a039536"),
+            UnmaText.Format(
+                "ui.history.filtered_count",
+                "{0} OF {1} EVENTS",
+                entries.Count,
+                allEntries.Count),
             m_sectionStyle,
             NativeGUILayout.Height(34f));
         var confirmingDelete =
@@ -2443,6 +3382,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         NativeGUILayout.EndHorizontal();
 
+        DrawHistoryFilters(entries);
+
         NativeGUILayout.Label(
             UnmaText.Get("auto.546f06f29ca0"),
             m_smallLabelStyle);
@@ -2450,7 +3391,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawHistoryHeader();
 
         var historyViewportHeight =
-            Math.Max(180f, m_windowRect.height - 210f);
+            Math.Max(180f, m_windowRect.height - 258f);
         m_historyScroll.y = Mathf.Min(
             m_historyScroll.y,
             Math.Max(
@@ -2477,6 +3418,144 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndScrollView();
     }
 
+    private void DrawHistoryFilters(
+        IReadOnlyList<AlarmHistoryDefinition> filteredEntries)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.history.search", "SEARCH"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(62f));
+        var searchText = NativeGUILayout.TextField(
+            m_historySearchText,
+            256,
+            m_textFieldStyle,
+            NativeGUILayout.Width(165f),
+            NativeGUILayout.Height(30f));
+        if (!string.Equals(
+                searchText,
+                m_historySearchText,
+                StringComparison.Ordinal))
+        {
+            m_historySearchText = searchText;
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                "×",
+                m_buttonStyle,
+                NativeGUILayout.Width(34f),
+                NativeGUILayout.Height(30f)))
+        {
+            m_historySearchText = "";
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                HistoryStateFilterLabel(m_historyStateFilter),
+                m_buttonStyle,
+                NativeGUILayout.Width(112f),
+                NativeGUILayout.Height(30f)))
+        {
+            var index = Array.IndexOf(
+                s_historyStateFilters,
+                m_historyStateFilter);
+            m_historyStateFilter = s_historyStateFilters[
+                Wrap(index + 1, s_historyStateFilters.Length)];
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                HistorySeverityFilterLabel(m_historySeverityFilter),
+                m_buttonStyle,
+                NativeGUILayout.Width(112f),
+                NativeGUILayout.Height(30f)))
+        {
+            var index = Array.IndexOf(
+                s_historySeverityFilters,
+                m_historySeverityFilter);
+            m_historySeverityFilter = s_historySeverityFilters[
+                Wrap(index + 1, s_historySeverityFilters.Length)];
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.history.export_csv", "CSV"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(58f),
+                NativeGUILayout.Height(30f)))
+        {
+            ExportHistory(filteredEntries, json: false);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.history.export_json", "JSON"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(58f),
+                NativeGUILayout.Height(30f)))
+        {
+            ExportHistory(filteredEntries, json: true);
+        }
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private static string HistoryStateFilterLabel(
+        AlarmHistoryStateFilter filter)
+    {
+        return filter switch
+        {
+            AlarmHistoryStateFilter.Open => UnmaText.Get(
+                "ui.history.state_open",
+                "OPEN"),
+            AlarmHistoryStateFilter.Completed => UnmaText.Get(
+                "ui.history.state_completed",
+                "COMPLETED"),
+            AlarmHistoryStateFilter.K => "K",
+            AlarmHistoryStateFilter.KQ => "KQ",
+            AlarmHistoryStateFilter.KG => "KG",
+            AlarmHistoryStateFilter.KGQ => "KGQ",
+            _ => UnmaText.Get("ui.history.state_all", "ALL STATES"),
+        };
+    }
+
+    private string HistorySeverityFilterLabel(AlarmSeverity? severity)
+    {
+        return severity.HasValue
+            ? SeverityLabel(severity.Value)
+            : UnmaText.Get("ui.history.severity_all", "ALL LEVELS");
+    }
+
+    private void ExportHistory(
+        IReadOnlyList<AlarmHistoryDefinition> entries,
+        bool json)
+    {
+        try
+        {
+            var directory = Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                "UNMA",
+                "exports");
+            Directory.CreateDirectory(directory);
+            var extension = json ? "json" : "csv";
+            var path = Path.Combine(
+                directory,
+                "history-" + DateTime.UtcNow.ToString(
+                    "yyyyMMdd-HHmmss-fff",
+                    CultureInfo.InvariantCulture) + "." + extension);
+            var content = json
+                ? AlarmHistoryExport.ToJson(entries)
+                : AlarmHistoryExport.ToCsv(entries);
+            File.WriteAllText(path, content, new UTF8Encoding(false));
+            SetStatus(UnmaText.Format(
+                "ui.history.exported",
+                "History exported: {0}",
+                path));
+        }
+        catch (Exception exception)
+        {
+            SetStatus(UnmaText.Format(
+                "ui.history.export_failed",
+                "History export failed: {0}",
+                exception.Message));
+        }
+    }
+
     private IReadOnlyList<AlarmHistoryDefinition> GetHistoryEntries()
     {
         var revision = m_runtime.AlarmHistoryRevision;
@@ -2498,11 +3577,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawPanelRect(rect, CoiUiPalette.SurfaceRaised);
         var actionWidth = 98f;
         var stateWidth = 92f;
+        var timeWidth = 128f;
         NativeGUI.Label(
             new Rect(
                 rect.x + 10f,
                 rect.y,
-                rect.width - actionWidth - stateWidth - 20f,
+                timeWidth - 10f,
+                rect.height),
+            UnmaText.Get("ui.history.time", "GAME TIME"),
+            m_historyHeaderStyle);
+        NativeGUI.Label(
+            new Rect(
+                rect.x + timeWidth,
+                rect.y,
+                rect.width - actionWidth - stateWidth - timeWidth - 10f,
                 rect.height),
             UnmaText.Get("ui.history.message", "MESSAGE"),
             m_historyHeaderStyle);
@@ -2593,11 +3681,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         var actionWidth = 96f;
         var stateWidth = 90f;
+        var timeWidth = 126f;
         NativeGUI.Label(
             new Rect(
                 inner.x + 9f,
                 inner.y,
-                inner.width - actionWidth - stateWidth - 14f,
+                timeWidth - 9f,
+                inner.height),
+            FormatHistoryTime(entry),
+            textStyle);
+        NativeGUI.Label(
+            new Rect(
+                inner.x + timeWidth,
+                inner.y,
+                inner.width - actionWidth - stateWidth - timeWidth - 5f,
                 inner.height),
             string.IsNullOrWhiteSpace(entry.Message)
                 ? entry.AlarmKey
@@ -2634,6 +3731,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_runtime.LastPersistenceError);
             }
         }
+    }
+
+    private static string FormatHistoryTime(AlarmHistoryDefinition entry)
+    {
+        if (!GameTimeStampPolicy.TryGetDate(
+                GameTimeStampPolicy.LatestEventTicks(entry),
+                out var date))
+        {
+            return UnmaText.Get("ui.history.time_unknown", "—");
+        }
+        return UnmaText.Format(
+            "ui.history.game_date",
+            "Y{0} M{1} D{2}",
+            date.Year,
+            date.Month,
+            date.Day);
     }
 
     private void DrawEditor()
@@ -3109,6 +4222,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             DrawPanelSettingsWindowContent();
         }
+        else if (m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            DrawAlarmAreasWindowContent();
+        }
         else
         {
             DrawAlarmRuleEditor(true);
@@ -3125,6 +4242,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 UnmaText.Get("auto.5e9e7c9addd9"),
             EditorWindowMode.PanelSettings =>
                 UnmaText.Get("auto.0e8b76140a09"),
+            EditorWindowMode.AlarmAreas =>
+                UnmaText.Get("ui.area.editor_title", "MANAGE AREAS"),
             _ => UnmaText.Get("auto.b9ccafdfaef7") +
                  (targetPanel == null ? "" : " · " + targetPanel.Name),
         };
@@ -3132,6 +4251,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void RequestEditorClose()
     {
+        if (m_editorWindowMode == EditorWindowMode.AlarmAreas &&
+            HasUnsavedAlarmAreas())
+        {
+            m_editorClosePromptOpen = true;
+            m_clearGuiFocusPending = true;
+            return;
+        }
+        if (m_editorWindowMode == EditorWindowMode.PanelSettings)
+        {
+            var panel = m_runtime.Configuration.Panels.FirstOrDefault(
+                candidate => candidate != null && string.Equals(
+                    candidate.Id,
+                    m_panelSettingsPanelId,
+                    StringComparison.Ordinal));
+            if (HasUnsavedPanelSettings(panel))
+            {
+                m_editorClosePromptOpen = true;
+                m_clearGuiFocusPending = true;
+                return;
+            }
+        }
         if (m_editorWindowMode == EditorWindowMode.Rule &&
             HasDraftRuleWork())
         {
@@ -3144,6 +4284,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawEditorClosePrompt()
     {
+        if (m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            DrawAlarmAreasClosePrompt();
+            return;
+        }
+        if (m_editorWindowMode == EditorWindowMode.PanelSettings)
+        {
+            DrawPanelSettingsClosePrompt();
+            return;
+        }
         NativeGUILayout.Space(24f);
         NativeGUILayout.Label(
             UnmaText.Get(
@@ -3245,6 +4395,444 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndHorizontal();
     }
 
+    private void DrawAlarmAreasWindowContent()
+    {
+        if (Time.realtimeSinceStartup > m_pendingAlarmAreaDeleteUntil)
+        {
+            m_pendingAlarmAreaDeleteId = "";
+        }
+
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.area.editor_title", "MANAGE AREAS"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.area.editor_hint",
+                "Areas group global panels without changing their alarms. Deleting an area moves its panels to UNASSIGNED."),
+            m_smallLabelStyle);
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.area.new_name", "NEW AREA"),
+            m_labelStyle,
+            NativeGUILayout.Width(120f));
+        m_newAlarmAreaName = NativeGUILayout.TextField(
+            m_newAlarmAreaName,
+            AlarmAreaPolicy.MaximumDraftNameLength,
+            m_textFieldStyle,
+            NativeGUILayout.ExpandWidth(true));
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.area.add", "ADD"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(110f),
+                NativeGUILayout.Height(32f)))
+        {
+            AddAlarmAreaDraft();
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.Space(10f);
+        if (m_alarmAreaDraft.Count == 0)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.area.empty",
+                    "No custom areas. Panels are currently UNASSIGNED."),
+                m_labelStyle);
+        }
+
+        var compact = m_entityAlarmWindowRect.width /
+                      Math.Max(0.75f, UiScale) < 900f;
+        for (var index = 0; index < m_alarmAreaDraft.Count; index++)
+        {
+            var area = m_alarmAreaDraft[index];
+            if (area == null)
+            {
+                continue;
+            }
+            var panelCount = m_runtime.Configuration.Panels.Count(panel =>
+                AlarmAreaPolicy.IsAssignablePanel(panel) &&
+                string.Equals(
+                    panel.AreaId,
+                    area.Id,
+                    StringComparison.Ordinal));
+
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                (index + 1) + ".",
+                m_smallLabelStyle,
+                NativeGUILayout.Width(32f));
+            area.Name = NativeGUILayout.TextField(
+                area.Name ?? "",
+                AlarmAreaPolicy.MaximumDraftNameLength,
+                m_textFieldStyle,
+                NativeGUILayout.ExpandWidth(true));
+            if (!compact)
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "ui.area.panel_count",
+                        "{0} PANEL(S)",
+                        panelCount),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(120f));
+            }
+            NativeGUILayout.EndHorizontal();
+
+            NativeGUILayout.BeginHorizontal();
+            if (compact)
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "ui.area.panel_count",
+                        "{0} PANEL(S)",
+                        panelCount),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(130f));
+            }
+            else
+            {
+                NativeGUILayout.Space(32f);
+            }
+            var guiWasEnabled = NativeGUI.enabled;
+            NativeGUI.enabled = guiWasEnabled && index > 0;
+            var moveUp = NativeGUILayout.Button(
+                "↑",
+                m_buttonStyle,
+                NativeGUILayout.Width(42f),
+                NativeGUILayout.Height(30f));
+            NativeGUI.enabled = guiWasEnabled &&
+                                index < m_alarmAreaDraft.Count - 1;
+            var moveDown = NativeGUILayout.Button(
+                "↓",
+                m_buttonStyle,
+                NativeGUILayout.Width(42f),
+                NativeGUILayout.Height(30f));
+            NativeGUI.enabled = guiWasEnabled;
+
+            var confirmingDelete = string.Equals(
+                                       m_pendingAlarmAreaDeleteId,
+                                       area.Id,
+                                       StringComparison.Ordinal) &&
+                                   Time.realtimeSinceStartup <=
+                                   m_pendingAlarmAreaDeleteUntil;
+            var delete = NativeGUILayout.Button(
+                confirmingDelete
+                    ? UnmaText.Get(
+                        "ui.area.delete_confirm",
+                        "CONFIRM DELETE")
+                    : UnmaText.Get("ui.area.delete", "DELETE"),
+                confirmingDelete ? m_dangerButtonStyle : m_buttonStyle,
+                NativeGUILayout.Width(confirmingDelete ? 170f : 110f),
+                NativeGUILayout.Height(30f));
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.Space(4f);
+
+            if (moveUp || moveDown)
+            {
+                AlarmAreaPolicy.TryMove(
+                    m_alarmAreaDraft,
+                    area.Id,
+                    moveUp ? index - 1 : index + 1,
+                    out _);
+                m_pendingAlarmAreaDeleteId = "";
+                return;
+            }
+            if (delete)
+            {
+                if (!confirmingDelete)
+                {
+                    m_pendingAlarmAreaDeleteId = area.Id;
+                    m_pendingAlarmAreaDeleteUntil =
+                        Time.realtimeSinceStartup + 6f;
+                    SetStatus(UnmaText.Format(
+                        "ui.area.delete_impact",
+                        "Delete this area? {0} panel(s) will become UNASSIGNED.",
+                        panelCount));
+                }
+                else
+                {
+                    m_alarmAreaDraft.RemoveAt(index);
+                    m_pendingAlarmAreaDeleteId = "";
+                    SetStatus(UnmaText.Get(
+                        "ui.area.delete_pending",
+                        "Area marked for deletion. Save to apply."));
+                }
+                return;
+            }
+        }
+
+        NativeGUILayout.Space(12f);
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.save", "SAVE"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(150f),
+                NativeGUILayout.Height(34f)))
+        {
+            SaveAlarmAreas();
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.cancel", "CANCEL"),
+                m_buttonStyle,
+                NativeGUILayout.Width(150f),
+                NativeGUILayout.Height(34f)))
+        {
+            ReloadAlarmAreaDraft();
+            CloseEditorWindow();
+        }
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private void AddAlarmAreaDraft()
+    {
+        if (m_alarmAreaDraft.Count >= MaximumAlarmAreas)
+        {
+            SetAlarmAreaFailure(AlarmAreaMutationFailure.TooManyAreas);
+            return;
+        }
+        if (!AlarmAreaPolicy.TryCreate(
+                m_alarmAreaDraft,
+                m_newAlarmAreaName,
+                () => Guid.NewGuid().ToString("N"),
+                out _,
+                out var failure))
+        {
+            SetAlarmAreaFailure(failure);
+            return;
+        }
+        m_newAlarmAreaName = "";
+        m_pendingAlarmAreaDeleteId = "";
+        SetStatus(UnmaText.Get(
+            "ui.area.added_to_draft",
+            "Area added to the draft."));
+    }
+
+    private bool SaveAlarmAreas()
+    {
+        if (!string.IsNullOrWhiteSpace(m_newAlarmAreaName))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.area.error_add_pending",
+                "Add the entered area name to the draft before saving."));
+            return false;
+        }
+        if (!AlarmAreaPolicy.ValidateReplacement(
+                m_alarmAreaDraft,
+                out var normalized,
+                out var failure))
+        {
+            SetAlarmAreaFailure(failure);
+            return false;
+        }
+
+        var selectedAreaWillBeDeleted =
+            NormalizeAlarmAreaFilter().Kind == AlarmAreaFilterKind.Area &&
+            !normalized.Any(area => string.Equals(
+                area.Id,
+                m_alarmAreaFilter.AreaId,
+                StringComparison.Ordinal));
+        if (!m_runtime.ReplaceAlarmAreas(
+                normalized,
+                out var unassignedPanelCount))
+        {
+            SetStatus(UnmaText.Format(
+                "ui.area.save_failed",
+                "Areas could not be saved: {0}",
+                m_runtime.LastPersistenceError));
+            return false;
+        }
+
+        m_alarmAreaFilter = selectedAreaWillBeDeleted
+            ? AlarmAreaFilter.Unassigned
+            : AlarmAreaPolicy.NormalizeFilter(
+                m_alarmAreaFilter,
+                m_runtime.Configuration.AlarmAreas);
+        ReloadAlarmAreaDraft();
+        EnsureCurrentPanelVisibleInArea();
+        SetStatus(unassignedPanelCount > 0
+            ? UnmaText.Format(
+                "ui.area.saved_unassigned",
+                "Areas saved. {0} panel(s) are now UNASSIGNED.",
+                unassignedPanelCount)
+            : UnmaText.Get("ui.area.saved", "Areas saved."));
+        return true;
+    }
+
+    private void ReloadAlarmAreaDraft()
+    {
+        m_alarmAreaDraft.Clear();
+        foreach (var area in m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>())
+        {
+            if (area == null)
+            {
+                continue;
+            }
+            m_alarmAreaDraft.Add(new AlarmAreaDefinition
+            {
+                Id = area.Id,
+                Name = area.Name,
+            });
+        }
+        m_newAlarmAreaName = "";
+        m_pendingAlarmAreaDeleteId = "";
+        m_pendingAlarmAreaDeleteUntil = 0f;
+    }
+
+    private bool HasUnsavedAlarmAreas()
+    {
+        if (!string.IsNullOrWhiteSpace(m_newAlarmAreaName))
+        {
+            return true;
+        }
+        var stored = m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>();
+        if (stored.Count != m_alarmAreaDraft.Count)
+        {
+            return true;
+        }
+        for (var index = 0; index < stored.Count; index++)
+        {
+            var original = stored[index];
+            var draft = m_alarmAreaDraft[index];
+            if (original == null || draft == null ||
+                !string.Equals(
+                    original.Id,
+                    draft.Id,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    original.Name,
+                    draft.Name,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void SetAlarmAreaFailure(AlarmAreaMutationFailure failure)
+    {
+        SetStatus(failure switch
+        {
+            AlarmAreaMutationFailure.InvalidName => UnmaText.Get(
+                "ui.area.error_name_required",
+                "Enter an area name."),
+            AlarmAreaMutationFailure.NameTooLong => UnmaText.Get(
+                "ui.area.error_name_too_long",
+                "Area names may contain at most 40 characters."),
+            AlarmAreaMutationFailure.DuplicateName => UnmaText.Get(
+                "ui.area.error_name_duplicate",
+                "Area names must be unique."),
+            AlarmAreaMutationFailure.TooManyAreas => UnmaText.Get(
+                "ui.area.error_limit",
+                "A maximum of 64 areas is supported."),
+            _ => UnmaText.Get(
+                "ui.area.error_invalid",
+                "The area draft is invalid."),
+        });
+    }
+
+    private void DrawAlarmAreasClosePrompt()
+    {
+        NativeGUILayout.Space(24f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.area.close_title",
+                "CLOSE AREA EDITOR?"),
+            m_warningBannerStyle,
+            NativeGUILayout.Height(58f));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.area.close_description",
+                "The area draft has unsaved changes."),
+            m_labelStyle);
+        NativeGUILayout.Space(18f);
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.save_and_close", "SAVE & CLOSE"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            if (SaveAlarmAreas())
+            {
+                CloseEditorWindow();
+            }
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.discard", "DISCARD"),
+                m_dangerButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            ReloadAlarmAreaDraft();
+            CloseEditorWindow();
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Space(12f);
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.back_to_editor", "BACK TO EDITOR"),
+                m_buttonStyle,
+                NativeGUILayout.Width(230f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_editorClosePromptOpen = false;
+        }
+    }
+
+    private void DrawPanelSettingsClosePrompt()
+    {
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            candidate != null && string.Equals(
+                candidate.Id,
+                m_panelSettingsPanelId,
+                StringComparison.Ordinal));
+        NativeGUILayout.Space(24f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.panel.close_title",
+                "CLOSE PANEL SETTINGS?"),
+            m_warningBannerStyle,
+            NativeGUILayout.Height(58f));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.panel.close_description",
+                "The panel settings have unsaved changes."),
+            m_labelStyle);
+        NativeGUILayout.Space(18f);
+        NativeGUILayout.BeginHorizontal();
+        var guiWasEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = guiWasEnabled && panel != null;
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.save_and_close", "SAVE & CLOSE"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            if (SavePanelSettings(panel))
+            {
+                CloseEditorWindow();
+            }
+        }
+        NativeGUI.enabled = guiWasEnabled;
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.discard", "DISCARD"),
+                m_dangerButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            CloseEditorWindow();
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Space(12f);
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.back_to_editor", "BACK TO EDITOR"),
+                m_buttonStyle,
+                NativeGUILayout.Width(230f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_editorClosePromptOpen = false;
+        }
+    }
+
     private void DrawPanelSettingsWindowContent()
     {
         var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
@@ -3260,6 +4848,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var compactSettings = m_entityAlarmWindowRect.width /
+                              Math.Max(0.75f, UiScale) < 840f;
         NativeGUILayout.Label(UnmaText.Get("auto.63a4d85953f8"), m_sectionStyle);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
@@ -3270,34 +4860,34 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_panelSettingsName,
             40,
             m_textFieldStyle,
-            NativeGUILayout.Width(300f));
-        NativeGUILayout.Label(
-            UnmaText.Get("auto.7f6972b99a3e") + m_panelSettingsColumns,
-            m_labelStyle,
-            NativeGUILayout.Width(90f));
-        if (NativeGUILayout.Button("−", m_buttonStyle, NativeGUILayout.Width(36f)))
+            compactSettings
+                ? NativeGUILayout.ExpandWidth(true)
+                : NativeGUILayout.Width(300f));
+        if (!compactSettings)
         {
-            m_panelSettingsColumns = Math.Max(
-                1,
-                m_panelSettingsColumns - 1);
-        }
-        if (NativeGUILayout.Button("+", m_buttonStyle, NativeGUILayout.Width(36f)))
-        {
-            m_panelSettingsColumns = Math.Min(
-                8,
-                m_panelSettingsColumns + 1);
-        }
-        if (NativeGUILayout.Button(
-                UnmaText.Get("ui.common.save", "SAVE"),
-                m_primaryButtonStyle,
-                NativeGUILayout.Width(150f)))
-        {
-            SavePanelSettings(panel);
+            DrawPanelSettingsColumnsAndSave(panel, false);
         }
         NativeGUILayout.EndHorizontal();
+        if (compactSettings)
+        {
+            NativeGUILayout.BeginHorizontal();
+            DrawPanelSettingsColumnsAndSave(panel, true);
+            NativeGUILayout.EndHorizontal();
+        }
 
         if (panel.IsDashboard)
         {
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                UnmaText.Get("ui.panel.area", "AREA"),
+                m_labelStyle,
+                NativeGUILayout.Width(90f));
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.panel.area_dashboard",
+                    "AUTOMATIC — CURRENT BOARD FILTER"),
+                m_smallLabelStyle);
+            NativeGUILayout.EndHorizontal();
             NativeGUILayout.Label(
                 UnmaText.Get("auto.2eb2c75b7d87") +
                 UnmaText.Get("auto.a1af7061ed28"),
@@ -3305,15 +4895,58 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        DrawPanelSettingsAreaSelector();
+        var hasUnsavedPanelSettings = HasUnsavedPanelSettings(panel);
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            hasUnsavedPanelSettings
+                ? UnmaText.Get(
+                    "ui.panel.clone_save_first",
+                    "Save the visible panel settings before duplicating it.")
+                : UnmaText.Get(
+                    "ui.panel.clone_hint",
+                    "Create an independent copy. Cloned custom alarms start disabled."),
+            m_smallLabelStyle);
+        if (compactSettings)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
+        var guiWasEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = guiWasEnabled && !hasUnsavedPanelSettings;
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.panel.clone", "DUPLICATE PANEL"),
+                m_primaryButtonStyle,
+                compactSettings
+                    ? NativeGUILayout.ExpandWidth(true)
+                    : NativeGUILayout.Width(210f),
+                NativeGUILayout.Height(30f)))
+        {
+            ClonePanel(panel);
+            NativeGUILayout.EndHorizontal();
+            return;
+        }
+        NativeGUI.enabled = guiWasEnabled;
+        NativeGUILayout.EndHorizontal();
+
         NativeGUILayout.BeginHorizontal();
         m_panelSettingsIncludeVanilla = NativeGUILayout.Toggle(
             m_panelSettingsIncludeVanilla,
             UnmaText.Get("auto.d696777f43cd"),
-            NativeGUILayout.Width(170f));
+            compactSettings
+                ? NativeGUILayout.ExpandWidth(true)
+                : NativeGUILayout.Width(170f));
         m_panelSettingsIncludeSystem = NativeGUILayout.Toggle(
             m_panelSettingsIncludeSystem,
             UnmaText.Get("auto.e71a0cea7772"),
-            NativeGUILayout.Width(170f));
+            compactSettings
+                ? NativeGUILayout.ExpandWidth(true)
+                : NativeGUILayout.Width(170f));
+        if (compactSettings)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
         NativeGUILayout.Label(
             UnmaText.Get("ui.panel.auto_filter", "Auto-filter"),
             m_labelStyle,
@@ -3370,7 +5003,113 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
     }
 
-    private void SavePanelSettings(PanelDefinition panel)
+    private void DrawPanelSettingsColumnsAndSave(
+        PanelDefinition panel,
+        bool expandSave)
+    {
+        NativeGUILayout.Label(
+            UnmaText.Get("auto.7f6972b99a3e") + m_panelSettingsColumns,
+            m_labelStyle,
+            NativeGUILayout.Width(90f));
+        if (NativeGUILayout.Button(
+                "−",
+                m_buttonStyle,
+                NativeGUILayout.Width(36f)))
+        {
+            m_panelSettingsColumns = Math.Max(
+                1,
+                m_panelSettingsColumns - 1);
+        }
+        if (NativeGUILayout.Button(
+                "+",
+                m_buttonStyle,
+                NativeGUILayout.Width(36f)))
+        {
+            m_panelSettingsColumns = Math.Min(
+                8,
+                m_panelSettingsColumns + 1);
+        }
+        if (expandSave)
+        {
+            if (NativeGUILayout.Button(
+                    UnmaText.Get("ui.common.save", "SAVE"),
+                    m_primaryButtonStyle,
+                    NativeGUILayout.ExpandWidth(true)))
+            {
+                SavePanelSettings(panel);
+            }
+        }
+        else if (NativeGUILayout.Button(
+                     UnmaText.Get("ui.common.save", "SAVE"),
+                     m_primaryButtonStyle,
+                     NativeGUILayout.Width(150f)))
+        {
+            SavePanelSettings(panel);
+        }
+    }
+
+    private void DrawPanelSettingsAreaSelector()
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.panel.area", "AREA"),
+            m_labelStyle,
+            NativeGUILayout.Width(90f));
+        m_panelSettingsAreaScroll = NativeGUILayout.BeginScrollView(
+            m_panelSettingsAreaScroll,
+            false,
+            false,
+            NativeGUILayout.Height(42f),
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.BeginHorizontal();
+        DrawPanelSettingsAreaButton(
+            "",
+            UnmaText.Get("board.area_unassigned", "UNASSIGNED"));
+        foreach (var area in m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>())
+        {
+            if (area == null || string.IsNullOrWhiteSpace(area.Id))
+            {
+                continue;
+            }
+            DrawPanelSettingsAreaButton(area.Id, area.Name);
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.EndScrollView();
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.panel.area_hint",
+                "Assign this panel to an operational area."),
+            m_smallLabelStyle);
+    }
+
+    private void DrawPanelSettingsAreaButton(string areaId, string name)
+    {
+        areaId = areaId?.Trim() ?? "";
+        name = string.IsNullOrWhiteSpace(name)
+            ? UnmaText.Get("ui.area.default_name", "AREA")
+            : name.Trim();
+        var width = Mathf.Clamp(
+            name.Length * Mathf.Max(7f, m_buttonStyle.fontSize * 0.58f) + 24f,
+            120f,
+            260f);
+        if (NativeGUILayout.Button(
+                name,
+                string.Equals(
+                    m_panelSettingsAreaId ?? "",
+                    areaId,
+                    StringComparison.Ordinal)
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                NativeGUILayout.Width(width),
+                NativeGUILayout.Height(30f)))
+        {
+            m_panelSettingsAreaId = areaId;
+        }
+    }
+
+    private bool SavePanelSettings(PanelDefinition panel)
     {
         if (m_runtime.UpdatePanelSettings(
                 panel.Id,
@@ -3378,20 +5117,121 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_panelSettingsColumns,
                 m_panelSettingsIncludeVanilla,
                 m_panelSettingsIncludeSystem,
-                m_panelSettingsFilter))
+                m_panelSettingsFilter,
+                m_panelSettingsAreaId))
         {
             m_panelSettingsName = panel.Name;
             m_panelSettingsColumns = panel.Columns;
             m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
             m_panelSettingsIncludeSystem = panel.IncludeSystem;
             m_panelSettingsFilter = panel.NotificationFilter ?? "";
+            m_panelSettingsAreaId = panel.AreaId ?? "";
+            EnsureCurrentPanelVisibleInArea();
             SetStatus(UnmaText.Get("auto.4bd5b213cd77"));
-            return;
+            return true;
         }
 
         SetStatus(
             UnmaText.Get("auto.27f10f6dc69e") +
             m_runtime.LastPersistenceError);
+        return false;
+    }
+
+    private bool HasUnsavedPanelSettings(PanelDefinition panel)
+    {
+        if (panel == null)
+        {
+            return false;
+        }
+
+        var normalizedName = string.IsNullOrWhiteSpace(m_panelSettingsName)
+            ? UnmaText.Get("default.panel", "PANEL")
+            : m_panelSettingsName.Trim();
+        return !string.Equals(
+                   panel.Name ?? "",
+                   normalizedName,
+                   StringComparison.Ordinal) ||
+               panel.Columns != Math.Max(
+                   1,
+                   Math.Min(8, m_panelSettingsColumns)) ||
+               panel.IncludeVanilla != m_panelSettingsIncludeVanilla ||
+               panel.IncludeSystem != m_panelSettingsIncludeSystem ||
+               !string.Equals(
+                   panel.AreaId ?? "",
+                   m_panelSettingsAreaId ?? "",
+                   StringComparison.Ordinal) ||
+               !string.Equals(
+                   panel.NotificationFilter ?? "",
+                   m_panelSettingsFilter ?? "",
+                   StringComparison.Ordinal);
+    }
+
+    private void ClonePanel(PanelDefinition panel)
+    {
+        if (!m_runtime.TryCloneGlobalPanel(
+                panel?.Id,
+                requestedName: "",
+                out var clonedPanel,
+                out var clonedRuleCount,
+                out var skippedSlotCount))
+        {
+            SetStatus(UnmaText.Format(
+                "ui.panel.clone_failed",
+                "Panel copy failed: {0}",
+                GetPanelCloneFailureDetail()));
+            return;
+        }
+
+        m_activeEntityPanelId = "";
+        m_currentPanelIndex = GlobalPanels.FindIndex(candidate =>
+            string.Equals(
+                candidate.Id,
+                clonedPanel.Id,
+                StringComparison.Ordinal));
+        m_currentPanelIndex = Math.Max(0, m_currentPanelIndex);
+        if (!HasDraftRuleWork())
+        {
+            m_draftTargetPanelId = clonedPanel.Id;
+        }
+        CloseEditorWindow();
+        SetStatus(skippedSlotCount > 0
+            ? UnmaText.Format(
+                "ui.panel.clone_success_skipped",
+                "Panel copied. {0} custom alarm(s) start disabled; " +
+                "{1} broken rule slot(s) were skipped.",
+                clonedRuleCount,
+                skippedSlotCount)
+            : UnmaText.Format(
+                "ui.panel.clone_success",
+                "Panel copied. {0} custom alarm(s) start disabled.",
+                clonedRuleCount));
+    }
+
+    private string GetPanelCloneFailureDetail()
+    {
+        return m_runtime.LastPanelCloneFailure switch
+        {
+            PanelCloneFailure.InvalidSource => UnmaText.Get(
+                "ui.panel.clone_error_invalid_source",
+                "The source panel is unavailable."),
+            PanelCloneFailure.DashboardNotSupported => UnmaText.Get(
+                "ui.panel.clone_error_dashboard",
+                "The dashboard cannot be copied."),
+            PanelCloneFailure.EntityPanelNotSupported => UnmaText.Get(
+                "ui.panel.clone_error_entity",
+                "Entity panels cannot be copied."),
+            PanelCloneFailure.InvalidSourceData => UnmaText.Get(
+                "ui.panel.clone_error_invalid_data",
+                "The source panel data is invalid."),
+            PanelCloneFailure.IdGenerationFailed => UnmaText.Get(
+                "ui.panel.clone_error_id_generation",
+                "Unique IDs could not be generated."),
+            _ => string.IsNullOrWhiteSpace(m_runtime.LastPersistenceError)
+                ? UnmaText.Get(
+                    "ui.panel.clone_error_persistence",
+                    "The configuration could not be saved.")
+                : m_runtime.LastPersistenceError,
+        };
     }
 
     private void DrawAlarmRuleEditor(bool inEntityWindow)
@@ -4133,9 +5973,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     (UsesComparisonThreshold(condition.TrendMode)
                         ? condition.Threshold
                         : condition.DeltaThreshold).ToString(
-                        "0.###",
+                        "R",
                         CultureInfo.CurrentCulture));
             }
+            EnsureDraftHysteresisText(condition);
 
             if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
             {
@@ -4226,6 +6067,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     NativeGUILayout.Height(30f)))
                 {
                     m_draftTrendWindowTexts.Remove(condition);
+                    m_draftHysteresisTexts.Remove(condition);
                     m_draftConditions.RemoveAt(index);
                 m_draftConditionThresholdTexts.RemoveAt(index);
                 if (m_conditionReferencePickerIndex == index)
@@ -4239,6 +6081,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 index--;
             }
             NativeGUILayout.EndHorizontal();
+
+            if (index >= 0 &&
+                index < m_draftConditions.Count &&
+                ReferenceEquals(m_draftConditions[index], condition))
+            {
+                DrawDraftHysteresisRow(condition, 465f);
+            }
 
             if (index >= 0 && m_conditionReferencePickerIndex == index)
             {
@@ -4386,6 +6235,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_draftConditions.RemoveAt(index);
             m_draftConditionThresholdTexts.RemoveAt(index);
             m_draftTrendWindowTexts.Remove(condition);
+            m_draftHysteresisTexts.Remove(condition);
             NativeGUILayout.EndHorizontal();
             NativeGUILayout.EndVertical();
             return true;
@@ -4415,6 +6265,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_textFieldStyle,
                 NativeGUILayout.Width(110f),
                 NativeGUILayout.Height(28f));
+            DrawDraftHysteresisInline(condition);
         }
         else
         {
@@ -4519,6 +6370,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
         return false;
     }
 
+    private void EnsureDraftHysteresisText(ConditionDefinition condition)
+    {
+        if (condition == null || m_draftHysteresisTexts.ContainsKey(condition))
+        {
+            return;
+        }
+        m_draftHysteresisTexts[condition] = condition.Hysteresis.ToString(
+            "R",
+            CultureInfo.CurrentCulture);
+    }
+
+    private void DrawDraftHysteresisRow(
+        ConditionDefinition condition,
+        float leadingSpace)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Space(leadingSpace);
+        DrawDraftHysteresisInline(condition);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.timing.hysteresis_hint",
+                "0 disables the dead band around the threshold."),
+            m_smallLabelStyle);
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawDraftHysteresisInline(ConditionDefinition condition)
+    {
+        EnsureDraftHysteresisText(condition);
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.timing.hysteresis", "HYSTERESIS"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(88f));
+        m_draftHysteresisTexts[condition] = NativeGUILayout.TextField(
+            m_draftHysteresisTexts[condition],
+            24,
+            m_textFieldStyle,
+            NativeGUILayout.Width(82f),
+            NativeGUILayout.Height(28f));
+    }
+
     private void SetInstrumentTrendMode(
         int index,
         ConditionDefinition condition,
@@ -4567,7 +6459,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             (UsesComparisonThreshold(mode)
                 ? condition.Threshold
                 : condition.DeltaThreshold).ToString(
-                "0.###",
+                "R",
                 CultureInfo.CurrentCulture);
         m_draftTrendWindowTexts[condition] =
             condition.WindowAmount.ToString(CultureInfo.CurrentCulture);
@@ -4748,6 +6640,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 m_draftSeverity = severity;
                 m_draftColor = DefaultColorFor(severity);
+                EnsureDraftEscalationTarget();
             }
         }
         NativeGUILayout.Label(
@@ -4825,6 +6718,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_smallLabelStyle);
         NativeGUILayout.EndHorizontal();
 
+        DrawAlarmTimingDraft();
+        DrawAlarmEscalationDraft(sounds);
+
         NativeGUILayout.BeginHorizontal();
         NativeGUI.enabled = m_draftConditions.Count > 0 &&
                       GetDraftTargetPanel() != null;
@@ -4871,6 +6767,398 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
         }
         NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawAlarmTimingDraft()
+    {
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.timing.title", "ALARM TIMING"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.timing.hint",
+                "All durations use the COI game calendar. Zero activates and resets immediately; zero minimum time is disabled."),
+            m_smallLabelStyle);
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.activation", "ACTIVATION DELAY"),
+            m_draftActivationDelay,
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.reset", "RESET DELAY"),
+            m_draftResetDelay,
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.minimum_active", "MINIMUM ACTIVE"),
+            m_draftMinimumActive,
+            UnmaText.Get("ui.timing.zero.off", "OFF"));
+    }
+
+    private void DrawAlarmEscalationDraft(
+        IReadOnlyList<SoundOption> sounds)
+    {
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.title", "ESCALATION"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.escalation.hint",
+                "Escalation raises severity and can change the sound when an alarm remains active for the configured game time."),
+            m_smallLabelStyle);
+
+        var canEscalate = m_draftSeverity < AlarmSeverity.Emergency;
+        NativeGUI.enabled = canEscalate;
+        m_draftEscalationEnabled = NativeGUILayout.Toggle(
+            m_draftEscalationEnabled,
+            UnmaText.Get("ui.escalation.enabled", "ENABLE ESCALATION"),
+            NativeGUILayout.Width(250f));
+        NativeGUI.enabled = true;
+        if (!canEscalate)
+        {
+            m_draftEscalationEnabled = false;
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.escalation.unavailable_emergency",
+                    "Emergency is already the highest severity."),
+                m_smallLabelStyle);
+            return;
+        }
+        if (!m_draftEscalationEnabled)
+        {
+            return;
+        }
+
+        EnsureDraftEscalationTarget();
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.escalation.after", "AFTER"),
+            m_draftEscalationAfter,
+            UnmaText.Get("ui.escalation.required", "REQUIRED"));
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.escalation.target_severity",
+                "TARGET SEVERITY"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        foreach (AlarmSeverity severity in Enum.GetValues(
+                     typeof(AlarmSeverity)))
+        {
+            if (severity <= m_draftSeverity)
+            {
+                continue;
+            }
+            if (NativeGUILayout.Button(
+                    SeverityLabel(severity),
+                    m_draftEscalationSeverity == severity
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    NativeGUILayout.Width(125f),
+                    NativeGUILayout.Height(28f)))
+            {
+                m_draftEscalationSeverity = severity;
+            }
+        }
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.sound", "ESCALATION SOUND"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        if (NativeGUILayout.Button(
+                "<",
+                m_buttonStyle,
+                NativeGUILayout.Width(38f),
+                NativeGUILayout.Height(28f)))
+        {
+            CycleDraftEscalationSound(sounds, -1);
+        }
+        NativeGUILayout.Label(
+            EscalationSoundLabel(sounds, m_draftEscalationSoundId),
+            m_labelStyle,
+            NativeGUILayout.Width(260f));
+        if (NativeGUILayout.Button(
+                ">",
+                m_buttonStyle,
+                NativeGUILayout.Width(38f),
+                NativeGUILayout.Height(28f)))
+        {
+            CycleDraftEscalationSound(sounds, 1);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.test", "TEST"),
+                m_buttonStyle,
+                NativeGUILayout.Width(65f),
+                NativeGUILayout.Height(28f)))
+        {
+            TestSound(
+                ResolveDraftEscalationTestSound(sounds),
+                m_draftEscalationSeverity);
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.operator_action", "OPERATOR ACTION"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        if (NativeGUILayout.Button(
+                OperatorActionLabel(m_draftEscalationOperatorAction),
+                m_buttonStyle,
+                NativeGUILayout.Width(330f),
+                NativeGUILayout.Height(28f)))
+        {
+            m_draftEscalationOperatorAction = NextEnum(
+                m_draftEscalationOperatorAction);
+        }
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.escalation.operator_action_hint",
+                "Operator actions only open the matching UNMA panel. The mute option ends only the temporary five-minute mute."),
+            m_smallLabelStyle);
+    }
+
+    private void EnsureDraftEscalationTarget()
+    {
+        if (m_draftSeverity >= AlarmSeverity.Emergency)
+        {
+            m_draftEscalationEnabled = false;
+            m_draftEscalationSeverity = AlarmSeverity.Emergency;
+            return;
+        }
+        if (m_draftEscalationSeverity <= m_draftSeverity)
+        {
+            m_draftEscalationSeverity =
+                (AlarmSeverity)((int)m_draftSeverity + 1);
+        }
+    }
+
+    private void CycleDraftEscalationSound(
+        IReadOnlyList<SoundOption> sounds,
+        int direction)
+    {
+        var ids = new List<string> { "" };
+        if (sounds != null)
+        {
+            foreach (var sound in sounds)
+            {
+                if (sound != null && !ids.Any(id => string.Equals(
+                        id,
+                        sound.Id,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    ids.Add(sound.Id);
+                }
+            }
+        }
+        var current = ids.FindIndex(id => string.Equals(
+            id,
+            m_draftEscalationSoundId,
+            StringComparison.OrdinalIgnoreCase));
+        m_draftEscalationSoundId = ids[Wrap(
+            Math.Max(0, current) + direction,
+            ids.Count)];
+    }
+
+    private static string EscalationSoundLabel(
+        IReadOnlyList<SoundOption> sounds,
+        string soundId)
+    {
+        if (string.IsNullOrEmpty(soundId))
+        {
+            return UnmaText.Get(
+                "ui.escalation.sound_inherit",
+                "INHERIT BASE SOUND");
+        }
+        var sound = sounds?.FirstOrDefault(option =>
+            option != null && string.Equals(
+                option.Id,
+                soundId,
+                StringComparison.OrdinalIgnoreCase));
+        return sound?.Label ??
+               UnmaText.Get("auto.40bffd508dbf") + soundId;
+    }
+
+    private string ResolveDraftEscalationTestSound(
+        IReadOnlyList<SoundOption> sounds)
+    {
+        if (!string.IsNullOrEmpty(m_draftEscalationSoundId))
+        {
+            return m_draftEscalationSoundId;
+        }
+        if (!string.IsNullOrWhiteSpace(m_editingRuleId) &&
+            !m_draftSoundChanged)
+        {
+            return m_originalDraftSoundId;
+        }
+        return sounds != null && sounds.Count > 0
+            ? sounds[Math.Max(
+                0,
+                Math.Min(m_draftSoundIndex, sounds.Count - 1))].Id
+            : "auto";
+    }
+
+    private static string OperatorActionLabel(AlarmOperatorAction action)
+    {
+        return action switch
+        {
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute =>
+                UnmaText.Get(
+                    "ui.operator_action.open_panel_cancel_mute",
+                    "OPEN PANEL + END 5-MIN MUTE"),
+            AlarmOperatorAction.OpenPanel => UnmaText.Get(
+                "ui.operator_action.open_panel",
+                "OPEN PANEL"),
+            _ => UnmaText.Get("ui.operator_action.none", "NONE"),
+        };
+    }
+
+    private void DrawTimingDraftValue(
+        string label,
+        TimingDraftValue draft,
+        string zeroLabel)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            label,
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        draft.AmountText = NativeGUILayout.TextField(
+            draft.AmountText ?? "0",
+            9,
+            m_textFieldStyle,
+            NativeGUILayout.Width(72f),
+            NativeGUILayout.Height(28f));
+        if (NativeGUILayout.Button(
+                TimingUnitLabel(draft.Unit),
+                m_buttonStyle,
+                NativeGUILayout.Width(105f),
+                NativeGUILayout.Height(28f)))
+        {
+            draft.Unit = NextTimingDisplayUnit(draft.Unit);
+        }
+        NativeGUILayout.Label(
+            TimingDraftIsZero(draft) ? zeroLabel : "",
+            m_smallLabelStyle,
+            NativeGUILayout.Width(105f));
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private static TimingDisplayUnit NextTimingDisplayUnit(
+        TimingDisplayUnit unit)
+    {
+        return unit == TimingDisplayUnit.Century
+            ? TimingDisplayUnit.Tick
+            : (TimingDisplayUnit)((int)unit + 1);
+    }
+
+    private static bool TimingDraftIsZero(TimingDraftValue draft)
+    {
+        return draft != null && int.TryParse(
+            draft.AmountText,
+            NumberStyles.Integer,
+            CultureInfo.CurrentCulture,
+            out var amount) && amount == 0;
+    }
+
+    private static bool TimingDraftHasInput(TimingDraftValue draft)
+    {
+        return draft != null && !string.Equals(
+            draft.AmountText?.Trim(),
+            "0",
+            StringComparison.Ordinal);
+    }
+
+    private static bool TryGetTimingTicks(
+        TimingDraftValue draft,
+        out int ticks)
+    {
+        ticks = 0;
+        if (draft == null ||
+            !int.TryParse(
+                draft.AmountText,
+                NumberStyles.Integer,
+                CultureInfo.CurrentCulture,
+                out var amount) ||
+            amount < 0)
+        {
+            return false;
+        }
+        var total = (long)amount * TimingTicksPerUnit(draft.Unit);
+        if (total > AlarmTimingPolicy.MaximumTimingTicks)
+        {
+            return false;
+        }
+        ticks = (int)total;
+        return true;
+    }
+
+    private static void LoadTimingDraft(TimingDraftValue draft, int ticks)
+    {
+        ticks = Math.Max(
+            0,
+            Math.Min(AlarmTimingPolicy.MaximumTimingTicks, ticks));
+        draft.AmountText = ticks.ToString(CultureInfo.CurrentCulture);
+        draft.Unit = TimingDisplayUnit.Tick;
+        if (ticks == 0)
+        {
+            return;
+        }
+        foreach (var unit in new[]
+                 {
+                     TimingDisplayUnit.Century,
+                     TimingDisplayUnit.Decade,
+                     TimingDisplayUnit.Year,
+                     TimingDisplayUnit.Month,
+                     TimingDisplayUnit.Day,
+                 })
+        {
+            var divisor = TimingTicksPerUnit(unit);
+            if (ticks % divisor != 0)
+            {
+                continue;
+            }
+            draft.AmountText = (ticks / divisor).ToString(
+                CultureInfo.CurrentCulture);
+            draft.Unit = unit;
+            return;
+        }
+    }
+
+    private static int TimingTicksPerUnit(TimingDisplayUnit unit)
+    {
+        return unit switch
+        {
+            TimingDisplayUnit.Day => GameTimeWindowPolicy.SimTicksPerDay,
+            TimingDisplayUnit.Month => GameTimeWindowPolicy.SimTicksPerMonth,
+            TimingDisplayUnit.Year => GameTimeWindowPolicy.SimTicksPerYear,
+            TimingDisplayUnit.Decade =>
+                GameTimeWindowPolicy.SimTicksPerYear * 10,
+            TimingDisplayUnit.Century =>
+                GameTimeWindowPolicy.SimTicksPerYear * 100,
+            _ => 1,
+        };
+    }
+
+    private static string TimingUnitLabel(TimingDisplayUnit unit)
+    {
+        return unit switch
+        {
+            TimingDisplayUnit.Day => UnmaText.Get("ui.time.day", "DAY"),
+            TimingDisplayUnit.Month => UnmaText.Get("ui.time.month", "MONTH"),
+            TimingDisplayUnit.Year => UnmaText.Get("ui.time.year", "YEAR"),
+            TimingDisplayUnit.Decade =>
+                UnmaText.Get("ui.time.decade", "10 YEARS"),
+            TimingDisplayUnit.Century =>
+                UnmaText.Get("ui.time.century", "100 YEARS"),
+            _ => UnmaText.Get("ui.time.tick", "TICK"),
+        };
     }
 
     private void DrawSystemAlarms()
@@ -5013,10 +7301,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_smallLabelStyle);
         NativeGUILayout.EndHorizontal();
 
-        foreach (var stage in draft.Stages
-                     .OrderBy(stage => stage.Priority)
+        foreach (var stageEntry in draft.Stages
+                     .Select((stage, index) => new
+                     {
+                         Stage = stage,
+                         Index = index,
+                     })
+                     .OrderBy(entry => entry.Stage.Priority)
                      .ToArray())
         {
+            var stage = stageEntry.Stage;
+            var stageIndex = stageEntry.Index;
             NativeGUILayout.BeginVertical(m_panelStyle);
             NativeGUILayout.BeginHorizontal();
             stage.Enabled = NativeGUILayout.Toggle(
@@ -5095,6 +7390,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             NativeGUILayout.EndHorizontal();
 
+            DrawSystemStageTiming(stageIndex, stage);
+            DrawSystemStageOperatorAction(stage);
+
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
                 var condition = stage.Conditions[index];
@@ -5106,15 +7404,31 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         condition.MetricId ?? "",
                         UnmaText.Get("auto.516699304b80") + (condition.MetricId ?? ""),
                         UnmaText.Get("auto.9a98b3d0d737"));
-                var thresholdKey = SystemThresholdKey(stage.Id, index);
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
                 if (!m_systemThresholdTexts.TryGetValue(
                         thresholdKey,
                         out var thresholdText))
                 {
                     thresholdText = condition.Threshold.ToString(
-                        "0.###",
+                        "R",
                         CultureInfo.CurrentCulture);
                     m_systemThresholdTexts[thresholdKey] = thresholdText;
+                }
+                if (!m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText))
+                {
+                    hysteresisText = condition.Hysteresis.ToString(
+                        "R",
+                        CultureInfo.CurrentCulture);
+                    m_systemHysteresisTexts[hysteresisKey] = hysteresisText;
                 }
 
                 NativeGUILayout.BeginHorizontal();
@@ -5155,15 +7469,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_textFieldStyle,
                     NativeGUILayout.Width(90f));
                 m_systemThresholdTexts[thresholdKey] = thresholdText;
+                NativeGUILayout.Label(
+                    UnmaText.Get("ui.timing.hysteresis", "HYSTERESIS"),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(88f));
+                hysteresisText = NativeGUILayout.TextField(
+                    hysteresisText,
+                    24,
+                    m_textFieldStyle,
+                    NativeGUILayout.Width(78f));
+                m_systemHysteresisTexts[hysteresisKey] = hysteresisText;
                 if (NativeGUILayout.Button(
                         UnmaText.Get("ui.common.remove", "REMOVE"),
                         m_dangerButtonStyle,
                         NativeGUILayout.Width(95f)))
                 {
-                    ApplyValidSystemThresholdTexts();
-                    stage.Conditions.RemoveAt(index);
-                    RebuildSystemThresholdTexts();
-                    index--;
+                    if (TryApplySystemDraftTexts())
+                    {
+                        stage.Conditions.RemoveAt(index);
+                        RebuildSystemThresholdTexts();
+                        index--;
+                    }
                 }
                 NativeGUILayout.EndHorizontal();
             }
@@ -5173,14 +7499,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_buttonStyle,
                     NativeGUILayout.Width(135f)))
             {
-                ApplyValidSystemThresholdTexts();
-                stage.Conditions.Add(new SystemConditionDefinition
+                if (TryApplySystemDraftTexts())
                 {
-                    MetricId = metrics[0].Id,
-                    Comparison = ComparisonOperator.Less,
-                    Threshold = 0d,
-                });
-                RebuildSystemThresholdTexts();
+                    stage.Conditions.Add(new SystemConditionDefinition
+                    {
+                        MetricId = metrics[0].Id,
+                        Comparison = ComparisonOperator.Less,
+                        Threshold = 0d,
+                    });
+                    RebuildSystemThresholdTexts();
+                }
             }
             NativeGUILayout.EndVertical();
         }
@@ -5201,10 +7529,81 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 NativeGUILayout.Height(30f)))
         {
             m_systemAlarmDraft = null;
-            m_systemThresholdTexts.Clear();
+            ClearSystemDraftTexts();
             SetStatus(UnmaText.Get("auto.6b89012b7c85"));
         }
         NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawSystemStageTiming(
+        int stageIndex,
+        SystemAlarmStageDefinition stage)
+    {
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.timing.stage_title", "STAGE TIMING"),
+            m_smallLabelStyle);
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.activation", "ACTIVATION DELAY"),
+            GetSystemTimingDraft(
+                stageIndex,
+                "activation",
+                stage.ActivationDelayTicks),
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.reset", "RESET DELAY"),
+            GetSystemTimingDraft(
+                stageIndex,
+                "reset",
+                stage.ResetDelayTicks),
+            UnmaText.Get("ui.timing.zero.instant", "INSTANT"));
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.timing.minimum_active", "MINIMUM ACTIVE"),
+            GetSystemTimingDraft(
+                stageIndex,
+                "minimum-active",
+                stage.MinimumActiveTicks),
+            UnmaText.Get("ui.timing.zero.off", "OFF"));
+    }
+
+    private void DrawSystemStageOperatorAction(
+        SystemAlarmStageDefinition stage)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.operator_action", "OPERATOR ACTION"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        if (NativeGUILayout.Button(
+                OperatorActionLabel(stage.OperatorAction),
+                m_buttonStyle,
+                NativeGUILayout.Width(330f),
+                NativeGUILayout.Height(28f)))
+        {
+            stage.OperatorAction = NextEnum(stage.OperatorAction);
+        }
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.system.operator_action_hint",
+                "Runs once when an already-active alarm advances to this stage. It never moves the camera or changes per-alarm snoozes."),
+            m_smallLabelStyle);
+    }
+
+    private TimingDraftValue GetSystemTimingDraft(
+        int stageIndex,
+        string field,
+        int fallbackTicks)
+    {
+        var key = SystemStageDraftKey(stageIndex, field);
+        if (m_systemTimingDrafts.TryGetValue(key, out var draft))
+        {
+            return draft;
+        }
+        draft = new TimingDraftValue();
+        LoadTimingDraft(draft, fallbackTicks);
+        m_systemTimingDrafts[key] = draft;
+        return draft;
     }
 
     private void BeginEditingSystemAlarm(SystemAlarmDefinition alarm)
@@ -5217,12 +7616,52 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void SaveSystemAlarmDraft()
     {
-        foreach (var stage in m_systemAlarmDraft.Stages)
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
         {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            if (!TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "activation",
+                        stage.ActivationDelayTicks),
+                    out var activationDelayTicks) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "reset",
+                        stage.ResetDelayTicks),
+                    out var resetDelayTicks) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "minimum-active",
+                        stage.MinimumActiveTicks),
+                    out var minimumActiveTicks))
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.timing.invalid_stage_duration",
+                    "Stage '{0}': Enter non-negative whole timing values within 100 game years.",
+                    stage.Message));
+                return;
+            }
+            stage.ActivationDelayTicks = activationDelayTicks;
+            stage.ResetDelayTicks = resetDelayTicks;
+            stage.MinimumActiveTicks = minimumActiveTicks;
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
-                var key = SystemThresholdKey(stage.Id, index);
-                if (!m_systemThresholdTexts.TryGetValue(key, out var text) ||
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
+                if (!m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var text) ||
                     !TryParseDouble(text, out var threshold))
                 {
                     SetStatus(
@@ -5230,7 +7669,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         stage.Message + "'.");
                     return;
                 }
+                if (!m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText) ||
+                    !TryParseDouble(hysteresisText, out var hysteresis) ||
+                    hysteresis < 0d)
+                {
+                    SetStatus(UnmaText.Format(
+                        "ui.timing.invalid_stage_hysteresis",
+                        "Stage '{0}', condition {1}: Enter a non-negative hysteresis value.",
+                        stage.Message,
+                        index + 1));
+                    return;
+                }
                 stage.Conditions[index].Threshold = threshold;
+                stage.Conditions[index].Hysteresis = hysteresis;
             }
             stage.ActiveColor = NormalizeSystemColor(stage.ActiveColor);
             stage.SoundId = string.IsNullOrWhiteSpace(stage.SoundId)
@@ -5246,52 +7699,217 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
         m_systemAlarmDraft = null;
-        m_systemThresholdTexts.Clear();
+        ClearSystemDraftTexts();
         SetStatus(UnmaText.Get("auto.a62e7b126c0b"));
     }
 
     private void RebuildSystemThresholdTexts()
     {
-        m_systemThresholdTexts.Clear();
+        ClearSystemDraftTexts();
         if (m_systemAlarmDraft == null)
         {
             return;
         }
-        foreach (var stage in m_systemAlarmDraft.Stages)
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
         {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            GetSystemTimingDraft(
+                stageIndex,
+                "activation",
+                stage.ActivationDelayTicks);
+            GetSystemTimingDraft(
+                stageIndex,
+                "reset",
+                stage.ResetDelayTicks);
+            GetSystemTimingDraft(
+                stageIndex,
+                "minimum-active",
+                stage.MinimumActiveTicks);
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
-                m_systemThresholdTexts[SystemThresholdKey(stage.Id, index)] =
-                    stage.Conditions[index].Threshold.ToString(
-                        "0.###",
+                var condition = stage.Conditions[index];
+                m_systemThresholdTexts[SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold")] = condition.Threshold.ToString(
+                        "R",
+                        CultureInfo.CurrentCulture);
+                m_systemHysteresisTexts[SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis")] = condition.Hysteresis.ToString(
+                        "R",
                         CultureInfo.CurrentCulture);
             }
         }
     }
 
-    private void ApplyValidSystemThresholdTexts()
+    private bool TryApplySystemDraftTexts()
     {
         if (m_systemAlarmDraft == null)
         {
-            return;
+            return false;
         }
-        foreach (var stage in m_systemAlarmDraft.Stages)
+
+        // Validate every text draft before changing the model. ADD/REMOVE
+        // rebuilds the index-based draft keys, so proceeding with even one
+        // invalid value would otherwise silently discard the player's input.
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
         {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            if (!TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "activation",
+                        stage.ActivationDelayTicks),
+                    out _) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "reset",
+                        stage.ResetDelayTicks),
+                    out _) ||
+                !TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "minimum-active",
+                        stage.MinimumActiveTicks),
+                    out _))
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.timing.invalid_stage_duration",
+                    "Stage '{0}': Enter non-negative whole timing values within 100 game years.",
+                    stage.Message));
+                return false;
+            }
+
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
-                var key = SystemThresholdKey(stage.Id, index);
-                if (m_systemThresholdTexts.TryGetValue(key, out var text) &&
-                    TryParseDouble(text, out var threshold))
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
+                if (!m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var thresholdText) ||
+                    !TryParseDouble(thresholdText, out _))
                 {
-                    stage.Conditions[index].Threshold = threshold;
+                    SetStatus(UnmaText.Format(
+                        "ui.timing.invalid_stage_threshold",
+                        "Stage '{0}', condition {1}: Enter a valid threshold value.",
+                        stage.Message,
+                        index + 1));
+                    return false;
+                }
+                if (!m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText) ||
+                    !TryParseDouble(hysteresisText, out var hysteresis) ||
+                    hysteresis < 0d)
+                {
+                    SetStatus(UnmaText.Format(
+                        "ui.timing.invalid_stage_hysteresis",
+                        "Stage '{0}', condition {1}: Enter a non-negative hysteresis value.",
+                        stage.Message,
+                        index + 1));
+                    return false;
                 }
             }
         }
+
+        for (var stageIndex = 0;
+             stageIndex < m_systemAlarmDraft.Stages.Count;
+             stageIndex++)
+        {
+            var stage = m_systemAlarmDraft.Stages[stageIndex];
+            if (TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "activation",
+                        stage.ActivationDelayTicks),
+                    out var activationDelayTicks))
+            {
+                stage.ActivationDelayTicks = activationDelayTicks;
+            }
+            if (TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "reset",
+                        stage.ResetDelayTicks),
+                    out var resetDelayTicks))
+            {
+                stage.ResetDelayTicks = resetDelayTicks;
+            }
+            if (TryGetTimingTicks(
+                    GetSystemTimingDraft(
+                        stageIndex,
+                        "minimum-active",
+                        stage.MinimumActiveTicks),
+                    out var minimumActiveTicks))
+            {
+                stage.MinimumActiveTicks = minimumActiveTicks;
+            }
+            for (var index = 0; index < stage.Conditions.Count; index++)
+            {
+                var condition = stage.Conditions[index];
+                var thresholdKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "threshold");
+                var hysteresisKey = SystemConditionDraftKey(
+                    stageIndex,
+                    index,
+                    "hysteresis");
+                if (m_systemThresholdTexts.TryGetValue(
+                        thresholdKey,
+                        out var text) &&
+                    TryParseDouble(text, out var threshold))
+                {
+                    condition.Threshold = threshold;
+                }
+                if (m_systemHysteresisTexts.TryGetValue(
+                        hysteresisKey,
+                        out var hysteresisText) &&
+                    TryParseDouble(hysteresisText, out var hysteresis) &&
+                    hysteresis >= 0d)
+                {
+                    condition.Hysteresis = hysteresis;
+                }
+            }
+        }
+        return true;
     }
 
-    private static string SystemThresholdKey(string stageId, int index)
+    private void ClearSystemDraftTexts()
     {
-        return (stageId ?? "") + "|" + index;
+        m_systemThresholdTexts.Clear();
+        m_systemHysteresisTexts.Clear();
+        m_systemTimingDrafts.Clear();
+    }
+
+    private static string SystemStageDraftKey(int stageIndex, string field)
+    {
+        return "stage:" + stageIndex.ToString(CultureInfo.InvariantCulture) +
+               "|" + field;
+    }
+
+    private static string SystemConditionDraftKey(
+        int stageIndex,
+        int conditionIndex,
+        string field)
+    {
+        return "stage:" + stageIndex.ToString(CultureInfo.InvariantCulture) +
+               "|condition:" +
+               conditionIndex.ToString(CultureInfo.InvariantCulture) +
+               "|" + field;
     }
 
     private void DrawSoundOverrides()
@@ -5925,24 +8543,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
         PanelDefinition panel)
     {
         var alarms = GetPanelViews(panel);
-        var activeCount = panel.IsDashboard
-            ? alarms.Count
-            : m_runtime.ActiveCount;
-        var unacknowledgedCount = panel.IsDashboard
-            ? alarms.Count(alarm => !alarm.IsAcknowledged)
-            : m_runtime.UnacknowledgedCount;
+        var activeCount = alarms.Count(alarm => alarm.IsActive);
+        var unacknowledgedCount = alarms.Count(alarm =>
+            alarm.RequiresAcknowledgement);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
             UnmaText.Get("auto.397544fe1d24") + activeCount +
             UnmaText.Get("auto.ddc0834bf463") + unacknowledgedCount,
             m_smallLabelStyle);
         if (NativeGUILayout.Button(
-                UnmaText.Get("auto.77be2ec4ae31"),
+                UnmaText.Get("board.acknowledge_panel", "PANEL ACK"),
                 m_dangerButtonStyle,
                 NativeGUILayout.Width(130f)))
         {
-            m_runtime.AcknowledgeAll();
-            m_audio.StopAlarm();
+            AcknowledgePanelAlarms(panel);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("board.next_alarm", "NEXT ALARM"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(120f)))
+        {
+            NavigateToNextUnacknowledgedAlarm(panel);
         }
         if (!panel.IsDashboard && NativeGUILayout.Button(
                 UnmaText.Get("auto.d5302ca93907"),
@@ -6055,30 +8676,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     NativeGUILayout.Height(TileHeight));
                 if (index < alarms.Count)
                 {
-                    DrawAlarmTile(rect, alarms[index], displayPanel);
+                    var alarm = alarms[index];
+                    var isAudioSnoozed =
+                        alarm.RequiresAcknowledgement &&
+                        displayPanel != null &&
+                        m_runtime.IsAlarmAudioSnoozed(
+                            displayPanel.Id,
+                            PanelSlotProjection.StableAlarmId(alarm));
+                    DrawAlarmTile(
+                        rect,
+                        alarm,
+                        displayPanel,
+                        isAudioSnoozed);
                     if (assignmentPending && interactionPanel != null)
                     {
                         DrawExistingAssignmentTarget(
                             rect,
                             interactionPanel,
-                            alarms[index]);
+                            alarm);
                     }
                     else if (!m_entityAssignmentPending)
                     {
                         var hasEntityVanillaControls =
                             IsEntityVanillaTile(
                                 displayPanel,
-                                alarms[index]);
-                        var tileClickRect =
-                            TryGetNavigationEntityId(
-                                alarms[index],
-                                out _)
-                                ? new Rect(
-                                    rect.x,
-                                    rect.y,
-                                    rect.width - 35f,
-                                    rect.height)
-                                : rect;
+                                alarm);
+                        var hasNavigationButton =
+                            !hasEntityVanillaControls &&
+                            m_runtime.TryResolveNavigationEntity(
+                                displayPanel,
+                                alarm,
+                                out _);
+                        var hasRightActionColumn =
+                            alarm.RequiresAcknowledgement ||
+                            hasNavigationButton;
+                        var tileClickRect = hasRightActionColumn
+                            ? new Rect(
+                                rect.x,
+                                rect.y,
+                                rect.width - 35f,
+                                rect.height)
+                            : rect;
                         if (hasEntityVanillaControls)
                         {
                             tileClickRect.height = Math.Max(
@@ -6090,12 +8728,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                 GUIContent.none,
                                 GUIStyle.none))
                         {
-                            HandleAlarmTileClick(alarms[index]);
+                            HandleAlarmTileClick(alarm);
                         }
                         if (!hasEntityVanillaControls)
                         {
-                            DrawAlarmNavigationButton(rect, alarms[index]);
+                            DrawAlarmNavigationButton(
+                                rect,
+                                alarm,
+                                displayPanel);
                         }
+                        DrawAlarmAudioSnoozeButton(
+                            rect,
+                            alarm,
+                            displayPanel,
+                            isAudioSnoozed);
+                        DrawAlarmAcknowledgeButton(
+                            rect,
+                            alarm,
+                            displayPanel);
                     }
                 }
                 else if (showCreationTarget && index == alarms.Count)
@@ -6165,6 +8815,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private bool OpenRuleFromAlarmTile(AlarmView alarm)
     {
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
+            return true;
+        }
         if (!PanelSlotProjection.TryGetCustomRuleId(alarm, out var ruleId))
         {
             return false;
@@ -6208,17 +8862,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else
         {
-            var panelIndex = GlobalPanels.FindIndex(panel => string.Equals(
-                panel.Id,
-                rule.PanelId,
-                StringComparison.Ordinal));
-            if (panelIndex >= 0)
-            {
-                m_currentPanelIndex = panelIndex;
-            }
+            SelectGlobalPanel(primaryPanel, true);
         }
         m_isOpen = true;
-        m_tab = TabBoard;
+        SelectMainTab(TabBoard);
         OpenRuleEditorWindow();
 
         var firstCondition = rule.Conditions.FirstOrDefault();
@@ -6240,7 +8887,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawAlarmTile(
         Rect rect,
         AlarmView alarm,
-        PanelDefinition displayPanel)
+        PanelDefinition displayPanel,
+        bool isAudioSnoozed)
     {
         var background = CoiUiPalette.Text;
         if (alarm.IsActive || alarm.IsGoneUnacknowledged)
@@ -6280,12 +8928,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             badge += UnmaText.Get("auto.70ab47b6f195");
         }
+        if (isAudioSnoozed)
+        {
+            badge = UnmaText.Get(
+                "alarm_tile.audio_snoozed_badge",
+                "Z · 1M") + " · " + badge;
+        }
+        var acknowledgementInset = alarm.RequiresAcknowledgement ? 32f : 0f;
         NativeGUI.Label(
-            new Rect(inner.x + 7f, inner.y + 5f, inner.width - 14f, 18f),
+            new Rect(
+                inner.x + 7f,
+                inner.y + 5f,
+                inner.width - 14f - acknowledgementInset,
+                18f),
             badge + " · " + SeverityLabel(alarm.Severity),
             m_tileDetailStyle);
         NativeGUI.Label(
-            new Rect(inner.x + 7f, inner.y + 24f, inner.width - 14f, 48f),
+            new Rect(
+                inner.x + 7f,
+                inner.y + 24f,
+                inner.width - 14f - acknowledgementInset,
+                48f),
             (alarm.Name ?? UnmaText.Get(
                 "ui.common.alarm",
                 "ALARM")).ToUpperInvariant(),
@@ -6408,9 +9071,265 @@ public sealed class UnmaOverlayController : MonoBehaviour
         };
     }
 
-    private void DrawAlarmNavigationButton(Rect tileRect, AlarmView alarm)
+    private void AcknowledgeAllAlarms()
     {
-        if (!TryGetNavigationEntityId(alarm, out var entityId))
+        var count = m_runtime.UnacknowledgedCount;
+        m_runtime.AcknowledgeAll();
+        m_audio.StopAlarm();
+        SetStatus(count > 0
+            ? UnmaText.Format(
+                "board.acknowledged_count",
+                "Acknowledged {0} alarm(s).",
+                count)
+            : UnmaText.Get(
+                "board.no_unacknowledged",
+                "No unacknowledged alarms."));
+    }
+
+    private void AcknowledgePanelAlarms(PanelDefinition panel)
+    {
+        if (panel == null)
+        {
+            return;
+        }
+
+        var isAreaScope = IsAreaScopedDashboard(panel);
+        int count;
+        if (isAreaScope)
+        {
+            var visibleSlotIds = GetBoardViews(panel)
+                .Select(PanelSlotProjection.StableAlarmId)
+                .Where(slotId => !string.IsNullOrWhiteSpace(slotId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (!m_runtime.TryAcknowledgeDashboard(
+                    NormalizeAlarmAreaFilter(),
+                    visibleSlotIds,
+                    out count))
+            {
+                SetStatus(UnmaText.Get(
+                    "board.area_unavailable",
+                    "The selected area is unavailable."));
+                return;
+            }
+        }
+        else
+        {
+            count = m_runtime.AcknowledgePanel(panel.Id);
+        }
+        if (count > 0)
+        {
+            m_audio.StopAlarm();
+        }
+        SetStatus(count > 0
+            ? UnmaText.Format(
+                isAreaScope
+                    ? "board.area_acknowledged_count"
+                    : "board.acknowledged_count",
+                isAreaScope
+                    ? "Acknowledged {0} alarm(s) in this area."
+                    : "Acknowledged {0} alarm(s).",
+                count)
+            : UnmaText.Get(
+                isAreaScope
+                    ? "board.area_no_unacknowledged"
+                    : "board.no_unacknowledged",
+                isAreaScope
+                    ? "No unacknowledged alarms in this area."
+                    : "No unacknowledged alarms."));
+    }
+
+    private void NavigateToNextUnacknowledgedAlarm(PanelDefinition panel)
+    {
+        if (panel == null)
+        {
+            SetStatus(UnmaText.Get(
+                "board.no_unacknowledged",
+                "No unacknowledged alarms."));
+            return;
+        }
+
+        AlarmView alarm;
+        var isAreaScope = IsAreaScopedDashboard(panel);
+        if (isAreaScope)
+        {
+            if (!m_runtime.TryGetNextDashboardUnacknowledged(
+                    NormalizeAlarmAreaFilter(),
+                    m_lastNavigatedAlarmSlotId,
+                    out alarm))
+            {
+                SetStatus(UnmaText.Get(
+                    "board.area_unavailable",
+                    "The selected area is unavailable."));
+                return;
+            }
+        }
+        else
+        {
+            alarm = m_runtime.GetNextUnacknowledged(
+                panel.Id,
+                m_lastNavigatedAlarmSlotId);
+        }
+        if (alarm == null)
+        {
+            m_lastNavigatedAlarmSlotId = "";
+            SetStatus(UnmaText.Get(
+                isAreaScope
+                    ? "board.area_no_unacknowledged"
+                    : "board.no_unacknowledged",
+                isAreaScope
+                    ? "No unacknowledged alarms in this area."
+                    : "No unacknowledged alarms."));
+            return;
+        }
+
+        m_lastNavigatedAlarmSlotId =
+            PanelSlotProjection.StableAlarmId(alarm);
+        SelectMainTab(TabBoard);
+        m_isOpen = true;
+        if (PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            m_activeEntityPanelId = panel.Id;
+        }
+        else
+        {
+            SelectGlobalPanel(panel, true);
+        }
+
+        var visible = GetBoardViews(panel);
+        var alarmIndex = visible.ToList().FindIndex(candidate =>
+            string.Equals(
+                PanelSlotProjection.StableAlarmId(candidate),
+                m_lastNavigatedAlarmSlotId,
+                StringComparison.Ordinal));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, panel.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (TileHeight + 6f) - 12f);
+        }
+
+        if (m_runtime.TryResolveNavigationEntity(
+                panel,
+                alarm,
+                out var entity))
+        {
+            NavigateToEntity(entity);
+        }
+        SetStatus(UnmaText.Format(
+            "board.next_alarm_selected",
+            "Selected: {0}",
+            alarm.Name ?? UnmaText.Get("ui.common.alarm", "ALARM")));
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeLauncher();
+    }
+
+    private void HandleAttentionRequest(AlarmAttentionRequest request)
+    {
+        if (!request.IsValid || m_isUiSuppressedByMenu)
+        {
+            return;
+        }
+
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            candidate != null && string.Equals(
+                candidate.Id,
+                request.PanelId,
+                StringComparison.Ordinal));
+        if (panel != null && !GetPanelViews(panel).Any(alarm => string.Equals(
+                PanelSlotProjection.StableAlarmId(alarm),
+                request.SlotId,
+                StringComparison.Ordinal)))
+        {
+            panel = null;
+        }
+        if (panel == null)
+        {
+            panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+                candidate != null && GetPanelViews(candidate).Any(alarm =>
+                    string.Equals(
+                        PanelSlotProjection.StableAlarmId(alarm),
+                        request.SlotId,
+                        StringComparison.Ordinal)));
+        }
+        if (panel == null)
+        {
+            SetStatus(UnmaText.Get(
+                "board.operator_attention_panel_missing",
+                "Escalation requested an unavailable panel."));
+            return;
+        }
+
+        var cancelTemporaryMute =
+            request.OperatorAction ==
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute;
+        var temporaryMuteEnded = cancelTemporaryMute &&
+                                 Time.realtimeSinceStartup <
+                                 m_audioMutedUntil;
+        if (cancelTemporaryMute)
+        {
+            m_audioMutedUntil = 0f;
+        }
+
+        m_isOpen = true;
+        SelectMainTab(TabBoard);
+        if (PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            m_activeEntityPanelId = panel.Id;
+        }
+        else
+        {
+            if (panel.IsDashboard &&
+                IsAreaScopedDashboard(panel) &&
+                !GetBoardViews(panel).Any(alarm => string.Equals(
+                    PanelSlotProjection.StableAlarmId(alarm),
+                    request.SlotId,
+                    StringComparison.Ordinal)))
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.All;
+            }
+            SelectGlobalPanel(panel, true);
+        }
+
+        var visible = GetBoardViews(panel);
+        var alarmIndex = visible.ToList().FindIndex(candidate => string.Equals(
+            PanelSlotProjection.StableAlarmId(candidate),
+            request.SlotId,
+            StringComparison.Ordinal));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, panel.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (TileHeight + 6f) - 12f);
+        }
+        else
+        {
+            m_boardScroll = Vector2.zero;
+        }
+
+        SetStatus(UnmaText.Format(
+            temporaryMuteEnded
+                ? "board.operator_attention_mute_cancelled"
+                : "board.operator_attention",
+            temporaryMuteEnded
+                ? "Escalation opened panel and ended the temporary five-minute mute: {0}"
+                : "Escalation opened panel: {0}",
+            panel.Name));
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeLauncher();
+    }
+
+    private void DrawAlarmNavigationButton(
+        Rect tileRect,
+        AlarmView alarm,
+        PanelDefinition panel)
+    {
+        if (!m_runtime.TryResolveNavigationEntity(
+                panel,
+                alarm,
+                out var entity))
         {
             return;
         }
@@ -6425,58 +9344,120 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "↗",
                 m_primaryButtonStyle))
         {
-            NavigateToEntity(entityId);
+            NavigateToEntity(entity);
         }
     }
 
-    private bool TryGetNavigationEntityId(
+    private void DrawAlarmAcknowledgeButton(
+        Rect tileRect,
         AlarmView alarm,
-        out int entityId)
+        PanelDefinition panel)
     {
-        entityId = -1;
-        if (alarm == null)
+        if (alarm?.RequiresAcknowledgement != true || panel == null)
         {
-            return false;
+            return;
         }
 
-        if (PanelSlotProjection.TryGetCustomRuleId(alarm, out var ruleId))
+        var buttonRect = new Rect(
+            tileRect.xMax - 31f,
+            tileRect.y + 4f,
+            27f,
+            27f);
+        if (!NativeGUI.Button(
+                buttonRect,
+                UnmaText.Get("alarm_tile.acknowledge", "Q"),
+                m_dangerButtonStyle))
         {
-            var rule = m_runtime.Configuration.Rules.FirstOrDefault(candidate =>
-                string.Equals(candidate.Id, ruleId, StringComparison.Ordinal));
-            if (rule != null)
-            {
-                var ownerPanel = m_runtime.Configuration.Panels
-                    .FirstOrDefault(panel => string.Equals(
-                        panel.Id,
-                        rule.PanelId,
-                        StringComparison.Ordinal));
-                if (PanelTopologyPolicy.IsEntityPanel(ownerPanel))
-                {
-                    entityId = ownerPanel.OwnerEntityId;
-                    return entityId > 0;
-                }
-
-                entityId = rule.Conditions.FirstOrDefault()?.EntityId ?? -1;
-                return entityId > 0;
-            }
+            return;
         }
 
-        var slotId = alarm.SlotId ?? "";
-        var marker = slotId.LastIndexOf(
-            ":entity:",
-            StringComparison.Ordinal);
-        return marker >= 0 &&
-               int.TryParse(
-                   slotId.Substring(marker + 8),
-                   NumberStyles.Integer,
-                   CultureInfo.InvariantCulture,
-                   out entityId) &&
-               entityId > 0;
+        var slotId = PanelSlotProjection.StableAlarmId(alarm);
+        var acknowledged = IsAreaScopedDashboard(panel)
+            ? m_runtime.TryAcknowledgeDashboard(
+                  NormalizeAlarmAreaFilter(),
+                  new[] { slotId },
+                  out var count) && count > 0
+            : m_runtime.AcknowledgeAlarm(panel.Id, slotId);
+        if (acknowledged)
+        {
+            m_audio.StopAlarm();
+            SetStatus(UnmaText.Get(
+                "board.acknowledged_one",
+                "Alarm acknowledged."));
+        }
+    }
+
+    private void DrawAlarmAudioSnoozeButton(
+        Rect tileRect,
+        AlarmView alarm,
+        PanelDefinition panel,
+        bool isAudioSnoozed)
+    {
+        if (alarm?.RequiresAcknowledgement != true || panel == null)
+        {
+            return;
+        }
+
+        var buttonRect = new Rect(
+            tileRect.xMax - 31f,
+            tileRect.y + (tileRect.height - 27f) * 0.5f,
+            27f,
+            27f);
+        if (!NativeGUI.Button(
+                buttonRect,
+                isAudioSnoozed
+                    ? UnmaText.Get("alarm_tile.audio_resume", "R")
+                    : UnmaText.Get("alarm_tile.audio_snooze", "Z"),
+                isAudioSnoozed ? m_primaryButtonStyle : m_buttonStyle))
+        {
+            return;
+        }
+
+        m_lastAlarmTileClickId = "";
+        m_lastAlarmTileClickAt = 0f;
+        var slotId = PanelSlotProjection.StableAlarmId(alarm);
+        var changed = isAudioSnoozed
+            ? m_runtime.UnsnoozeAlarmAudio(panel.Id, slotId)
+            : m_runtime.SnoozeAlarmAudio(
+                panel.Id,
+                slotId,
+                GameTimeWindowPolicy.SimTicksPerMonth);
+        if (changed <= 0)
+        {
+            SetStatus(UnmaText.Get(
+                "board.audio_snooze_no_change",
+                "Alarm audio state did not change."));
+            return;
+        }
+        if (!isAudioSnoozed)
+        {
+            m_audio.StopAlarm();
+        }
+        SetStatus(isAudioSnoozed
+            ? UnmaText.Format(
+                "board.audio_resumed",
+                "Alarm audio resumed ({0} occurrence(s)).",
+                changed)
+            : UnmaText.Format(
+                "board.audio_snoozed",
+                "Alarm audio snoozed for 1 game month ({0} occurrence(s)).",
+                changed));
     }
 
     private void NavigateToEntity(int entityId)
     {
         if (!m_runtime.TryGetLiveEntity(entityId, out var entity))
+        {
+            SetStatus(UnmaText.Get("auto.28a2ba9ec3eb"));
+            return;
+        }
+
+        NavigateToEntity(entity);
+    }
+
+    private void NavigateToEntity(IEntity entity)
+    {
+        if (entity == null || entity.IsDestroyed)
         {
             SetStatus(UnmaText.Get("auto.28a2ba9ec3eb"));
             return;
@@ -6712,6 +9693,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
                m_draftSoundIndex != 0 ||
                m_draftSoundChanged ||
                m_draftAutoAcknowledgeOnClear ||
+               TimingDraftHasInput(m_draftActivationDelay) ||
+               TimingDraftHasInput(m_draftResetDelay) ||
+               TimingDraftHasInput(m_draftMinimumActive) ||
+               m_draftEscalationEnabled ||
+               TimingDraftHasInput(m_draftEscalationAfter) ||
+               m_draftEscalationSeverity != AlarmSeverity.Critical ||
+               !string.IsNullOrEmpty(m_draftEscalationSoundId) ||
+               m_draftEscalationOperatorAction != AlarmOperatorAction.None ||
                m_draftValueMode != ConditionValueMode.Absolute ||
                m_draftComparison != ComparisonOperator.Less ||
                !string.Equals(
@@ -6741,7 +9730,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         CancelEntityAssignment();
         m_openEntityPanelAfterInspectionId = entity.Id.Value;
         m_isOpen = true;
-        m_tab = TabBoard;
+        SelectMainTab(TabBoard);
         RequestEntityInspection(
             entity.Id.Value,
             false,
@@ -6968,7 +9957,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             m_activeEntityPanelId = entityPanel.Id;
             m_isOpen = true;
-            m_tab = TabBoard;
+            SelectMainTab(TabBoard);
             m_boardScroll = Vector2.zero;
             SetStatus(
                 UnmaText.Get("auto.8a42487f2b31") + inspection.Title + UnmaText.Get("auto.70834308d14f"));
@@ -7050,8 +10039,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 ? m_selectedEntity.StoredProductId
                 : "",
         });
+        EnsureDraftHysteresisText(
+            m_draftConditions[m_draftConditions.Count - 1]);
         m_draftConditionThresholdTexts.Add(
-            threshold.ToString("0.###", CultureInfo.CurrentCulture));
+            threshold.ToString("R", CultureInfo.CurrentCulture));
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
         SetStatus(UnmaText.Get("auto.af3edd1b9f09"));
@@ -7085,8 +10076,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 (instrument.Maximum - instrument.Minimum) * 0.05d),
         };
         m_draftConditions.Add(condition);
+        EnsureDraftHysteresisText(condition);
         m_draftConditionThresholdTexts.Add(
-            threshold.ToString("0.###", CultureInfo.CurrentCulture));
+            threshold.ToString("R", CultureInfo.CurrentCulture));
         m_draftTrendWindowTexts[condition] = "1";
         SetStatus(UnmaText.Format(
             "ui.editor.status.linked_value_added",
@@ -7189,6 +10181,53 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return false;
         }
 
+        if (!TryGetTimingTicks(
+                m_draftActivationDelay,
+                out var activationDelayTicks) ||
+            !TryGetTimingTicks(m_draftResetDelay, out var resetDelayTicks) ||
+            !TryGetTimingTicks(
+                m_draftMinimumActive,
+                out var minimumActiveTicks))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.timing.invalid_duration",
+                "Enter non-negative whole timing values within 100 game years."));
+            return false;
+        }
+        if (!TryGetTimingTicks(
+                m_draftEscalationAfter,
+                out var escalationAfterTicks) &&
+            m_draftEscalationEnabled)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.escalation.invalid_after",
+                "Enter a non-negative whole escalation time within 100 game years."));
+            return false;
+        }
+        if (!m_draftEscalationEnabled &&
+            !TryGetTimingTicks(
+                m_draftEscalationAfter,
+                out escalationAfterTicks))
+        {
+            escalationAfterTicks = 0;
+        }
+        if (m_draftEscalationEnabled && escalationAfterTicks <= 0)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.escalation.after_required",
+                "Escalation requires a game-time delay greater than zero."));
+            return false;
+        }
+        if (m_draftEscalationEnabled &&
+            (m_draftSeverity >= AlarmSeverity.Emergency ||
+             m_draftEscalationSeverity <= m_draftSeverity))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.escalation.invalid_severity",
+                "Escalation severity must be strictly higher than the base severity."));
+            return false;
+        }
+
         for (var index = 0; index < m_draftConditions.Count; index++)
         {
             var condition = m_draftConditions[index];
@@ -7202,6 +10241,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     UnmaText.Get("auto.ddb8c3cdbc29"));
                 return false;
             }
+            EnsureDraftHysteresisText(condition);
+            if (!TryParseDouble(
+                    m_draftHysteresisTexts[condition],
+                    out var hysteresis) ||
+                hysteresis < 0d)
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.timing.invalid_hysteresis",
+                    "Condition {0}: Enter a non-negative hysteresis value.",
+                    index + 1));
+                return false;
+            }
+            condition.Hysteresis = hysteresis;
             if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
             {
                 if (!m_runtime.Configuration.Instruments.Any(instrument =>
@@ -7312,6 +10364,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SoundId = soundId,
             Enabled = existingRule?.Enabled ?? true,
             AutoAcknowledgeOnClear = m_draftAutoAcknowledgeOnClear,
+            ActivationDelayTicks = activationDelayTicks,
+            ResetDelayTicks = resetDelayTicks,
+            MinimumActiveTicks = minimumActiveTicks,
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = m_draftEscalationEnabled,
+                AfterTicks = escalationAfterTicks,
+                Severity = m_draftEscalationSeverity,
+                SoundId = m_draftEscalationSoundId ?? "",
+                OperatorAction = m_draftEscalationOperatorAction,
+            },
             Conditions = m_draftConditions.Select(CloneCondition).ToList(),
             LinkedPanelIds = m_draftLinkedPanelIds.ToList(),
         };
@@ -7351,6 +10414,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = rule.SoundId;
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = rule.AutoAcknowledgeOnClear;
+        LoadTimingDraft(m_draftActivationDelay, rule.ActivationDelayTicks);
+        LoadTimingDraft(m_draftResetDelay, rule.ResetDelayTicks);
+        LoadTimingDraft(m_draftMinimumActive, rule.MinimumActiveTicks);
+        var escalation = rule.Escalation ?? new AlarmEscalationDefinition();
+        m_draftEscalationEnabled = escalation.Enabled;
+        LoadTimingDraft(m_draftEscalationAfter, escalation.AfterTicks);
+        m_draftEscalationSeverity = escalation.Severity;
+        m_draftEscalationSoundId = escalation.SoundId ?? "";
+        m_draftEscalationOperatorAction = escalation.OperatorAction;
+        EnsureDraftEscalationTarget();
         m_draftLinkedPanelIds.Clear();
         foreach (var panelId in rule.LinkedPanelIds ?? new List<string>())
         {
@@ -7359,6 +10432,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
         m_draftTrendWindowTexts.Clear();
+        m_draftHysteresisTexts.Clear();
         foreach (var sourceCondition in rule.Conditions)
         {
             var condition = CloneCondition(sourceCondition);
@@ -7367,11 +10441,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 (UsesComparisonThreshold(condition.TrendMode)
                     ? condition.Threshold
                     : condition.DeltaThreshold).ToString(
-                    "0.###",
+                    "R",
                     CultureInfo.CurrentCulture));
             m_draftTrendWindowTexts[condition] =
                 condition.WindowAmount.ToString(
                     CultureInfo.CurrentCulture);
+            EnsureDraftHysteresisText(condition);
         }
         var linkedCondition = m_draftConditions.FirstOrDefault(condition =>
             !string.IsNullOrWhiteSpace(condition.InstrumentId));
@@ -7397,6 +10472,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
         m_draftTrendWindowTexts.Clear();
+        m_draftHysteresisTexts.Clear();
         m_draftRuleName = UnmaText.Get("auto.fe04a9d0e58c");
         m_draftSeverity = AlarmSeverity.Warning;
         m_draftLogic = AlarmLogic.All;
@@ -7405,6 +10481,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_originalDraftSoundId = "auto";
         m_draftSoundChanged = false;
         m_draftAutoAcknowledgeOnClear = false;
+        LoadTimingDraft(m_draftActivationDelay, 0);
+        LoadTimingDraft(m_draftResetDelay, 0);
+        LoadTimingDraft(m_draftMinimumActive, 0);
+        m_draftEscalationEnabled = false;
+        LoadTimingDraft(m_draftEscalationAfter, 0);
+        m_draftEscalationSeverity = AlarmSeverity.Critical;
+        m_draftEscalationSoundId = "";
+        m_draftEscalationOperatorAction = AlarmOperatorAction.None;
         m_draftLinkedPanelIds.Clear();
         m_draftValueMode = ConditionValueMode.Absolute;
         m_draftComparison = ComparisonOperator.Less;
@@ -7423,6 +10507,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void OpenPanelCreationEditor()
     {
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
+            return;
+        }
         if (HasDraftRuleWork())
         {
             OpenRuleEditorWindow();
@@ -7436,9 +10524,52 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     }
 
+    private void OpenAlarmAreasEditor()
+    {
+        if (m_entityAlarmWindowOpen &&
+            m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            m_clearGuiFocusPending = true;
+            return;
+        }
+        if (m_entityAlarmWindowOpen &&
+            m_editorWindowMode != EditorWindowMode.AlarmAreas)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.area.editor_conflict",
+                "Close the current editor before managing areas."));
+            return;
+        }
+        if (HasDraftRuleWork())
+        {
+            OpenRuleEditorWindow();
+            SetDraftConflictStatus(UnmaText.Get("auto.48d5f7bcd7c1"));
+            return;
+        }
+        ReloadAlarmAreaDraft();
+        m_editorWindowMode = EditorWindowMode.AlarmAreas;
+        m_editorClosePromptOpen = false;
+        m_entityAlarmWindowOpen = true;
+        m_entityAlarmScroll = Vector2.zero;
+    }
+
     private void OpenPanelSettingsEditor(PanelDefinition panel)
     {
         if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return;
+        }
+        if (m_entityAlarmWindowOpen &&
+            m_editorWindowMode == EditorWindowMode.PanelSettings &&
+            string.Equals(
+                m_panelSettingsPanelId,
+                panel.Id,
+                StringComparison.Ordinal))
+        {
+            m_clearGuiFocusPending = true;
+            return;
+        }
+        if (BlockEditorSwitchFromConfigurationDraft())
         {
             return;
         }
@@ -7455,6 +10586,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
         m_panelSettingsIncludeSystem = panel.IncludeSystem;
         m_panelSettingsFilter = panel.NotificationFilter ?? "";
+        m_panelSettingsAreaId = panel.AreaId ?? "";
+        m_panelSettingsAreaScroll = Vector2.zero;
         m_editorWindowMode = EditorWindowMode.PanelSettings;
         m_entityAlarmWindowOpen = true;
         m_entityAlarmScroll = Vector2.zero;
@@ -7465,6 +10598,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (panel == null || panel.IsDashboard)
         {
             SetStatus(UnmaText.Get("auto.da029f65d8db"));
+            return;
+        }
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
             return;
         }
         if (HasDraftRuleWork())
@@ -7491,11 +10628,52 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void OpenRuleEditorWindow()
     {
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
+            return;
+        }
         m_editorWindowMode = EditorWindowMode.Rule;
         m_editorClosePromptOpen = false;
         m_entityAlarmWindowOpen = true;
         m_openEntityAlarmAfterInspection = false;
         m_entityAlarmScroll = Vector2.zero;
+    }
+
+    private bool BlockEditorSwitchFromConfigurationDraft()
+    {
+        if (!m_entityAlarmWindowOpen)
+        {
+            return false;
+        }
+        if (m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            var dirty = HasUnsavedAlarmAreas();
+            SetStatus(UnmaText.Get(
+                dirty
+                    ? "ui.area.unsaved_editor_conflict"
+                    : "ui.area.close_editor_first",
+                dirty
+                    ? "Save or discard the area draft before opening another editor."
+                    : "Close the area editor before opening another editor."));
+            return true;
+        }
+        if (m_editorWindowMode != EditorWindowMode.PanelSettings)
+        {
+            return false;
+        }
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            candidate != null && string.Equals(
+                candidate.Id,
+                m_panelSettingsPanelId,
+                StringComparison.Ordinal));
+        if (!HasUnsavedPanelSettings(panel))
+        {
+            return false;
+        }
+        SetStatus(UnmaText.Get(
+            "ui.area.unsaved_editor_conflict",
+            "Save or discard the panel settings before opening another editor."));
+        return true;
     }
 
     private bool AddPanel()
@@ -7510,6 +10688,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             IncludeVanilla = false,
             IncludeSystem = false,
             IsDashboard = false,
+            AreaId = GetCurrentConcreteAlarmAreaId(),
         };
         if (!m_runtime.AddPanel(panel))
         {
@@ -8391,6 +11570,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             MetricLabel = source.MetricLabel,
             Comparison = source.Comparison,
             Threshold = source.Threshold,
+            Hysteresis = source.Hysteresis,
             ExpectedProductId = source.ExpectedProductId,
             EntityPrototypeId = source.EntityPrototypeId,
             ValueMode = source.ValueMode,

@@ -191,13 +191,20 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         }
     }
 
-    private const float MinimumWindowWidth = 360f;
+    // The detached action row needs a wider logical body than the tile grid.
+    // Keeping this minimum honest avoids hiding ACK/NEXT/NEW ALARM when the
+    // user raises UNMA's content scale.
+    private const float MinimumWindowWidth = 560f;
     private const float MinimumWindowHeight = 300f;
     private const float MaximumViewportShare = 0.70f;
     private const float HorizontalBodyInset = 44f;
     private const float VerticalBodyInset = 82f;
     private const float HorizontalRootInset = 28f;
     private const float VerticalRootInset = 82f;
+    private const float MinimumBodyWidth =
+        MinimumWindowWidth - HorizontalBodyInset;
+    private const float MinimumBodyHeight =
+        MinimumWindowHeight - VerticalBodyInset;
     private const float ViewportHorizontalMargin = 32f;
     private const float ViewportVerticalMargin = 48f;
     private static string DefaultTitle => UnmaText.Get(
@@ -215,6 +222,7 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
     private bool m_suppressed;
     private float m_windowWidth;
     private float m_windowHeight;
+    private float m_contentScale = 1f;
     private float m_resizeStartWidth;
     private float m_resizeStartHeight;
     private string m_currentTitle;
@@ -241,11 +249,11 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         var viewportSize = GetMaximumViewportSize();
         m_windowWidth = ClampRequestedDimension(
             requestedWidth,
-            Mathf.Min(MinimumWindowWidth, viewportSize.x),
+            Mathf.Min(GetMinimumWindowWidth(), viewportSize.x),
             viewportSize.x);
         m_windowHeight = ClampRequestedDimension(
             requestedHeight,
-            Mathf.Min(MinimumWindowHeight, viewportSize.y),
+            Mathf.Min(GetMinimumWindowHeight(), viewportSize.y),
             viewportSize.y);
 
         var bodyWidth = GetBodyWidth(m_windowWidth);
@@ -264,10 +272,10 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
             .Width(new Px(bodyWidth))
             .Height(new Px(bodyHeight))
             .MinWidth(new Px(Mathf.Min(
-                MinimumWindowWidth - HorizontalBodyInset,
+                MinimumBodyWidth * m_contentScale,
                 bodyWidth)))
             .MinHeight(new Px(Mathf.Min(
-                MinimumWindowHeight - VerticalBodyInset,
+                MinimumBodyHeight * m_contentScale,
                 bodyHeight)))
             .FlexGrow(1f)
             .OverflowHidden();
@@ -305,6 +313,29 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         !m_suppressed &&
         m_window.IsOpen &&
         m_bodySurface.HasTextInputFocus;
+
+    public Vector2 CurrentSize => new(m_windowWidth, m_windowHeight);
+
+    /// <summary>
+    /// Preserves the detached panel's usable logical body across UNMA UI
+    /// scales, capped by its normal viewport share.
+    /// </summary>
+    public void SetContentScale(float scale)
+    {
+        if (m_disposed)
+        {
+            return;
+        }
+
+        var normalized = NormalizeContentScale(scale);
+        if (Mathf.Approximately(m_contentScale, normalized))
+        {
+            return;
+        }
+
+        m_contentScale = normalized;
+        ApplyWindowSize(m_windowWidth, m_windowHeight);
+    }
 
     public void ClearBodyFocus()
     {
@@ -355,6 +386,7 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
     {
         if (!m_disposed && !m_suppressed && m_window.IsOpen)
         {
+            SetContentScale(scale);
             m_bodySurface.Render(drawBody, scale);
         }
     }
@@ -456,11 +488,11 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         var viewportSize = GetMaximumViewportSize();
         var nextWidth = ClampRequestedDimension(
             requestedWidth,
-            Mathf.Min(MinimumWindowWidth, viewportSize.x),
+            Mathf.Min(GetMinimumWindowWidth(), viewportSize.x),
             viewportSize.x);
         var nextHeight = ClampRequestedDimension(
             requestedHeight,
-            Mathf.Min(MinimumWindowHeight, viewportSize.y),
+            Mathf.Min(GetMinimumWindowHeight(), viewportSize.y),
             viewportSize.y);
         if (Mathf.Approximately(m_windowWidth, nextWidth) &&
             Mathf.Approximately(m_windowHeight, nextHeight))
@@ -482,11 +514,26 @@ internal sealed class UnmaNativeDetachedPanelShell : IDisposable
         m_bodyElement.style.width = bodyWidth;
         m_bodyElement.style.height = bodyHeight;
         m_bodyElement.style.minWidth = Mathf.Min(
-            MinimumWindowWidth - HorizontalBodyInset,
+            MinimumBodyWidth * m_contentScale,
             bodyWidth);
         m_bodyElement.style.minHeight = Mathf.Min(
-            MinimumWindowHeight - VerticalBodyInset,
+            MinimumBodyHeight * m_contentScale,
             bodyHeight);
+    }
+
+    private float GetMinimumWindowWidth()
+    {
+        return HorizontalBodyInset + MinimumBodyWidth * m_contentScale;
+    }
+
+    private float GetMinimumWindowHeight()
+    {
+        return VerticalBodyInset + MinimumBodyHeight * m_contentScale;
+    }
+
+    private static float NormalizeContentScale(float scale)
+    {
+        return Mathf.Clamp(IsFinitePositive(scale) ? scale : 1f, 0.75f, 2f);
     }
 
     private Vector2 GetMaximumViewportSize()

@@ -15,6 +15,13 @@ public enum AlarmSeverity
     Emergency = 3,
 }
 
+public enum AlarmOperatorAction
+{
+    None = 0,
+    OpenPanel = 1,
+    OpenPanelAndCancelTemporaryMute = 2,
+}
+
 public enum AlarmLogic
 {
     All = 0,
@@ -150,6 +157,7 @@ public sealed class ConditionDefinition
     [DataMember(Order = 17)] public int WindowAmount = 1;
     [DataMember(Order = 18)] public GameTimeUnit WindowUnit =
         GameTimeUnit.Month;
+    [DataMember(Order = 19)] public double Hysteresis;
 }
 
 [DataContract]
@@ -158,6 +166,18 @@ public sealed class SystemConditionDefinition
     [DataMember(Order = 1)] public string MetricId = "";
     [DataMember(Order = 2)] public ComparisonOperator Comparison;
     [DataMember(Order = 3)] public double Threshold;
+    [DataMember(Order = 4)] public double Hysteresis;
+}
+
+[DataContract]
+public sealed class AlarmEscalationDefinition
+{
+    [DataMember(Order = 1)] public bool Enabled;
+    [DataMember(Order = 2)] public int AfterTicks;
+    [DataMember(Order = 3)] public AlarmSeverity Severity =
+        AlarmSeverity.Critical;
+    [DataMember(Order = 4)] public string SoundId = "";
+    [DataMember(Order = 5)] public AlarmOperatorAction OperatorAction;
 }
 
 [DataContract]
@@ -175,6 +195,10 @@ public sealed class SystemAlarmStageDefinition
         new();
     [DataMember(Order = 8)] public string ActiveColor = "auto";
     [DataMember(Order = 9)] public string SoundId = "auto";
+    [DataMember(Order = 10)] public int ActivationDelayTicks;
+    [DataMember(Order = 11)] public int ResetDelayTicks;
+    [DataMember(Order = 12)] public int MinimumActiveTicks;
+    [DataMember(Order = 13)] public AlarmOperatorAction OperatorAction;
 }
 
 [DataContract]
@@ -204,6 +228,11 @@ public sealed class AlarmRuleDefinition
     [DataMember(Order = 9)] public bool Enabled = true;
     [DataMember(Order = 10)] public bool AutoAcknowledgeOnClear;
     [DataMember(Order = 11)] public List<string> LinkedPanelIds = new();
+    [DataMember(Order = 12)] public int ActivationDelayTicks;
+    [DataMember(Order = 13)] public int ResetDelayTicks;
+    [DataMember(Order = 14)] public int MinimumActiveTicks;
+    [DataMember(Order = 15)] public AlarmEscalationDefinition Escalation =
+        new();
 }
 
 [DataContract]
@@ -218,6 +247,14 @@ public sealed class PanelSlotDefinition
     [DataMember(Order = 5)] public AlarmSeverity Severity =
         AlarmSeverity.Warning;
     [DataMember(Order = 6)] public string ActiveColor = "#F0C541";
+}
+
+[DataContract]
+public sealed class AlarmAreaDefinition
+{
+    [DataMember(Order = 1)] public string Id =
+        Guid.NewGuid().ToString("N");
+    [DataMember(Order = 2)] public string Name = "AREA";
 }
 
 [DataContract]
@@ -238,6 +275,7 @@ public sealed class PanelDefinition
     [DataMember(Order = 11)] public string OwnerEntityTitle = "";
     [DataMember(Order = 12)] public string OwnerEntityPrototypeId = "";
     [DataMember(Order = 13)] public string OwnerEntityType = "";
+    [DataMember(Order = 14)] public string AreaId = "";
 }
 
 [DataContract]
@@ -287,6 +325,31 @@ public sealed class AlarmMemoryDefinition
 }
 
 [DataContract]
+public sealed class AlarmConditionLatchMemoryDefinition
+{
+    [DataMember(Order = 1)] public int ConditionIndex;
+    [DataMember(Order = 2)] public bool IsLatched;
+}
+
+[DataContract]
+public sealed class AlarmTimingMemoryDefinition
+{
+    [DataMember(Order = 1)] public string OwnerKey = "";
+    [DataMember(Order = 2)] public string DefinitionSignature = "";
+    [DataMember(Order = 3)] public bool IsActive;
+    [DataMember(Order = 4)] public long ActivationPendingSinceTick =
+        AlarmTimingState.NoTick;
+    [DataMember(Order = 5)] public long ActiveSinceTick =
+        AlarmTimingState.NoTick;
+    [DataMember(Order = 6)] public long ResetPendingSinceTick =
+        AlarmTimingState.NoTick;
+    [DataMember(Order = 7)] public long LastObservedTick =
+        AlarmTimingState.NoTick;
+    [DataMember(Order = 8)]
+    public List<AlarmConditionLatchMemoryDefinition> ConditionLatches = new();
+}
+
+[DataContract]
 public sealed class AlarmHistoryDefinition
 {
     [DataMember(Order = 1)] public long Sequence;
@@ -298,6 +361,9 @@ public sealed class AlarmHistoryDefinition
     [DataMember(Order = 7)] public AlarmSeverity Severity;
     [DataMember(Order = 8)] public bool IsGone;
     [DataMember(Order = 9)] public bool IsAcknowledged;
+    [DataMember(Order = 10)] public double RaisedAtTicks;
+    [DataMember(Order = 11)] public double ClearedAtTicks;
+    [DataMember(Order = 12)] public double AcknowledgedAtTicks;
 
     public string StateCode => IsGone
         ? IsAcknowledged ? "KGQ" : "KG"
@@ -314,12 +380,44 @@ public sealed class AlarmHistoryDefinition
         IsAcknowledged = nextAcknowledged;
         return changed;
     }
+
+    public bool SetState(
+        bool isGone,
+        bool isAcknowledged,
+        double currentGameTicks)
+    {
+        var changed = SetState(isGone, isAcknowledged);
+        if (isGone)
+        {
+            if (ClearedAtTicks <= 0d && currentGameTicks > 0d)
+            {
+                ClearedAtTicks = currentGameTicks;
+                changed = true;
+            }
+        }
+        else if (ClearedAtTicks > 0d)
+        {
+            ClearedAtTicks = 0d;
+            changed = true;
+        }
+        if (isAcknowledged &&
+            AcknowledgedAtTicks <= 0d &&
+            currentGameTicks > 0d)
+        {
+            AcknowledgedAtTicks = currentGameTicks;
+            changed = true;
+        }
+        return changed;
+    }
 }
 
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 17;
+    public const int CurrentSchemaVersion = 20;
+
+    [DataMember(Order = 1)]
+    public int SchemaVersion = CurrentSchemaVersion;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -352,6 +450,10 @@ public sealed class UnmaConfiguration
     public List<InstrumentDefinition> Instruments = new();
     [DataMember(Order = 25)]
     public List<InstrumentPanelDefinition> InstrumentPanels = new();
+    [DataMember(Order = 26)]
+    public List<AlarmTimingMemoryDefinition> AlarmTimingMemories = new();
+    [DataMember(Order = 27)]
+    public List<AlarmAreaDefinition> AlarmAreas = new();
 
     public static UnmaConfiguration CreateDefault()
     {
@@ -527,6 +629,13 @@ public sealed class UnmaConfiguration
     public void Normalize()
     {
         var loadedSchemaVersion = SchemaVersion;
+        if (loadedSchemaVersion > CurrentSchemaVersion)
+        {
+            throw new SerializationException(
+                "UNMA configuration schema " + loadedSchemaVersion +
+                " is newer than supported schema " +
+                CurrentSchemaVersion + ".");
+        }
         if (SchemaVersion < 3)
         {
             LauncherX = -1f;
@@ -560,6 +669,8 @@ public sealed class UnmaConfiguration
         VanillaNotificationRules ??= new List<VanillaNotificationRule>();
         Instruments ??= new List<InstrumentDefinition>();
         InstrumentPanels ??= new List<InstrumentPanelDefinition>();
+        AlarmTimingMemories ??= new List<AlarmTimingMemoryDefinition>();
+        AlarmAreas ??= new List<AlarmAreaDefinition>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -630,6 +741,19 @@ public sealed class UnmaConfiguration
                 IsDashboard = false,
             });
         }
+        if (loadedSchemaVersion < 20)
+        {
+            AlarmAreas = new List<AlarmAreaDefinition>();
+            AlarmAreaPolicy.NormalizePanelAssignments(
+                Panels,
+                AlarmAreas,
+                discardAssignments: true);
+        }
+        else
+        {
+            AlarmAreas = AlarmAreaPolicy.Normalize(AlarmAreas);
+            AlarmAreaPolicy.NormalizePanelAssignments(Panels, AlarmAreas);
+        }
         // Keep legacy dashboard slots serialized for lossless downgrade and
         // recovery. Dashboard projection and editing deliberately ignore them.
 
@@ -637,6 +761,21 @@ public sealed class UnmaConfiguration
             panel != null && !panel.IsDashboard).Id;
         foreach (var rule in Rules)
         {
+            rule.Escalation = loadedSchemaVersion < 19
+                ? AlarmEscalationPolicy.LegacyMigrationDefaults
+                : AlarmEscalationPolicy.Normalize(
+                    rule.Escalation,
+                    rule.Severity);
+            var timing = loadedSchemaVersion < 18
+                ? AlarmTimingPolicy.LegacyMigrationDefaults
+                : AlarmTimingPolicy.Normalize(new AlarmTimingSettings(
+                    rule.ActivationDelayTicks,
+                    rule.ResetDelayTicks,
+                    rule.MinimumActiveTicks,
+                    AlarmTimingPolicy.LegacyHysteresis));
+            rule.ActivationDelayTicks = timing.ActivationDelayTicks;
+            rule.ResetDelayTicks = timing.ResetDelayTicks;
+            rule.MinimumActiveTicks = timing.MinimumActiveTicks;
             rule.Id = string.IsNullOrWhiteSpace(rule.Id)
                 ? Guid.NewGuid().ToString("N")
                 : rule.Id.Trim();
@@ -663,6 +802,9 @@ public sealed class UnmaConfiguration
             rule.Conditions.RemoveAll(condition => condition == null);
             foreach (var condition in rule.Conditions)
             {
+                condition.Hysteresis = loadedSchemaVersion < 18
+                    ? AlarmTimingPolicy.LegacyHysteresis
+                    : NormalizeHysteresis(condition.Hysteresis);
                 condition.EntityTitle ??= "";
                 condition.EntityType ??= "";
                 condition.MetricPath = condition.MetricPath?.Trim() ?? "";
@@ -974,6 +1116,24 @@ public sealed class UnmaConfiguration
             item.Detail ??= "";
             item.Source ??= "";
             item.PanelId ??= "";
+            if (double.IsNaN(item.RaisedAtTicks) ||
+                double.IsInfinity(item.RaisedAtTicks) ||
+                item.RaisedAtTicks < 0d)
+            {
+                item.RaisedAtTicks = 0d;
+            }
+            if (double.IsNaN(item.ClearedAtTicks) ||
+                double.IsInfinity(item.ClearedAtTicks) ||
+                item.ClearedAtTicks < 0d)
+            {
+                item.ClearedAtTicks = 0d;
+            }
+            if (double.IsNaN(item.AcknowledgedAtTicks) ||
+                double.IsInfinity(item.AcknowledgedAtTicks) ||
+                item.AcknowledgedAtTicks < 0d)
+            {
+                item.AcknowledgedAtTicks = 0d;
+            }
         }
 
         if (loadedSchemaVersion < 6)
@@ -981,7 +1141,12 @@ public sealed class UnmaConfiguration
             MigrateAlarmHistory();
         }
 
-        MergeDefaultSystemAlarms();
+        MergeDefaultSystemAlarms(loadedSchemaVersion);
+        AlarmTimingMemoryPolicy.NormalizeMemories(
+            AlarmTimingMemories,
+            Rules,
+            SystemAlarms,
+            discardExisting: loadedSchemaVersion < 18);
         SynchronizeAutomaticSystemSlots();
         if (loadedSchemaVersion < 4)
         {
@@ -1018,7 +1183,7 @@ public sealed class UnmaConfiguration
                 legacyOverride.IsGloballyDisabled = false;
             }
         }
-        SchemaVersion = Math.Max(SchemaVersion, 17);
+        SchemaVersion = CurrentSchemaVersion;
     }
 
     private static float NormalizeFinite(float value, float fallback)
@@ -1026,6 +1191,15 @@ public sealed class UnmaConfiguration
         return float.IsNaN(value) || float.IsInfinity(value)
             ? fallback
             : value;
+    }
+
+    private static double NormalizeHysteresis(double hysteresis)
+    {
+        return AlarmTimingPolicy.Normalize(new AlarmTimingSettings(
+            AlarmTimingPolicy.LegacyActivationDelayTicks,
+            AlarmTimingPolicy.LegacyResetDelayTicks,
+            AlarmTimingPolicy.LegacyMinimumActiveTicks,
+            hysteresis)).Hysteresis;
     }
 
     private void MigrateSustainedVanillaAlarmMemories()
@@ -1485,7 +1659,7 @@ public sealed class UnmaConfiguration
         }
     }
 
-    private void MergeDefaultSystemAlarms()
+    private void MergeDefaultSystemAlarms(int loadedSchemaVersion)
     {
         SystemAlarms.RemoveAll(item => item == null);
         foreach (var alarm in SystemAlarms)
@@ -1493,7 +1667,7 @@ public sealed class UnmaConfiguration
             alarm.Id ??= "";
             alarm.DisplayName ??= "";
             alarm.Stages ??= new List<SystemAlarmStageDefinition>();
-            NormalizeSystemStages(alarm.Stages);
+            NormalizeSystemStages(alarm.Stages, loadedSchemaVersion);
         }
 
         foreach (var defaultAlarm in CreateDefaultSystemAlarms())
@@ -1523,17 +1697,35 @@ public sealed class UnmaConfiguration
     }
 
     private static void NormalizeSystemStages(
-        List<SystemAlarmStageDefinition> stages)
+        List<SystemAlarmStageDefinition> stages,
+        int loadedSchemaVersion)
     {
         stages.RemoveAll(item => item == null);
         foreach (var stage in stages)
         {
+            stage.OperatorAction = loadedSchemaVersion < 19
+                ? AlarmOperatorAction.None
+                : AlarmEscalationPolicy.NormalizeOperatorAction(
+                    stage.OperatorAction);
+            var timing = loadedSchemaVersion < 18
+                ? AlarmTimingPolicy.LegacyMigrationDefaults
+                : AlarmTimingPolicy.Normalize(new AlarmTimingSettings(
+                    stage.ActivationDelayTicks,
+                    stage.ResetDelayTicks,
+                    stage.MinimumActiveTicks,
+                    AlarmTimingPolicy.LegacyHysteresis));
+            stage.ActivationDelayTicks = timing.ActivationDelayTicks;
+            stage.ResetDelayTicks = timing.ResetDelayTicks;
+            stage.MinimumActiveTicks = timing.MinimumActiveTicks;
             stage.Id ??= "";
             stage.Message ??= "";
             stage.Conditions ??= new List<SystemConditionDefinition>();
             stage.Conditions.RemoveAll(item => item == null);
             foreach (var condition in stage.Conditions)
             {
+                condition.Hysteresis = loadedSchemaVersion < 18
+                    ? AlarmTimingPolicy.LegacyHysteresis
+                    : NormalizeHysteresis(condition.Hysteresis);
                 condition.MetricId ??= "";
             }
             stage.ActiveColor ??= "auto";
@@ -1605,6 +1797,10 @@ public sealed class UnmaConfiguration
             Logic = source.Logic,
             ActiveColor = source.ActiveColor,
             SoundId = source.SoundId,
+            ActivationDelayTicks = source.ActivationDelayTicks,
+            ResetDelayTicks = source.ResetDelayTicks,
+            MinimumActiveTicks = source.MinimumActiveTicks,
+            OperatorAction = source.OperatorAction,
         };
         foreach (var condition in source.Conditions)
         {
@@ -1613,6 +1809,7 @@ public sealed class UnmaConfiguration
                 MetricId = condition.MetricId,
                 Comparison = condition.Comparison,
                 Threshold = condition.Threshold,
+                Hysteresis = condition.Hysteresis,
             });
         }
         return clone;

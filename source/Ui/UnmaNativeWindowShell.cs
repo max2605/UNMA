@@ -173,6 +173,10 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     private const float MinimumWindowHeight = 520f;
     private const float HorizontalBodyInset = 44f;
     private const float VerticalChromeInset = 138f;
+    private const float MinimumBodyWidth =
+        MinimumWindowWidth - HorizontalBodyInset;
+    private const float MinimumBodyHeight =
+        MinimumWindowHeight - VerticalChromeInset;
 
     private readonly UiRoot m_uiRoot;
     private readonly Func<int> m_selectedTab;
@@ -191,6 +195,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     private bool m_suppressed;
     private float m_windowWidth;
     private float m_windowHeight;
+    private float m_contentScale = 1f;
     private float m_resizeStartWidth;
     private float m_resizeStartHeight;
 
@@ -227,11 +232,11 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             Mathf.Min(logicalHeight - 48f, logicalHeight * 0.96f));
         var windowWidth = ClampRequestedDimension(
             requestedWidth,
-            Mathf.Min(MinimumWindowWidth, viewportWidth),
+            Mathf.Min(GetMinimumWindowWidth(), viewportWidth),
             viewportWidth);
         var windowHeight = ClampRequestedDimension(
             requestedHeight,
-            Mathf.Min(MinimumWindowHeight, viewportHeight),
+            Mathf.Min(GetMinimumWindowHeight(), viewportHeight),
             viewportHeight);
         m_windowWidth = windowWidth;
         m_windowHeight = windowHeight;
@@ -250,10 +255,10 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             .Width(new Px(bodyWidth))
             .Height(new Px(bodyHeight))
             .MinWidth(new Px(Mathf.Min(
-                MinimumWindowWidth - HorizontalBodyInset,
+                MinimumBodyWidth * m_contentScale,
                 bodyWidth)))
             .MinHeight(new Px(Mathf.Min(
-                MinimumWindowHeight - VerticalChromeInset,
+                MinimumBodyHeight * m_contentScale,
                 bodyHeight)))
             .FlexGrow(1f)
             .OverflowHidden();
@@ -306,6 +311,27 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     public Vector2 CurrentSize => new(m_windowWidth, m_windowHeight);
 
     /// <summary>
+    /// Keeps the same usable logical body at every UNMA content scale. The
+    /// physical minimum is still capped by the current COI viewport.
+    /// </summary>
+    public void SetContentScale(float scale)
+    {
+        if (m_disposed)
+        {
+            return;
+        }
+
+        var normalized = NormalizeContentScale(scale);
+        if (Mathf.Approximately(m_contentScale, normalized))
+        {
+            return;
+        }
+
+        m_contentScale = normalized;
+        ApplyWindowSize(m_windowWidth, m_windowHeight);
+    }
+
+    /// <summary>
     /// Applies a transient size without invoking the persistence callback.
     /// The regular resize handle remains the only path that stores a size.
     /// </summary>
@@ -354,6 +380,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     {
         if (!m_disposed && !m_suppressed && m_window.IsOpen)
         {
+            SetContentScale(scale);
             m_bodySurface.Render(drawBody, scale);
         }
     }
@@ -531,11 +558,11 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             Mathf.Min(logicalHeight - 48f, logicalHeight * 0.96f));
         var nextWidth = ClampRequestedDimension(
             requestedWidth,
-            Mathf.Min(MinimumWindowWidth, viewportWidth),
+            Mathf.Min(GetMinimumWindowWidth(), viewportWidth),
             viewportWidth);
         var nextHeight = ClampRequestedDimension(
             requestedHeight,
-            Mathf.Min(MinimumWindowHeight, viewportHeight),
+            Mathf.Min(GetMinimumWindowHeight(), viewportHeight),
             viewportHeight);
         if (Mathf.Approximately(m_windowWidth, nextWidth) &&
             Mathf.Approximately(m_windowHeight, nextHeight))
@@ -557,12 +584,27 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         m_bodyElement.style.width = bodyWidth;
         m_bodyElement.style.height = bodyHeight;
         m_bodyElement.style.minWidth = Mathf.Min(
-            MinimumWindowWidth - HorizontalBodyInset,
+            MinimumBodyWidth * m_contentScale,
             bodyWidth);
         m_bodyElement.style.minHeight = Mathf.Min(
-            MinimumWindowHeight - VerticalChromeInset,
+            MinimumBodyHeight * m_contentScale,
             bodyHeight);
         UpdateNavigationButtonWidths(bodyWidth);
+    }
+
+    private float GetMinimumWindowWidth()
+    {
+        return HorizontalBodyInset + MinimumBodyWidth * m_contentScale;
+    }
+
+    private float GetMinimumWindowHeight()
+    {
+        return VerticalChromeInset + MinimumBodyHeight * m_contentScale;
+    }
+
+    private static float NormalizeContentScale(float scale)
+    {
+        return Mathf.Clamp(IsFinitePositive(scale) ? scale : 1f, 0.75f, 2f);
     }
 
     private void UpdateNavigationButtonWidths(float availableWidth)

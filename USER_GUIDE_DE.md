@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.18** und
+Diese Anleitung gilt für **UNMA 0.10.0** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -10,6 +10,9 @@ Spielwerte und ermöglicht eigene Meldungsregeln für Spielobjekte oder globale
 Variablen.
 
 Benötigte Abhängigkeit: **MultiLangLib 0.1.0 oder neuer**.
+Optionale Abhängigkeit: **Keybind Framework 2.0.2 oder neuer** für frei
+konfigurierbare primäre und sekundäre Tastenkürzel. Ohne das Framework bleibt
+UNMA vollständig bedienbar.
 
 ## Installation und Aktualisierung
 
@@ -38,9 +41,28 @@ werden.
 2. Alternativ den frei schwebenden Launcher verwenden, der zunächst nahe am
    linken Bildschirmrand liegt.
 3. Unter **MELDETAFEL** befinden sich HOME und die dauerhaft angelegten Panels.
-4. **MASTER QUIT / QUITTIEREN** quittiert alle neuen sowie bereits gegangenen,
-   aber noch nicht quittierten Meldungen und beendet deren Ton.
-5. Unter **VERLAUF** lassen sich frühere Meldungsereignisse einsehen.
+   **ALLE**, **NICHT ZUGEORDNET** oder einen Betriebsbereich auswählen, um die
+   Tafel einzugrenzen.
+4. Mit **Q** nur einen Schlitz, mit **PANEL QUITTIEREN** die angezeigte Tafel
+   oder mit **ALLES QUITTIEREN** sämtliche neuen und gegangenen Meldungen
+   quittieren.
+5. **NÄCHSTER ALARM** oder **Umschalt links + F8** durchläuft die
+   unquittierten Meldungen des Panels und fokussiert, soweit möglich, das
+   betroffene Spielobjekt.
+6. Unter **VERLAUF** lassen sich frühere Meldungsereignisse einsehen.
+
+### Konfigurierbare Tastenkürzel
+
+Ist das optionale **Keybind Framework 2.0.2+** aktiv, bietet dessen
+Einstellungsseite primäre und sekundäre Belegungen für das UNMA-Fenster, die
+globale Quittierung, den nächsten unquittierten Alarm und eine fünfminütige
+Stummschaltung des Alarmtons. Eingebaute Rückfalltasten sind **F8** für das
+Hauptfenster und **Umschalt links + F8** für den nächsten Alarm; die beiden
+potenziell störenden Aktionen sind zunächst unbelegt. Die Stummschaltung
+quittiert oder löscht niemals eine Meldung.
+Solange ein natives UNMA-Textfeld den Tastaturfokus besitzt, unterdrückt UNMA
+alle vier Belegungen. Dadurch kann auch eine neu belegte Buchstabentaste beim
+Schreiben keine Operatoraktion auslösen.
 
 ### Launcher und native Fenster
 
@@ -99,13 +121,113 @@ ausdrücklich gelöscht werden. Nur abgeschlossene Einträge können gelöscht
 werden. Das Löschen aller abgeschlossenen Ereignisse muss innerhalb von fünf
 Sekunden durch einen zweiten Druck bestätigt werden.
 
+Die Werkzeugzeile unter **VERLAUF** durchsucht Meldung, Detail, Quelle,
+Panel-ID und Alarmkennung gleichzeitig. Die Zustands- und Stufentasten
+durchlaufen ihre Filter; beide Filter werden mit der Suche kombiniert. Neue
+Ereignisse zeigen das Spieldatum ihres jüngsten Kommen-, Gehen- oder
+Quittierübergangs. Einträge älterer UNMA-Versionen bleiben mit unbekanntem
+Datum sichtbar.
+
+**CSV** und **JSON** exportieren genau die aktuell gefilterten Zeilen nach
+`%LOCALAPPDATA%\UNMA\exports`. CSV verwendet RFC-4180-Zeichenregeln; JSON
+behält die rohen Spielzeit-Ticks für weitere Auswertungen. Ein Export verändert
+oder löscht keinen Verlaufseintrag.
+
 ## Panels und Meldeschlitze
 
 ### HOME
 
-HOME ist die Live-Übersicht aller aktuell anstehenden Meldungen. Angezeigt
-werden `K` und `KQ` aus allen Quellen. HOME besitzt keine festen Schlitze;
-inaktive, gegangene und leere Plätze werden ausgeblendet.
+HOME ist unter **ALLE** die Live-Übersicht aller aktuell anstehenden Meldungen.
+Angezeigt werden `K` und `KQ` aus allen Quellen. HOME besitzt keine festen
+Schlitze; inaktive, gegangene und leere Plätze werden ausgeblendet.
+
+### Betriebsbereiche
+
+Betriebsbereiche ordnen globale Panels, ohne einen zweiten Alarmzustand,
+Verlaufseintrag, Historian-Datenstrom oder Audiostatus zu erzeugen. Die
+Filterzeile bietet **ALLE**, **NICHT ZUGEORDNET** und jeden selbst angelegten
+Bereich:
+
+- **ALLE** erhält die vollständige bisherige Panel- und HOME-Ansicht.
+- **NICHT ZUGEORDNET** zeigt globale Panels ohne Betriebsbereich.
+- Ein konkreter Bereich zeigt nur seine Mitgliedspanels. Sein HOME sammelt
+  deren aktive Meldungen und führt sie zu genau einem Schlitz je zugrunde
+  liegendem Alarm zusammen.
+
+Der ausgewählte Bereichschip zeigt die Zahl seiner Panels sowie aktiver und
+unbestätigter Alarme. **BEREICH QUITT.** und **BEREICH WEITER** arbeiten nur
+mit den Alarmen der ausgewählten Bereichs- beziehungsweise
+**NICHT ZUGEORDNET**-Ansicht. **ALLES QUITTIEREN** bleibt immer die
+ausdrückliche globale Aktion.
+
+Die Quittierung gehört weiterhin zur zugrunde liegenden Alarmfolge und nicht
+zur Bereichsansicht. Ist derselbe Alarm über Panels in mehreren Bereichen
+sichtbar, wird er durch eine Quittierung in einem Bereich überall quittiert.
+UNMA erzeugt dafür weder getrennte Zustände noch doppelte Verlaufseinträge.
+
+Über **⚙ BEREICHE** lassen sich Bereiche anlegen, umbenennen, umsortieren und
+zum Löschen vormerken. Alle Änderungen bleiben in einem gemeinsamen Entwurf
+und werden erst beim Speichern atomar angewendet. Beim Löschen bleiben Panels,
+Schlitze, Regeln und Alarmzustände erhalten; die Panels werden lediglich
+**NICHT ZUGEORDNET**. Warnt UNMA vor ungespeicherten Bereichs- oder
+Panel-Einstellungen, muss der Entwurf gespeichert, verworfen oder weiter
+bearbeitet werden.
+
+Die Zuordnung eines globalen Panels befindet sich in seinen
+Zahnrad-Einstellungen. Ein dupliziertes Panel übernimmt den Bereich seiner
+Quelle. Ein neues Panel übernimmt nur den konkret ausgewählten Bereich; unter
+**ALLE** oder **NICHT ZUGEORDNET** beginnt es unzugeordnet. Objektpanels und
+HOME werden keinem Bereich zugewiesen.
+
+### Incident-Linse
+
+Die **INCIDENT-LINSE** erscheint ausschließlich über dem HOME-Dashboard. Ihre
+eingeklappte Leiste zeigt globalen Alarmdruck und Zähler; **ERWEITERN** öffnet
+eine nur lesende Ansicht zeitlicher Cluster unter den aktiven Alarmen des
+aktuellen Dashboard-Bereichs. Auf festen globalen oder Objektpanels erscheint
+die Linse nicht.
+
+Die Gruppierung ist bewusst eine Heuristik. Aufeinanderfolgende aktive
+Alarmvorkommen bilden einen zeitlichen Incident-Cluster, wenn zwischen ihren
+Kommen-Zeitpunkten höchstens zwei Spieltage liegen. **ERSTES SIGNAL** ist nur
+das früheste beobachtete Mitglied dieses Clusters. Es ist weder eine
+bestätigte Ursache oder Grundursache noch ein Beweis dafür, dass eine Meldung
+eine andere ausgelöst hat.
+
+Die Cluster-Mitgliedschaft folgt dem gewählten Filter **ALLE**, **NICHT
+ZUGEORDNET** oder einem konkreten Betriebsbereich. Die Druckanzeige bleibt
+absichtlich global, damit ein enger Filter einen inselweiten Alarmsturm nicht
+unsichtbar macht. Sie betrachtet die letzten zehn Spieltage und gewichtet
+jedes Vorkommen nach Alarmstufe:
+
+| Alarmstufe | Gewicht |
+| --- | ---: |
+| Hinweis | 1 |
+| Warnung | 2 |
+| Kritisch | 4 |
+| Notfall | 8 |
+
+Ein Druck unter 8 ist **NORMAL**, 8–15 ist **ERHÖHT**, 16–31 ist **STURM**
+und ab 32 **SCHWER**. Dieselbe Übersicht nennt die letzten Vorkommen und die
+Zahl verschiedener Alarmkennungen. Wiederholungen erhöhen damit den ersten
+Zähler, ohne als zusätzliche Alarmart ausgegeben zu werden.
+
+Die erweiterte Ansicht stellt höchstens sechs Incident-Karten und acht
+Mitglieder je Karte dar. Eine Zeile `+ N WEITERE` erhält bei Erreichen dieser
+Anzeigegrenze die vollständigen Zähler. **FOKUS** springt zu einem weiterhin
+sichtbaren Mitglied und, soweit verfügbar, zu seinem Spielobjekt. Der Fokus
+quittiert, verbirgt oder löscht keine Meldung, schaltet sie nicht stumm und
+verändert weder Verlauf noch Audiostatus.
+
+Incident-Snapshots sind vorübergehende, aus den aktuellen Alarm- und
+Verlaufssnapshots abgeleitete Ergebnisse. Sie fügen keine Speicherfelder
+hinzu und benötigen in 0.10.0 keine neue Schema-Migration. Für sichere
+Performance fragt die UI höchstens einmal je Frame und Filter ab. Der
+Laufzeitverlauf wird nur bei geänderter Revision neu kopiert, der globale
+Druck ist auf die neuesten 8.192 Vorkommen begrenzt, und Sortierung sowie
+Analyse laufen außerhalb des Alarm-Locks. Bei fortlaufenden Änderungen liefert
+UNMA nach höchstens zwei Versuchen ein konsistentes ungecachtes Ergebnis,
+statt den Renderpfad zu blockieren.
 
 ### Globale Panels
 
@@ -116,6 +238,11 @@ Provider- und eigene Meldungen.
   Panel anlegen.
 - Über das benachbarte Zahnrad Name, Spaltenzahl, Filter, automatische Quellen
   und Schlitzreihenfolge ändern.
+- **PANEL DUPLIZIEREN** erstellt dort eine unabhängige Kopie einschließlich
+  Reihenfolge, Filter und eigener Meldungen. Die kopierten eigenen Meldungen
+  erhalten neue Kennungen und starten aus Sicherheitsgründen deaktiviert;
+  bestehende Alarmzustände und der Verlauf werden nicht kopiert. Das neue
+  Panel behält die Bereichszuordnung seiner Quelle.
 - Bekannte Meldungen gezielt in freie Schlitze aufnehmen und Plätze nach oben
   oder unten verschieben.
 - Neu entdeckte Meldungen, die zu einer automatischen Quelle oder einem Filter
@@ -134,6 +261,19 @@ eigenes dauerhaftes Panel.
 
 Der kleine Pfeil in einem objektbezogenen Meldeschlitz zentriert die Kamera auf
 das Objekt und öffnet seinen Inspector.
+
+Die Taste **Q** quittiert nur den sichtbaren Schlitz. **PANEL QUITTIEREN**
+quittiert alle auf der aktuellen Tafel dargestellten Zustände, einschließlich
+aller in einem Objektschlitz zusammengefassten Ereignisse. **ALLES
+QUITTIEREN** bleibt die ausdrückliche globale Aktion.
+
+Die Taste **Z** pausiert nur den Alarmton dieses Schlitzes für einen
+Spielmonat. Das Kennzeichen wechselt zu **AUDIO Z · 1 MONAT**; **R** setzt den
+Ton sofort fort. Bei einem Sammelschlitz gilt die Pause für alle aktuell
+dahinterliegenden Ereignisse. Sie quittiert, versteckt oder löscht keine
+Meldung und verändert
+weder Zähler noch Verlauf. Ein späteres neues Ereignis erhält eine neue
+Sequenz und ist wieder hörbar.
 
 Ein Doppelklick auf einen eigenen Meldeschlitz öffnet die zugehörige Regel
 direkt im Editor.
@@ -238,6 +378,45 @@ UNMA berechnet `Ist-Wert / Bezugswert × 100`. Ein fehlender, null oder negative
 Bezugswert gilt als nicht verfügbar und aktiviert die Bedingung nicht. Werte
 über 100 Prozent werden nicht künstlich begrenzt.
 
+### Alarmzeiten und Hysterese
+
+Jede eigene Regel besitzt drei Dauern nach dem
+Captain-of-Industry-Spielkalender:
+
+- **AUSLÖSEVERZÖGERUNG** verlangt, dass die kombinierte UND-/ODER-Bedingung
+  für die gewählte Zeit erfüllt bleibt;
+- **RÜCKSETZVERZÖGERUNG** verlangt, dass sie vor dem Gehen entsprechend lange
+  nicht erfüllt bleibt;
+- **MINDESTE AKTIVZEIT** hält eine ausgelöste Meldung mindestens für die
+  gewählte Dauer aktiv.
+
+Mit `0` gilt jeweils das bisherige Sofortverhalten. Jede normale numerische
+Bedingung besitzt außerdem eine **HYSTERESE**. Dieses Totband um den Grenzwert
+verhindert wiederholtes Kommen und Gehen bei schwankenden Messwerten. Laufende
+Timer und Hystereselatches werden je Welt gespeichert und nach dem Laden
+fortgesetzt. Trendbedingungen für Zunahme oder Abnahme verwenden bewusst keine
+Hysterese.
+
+### Eskalation und Operator-Aufmerksamkeit
+
+**ESKALATION** wird für eine eigene Regel aktiviert, wenn eine weiterhin aktive
+Meldung nach einer gewählten Spielzeit auf eine strikt höhere Alarmstufe
+angehoben werden soll. Dafür kann ein eigener Ton gewählt oder mit
+**GRUNDTON ÜBERNEHMEN** der bisherige Ton beibehalten werden. Die Eskalation
+beginnt eine neue Meldungsfolge: Sie verlangt erneut eine Quittierung und
+übernimmt keine folgengebundene Tonpause des vorherigen Zustands.
+
+Die optionale Operatoraktion öffnet das passende UNMA-Panel und scrollt zur
+Meldung. Eine zweite Variante beendet zusätzlich ausschließlich die
+vorübergehende Fünf-Minuten-Stummschaltung von UNMA. Sie bewegt nie die Kamera,
+öffnet keinen Objektinspektor, ändert weder globale Audioeinstellung noch
+Schlitz-Tonpause, quittiert nichts und steuert keine Maschine.
+
+Systemalarmstufen bieten dieselben Aktionen. Sie werden nur ausgeführt, wenn
+ein bereits aktiver Systemalarm in eine neue Stufe wechselt, nicht bei seiner
+Erstaktivierung. Für eine gestufte Eskalation wird eine niedrige Sofortstufe
+mit einer höheren, auslöseverzögerten Stufe kombiniert.
+
 ### Regeln mit mehreren Bedingungen oder Objekten
 
 Nach dem Hinzufügen der ersten Zeile kann außerhalb des Editors ein anderes
@@ -307,8 +486,11 @@ Zustand. **NICHT LOGGEN · KOMPLETT IGNORIEREN** bleibt überall unsichtbar.
 Der Tab **SYSTEM** enthält die eingebaute Überwachung für Gesundheit, Nahrung
 und Arbeiter. Jede Systemmeldung kann aktiviert, vollständig bearbeitet oder
 auf ihre Werkvorgabe zurückgesetzt werden. Die Stufen enthalten Messwert,
-Operator, Schwelle, Alarmstufe, Farbe und Ton. Das Zurücksetzen auf Werkvorgabe
-muss durch einen zweiten Druck bestätigt werden.
+Operator, Schwelle, Hysterese, Auslöse- und Rücksetzverzögerung,
+Mindestaktivzeit, Alarmstufe, Farbe, Ton und eine optionale Operatoraktion.
+Jede Stufe wird unabhängig zeitlich ausgewertet; anschließend zeigt UNMA die
+höchste passende Alarmstufe und Priorität. Das Zurücksetzen auf Werkvorgabe muss
+durch einen zweiten Druck bestätigt werden.
 
 Der Gesundheitswert des Spiels ist keine klassische 0–100-Prozent-Skala. `10`
 ist der neutrale Basiswert; ein gesundheitsbedingter Bevölkerungsverlust beginnt
@@ -348,7 +530,10 @@ das Fenster klein oder die Inhaltsskalierung groß ist.
 - Die Inhalte von Hauptfenster, Editor und abgekoppelten Tafeln in
   25-Prozent-Schritten von 75 bis 200 Prozent skalieren oder auf 100 Prozent
   zurücksetzen. Native COI-Rahmen, Hauptnavigation und Launcher behalten die
-  vom Spiel vorgegebene UI-Skalierung.
+  vom Spiel vorgegebene UI-Skalierung. Die Mindestgrößen der Fenster wachsen
+  innerhalb des verfügbaren Bildschirms mit; Panel- und Bereichseinstellungen
+  stapeln ihre Bedienelemente, damit alle notwendigen Aktionen auch bei
+  200 Prozent erreichbar bleiben.
 - Warn-, Kritisch- und Notfallfarbe bearbeiten und speichern.
 - Den Ordner für eigene Töne anzeigen und unterstützte WAV- und Ogg-Dateien
   ohne Neustart neu einlesen.
@@ -412,7 +597,7 @@ UNMA speichert weltbezogene Daten in
 `Mods/UNMA/unma-world-<GameId>.json`. Diese Dateien sind nicht Bestandteil des
 Release-Archivs. Folgende Informationen überleben Speichern und Neuladen:
 
-- Paneldefinitionen und Schlitzreihenfolge;
+- Paneldefinitionen, Schlitzreihenfolge, Betriebsbereiche und Zuordnungen;
 - eigene Regeln und verknüpfte Panels;
 - quittierte aktive Meldungen;
 - gegangene, aber noch nicht quittierte Meldungen;
@@ -420,6 +605,16 @@ Release-Archivs. Folgende Informationen überleben Speichern und Neuladen:
 - Messpulte, Instrumente, Quellen, Berechnungsarten und Anzeigeskalen;
 - angepasste Systemstufen sowie Vanilla-Verhaltens- und Tonregeln;
 - Inhaltsskalierung, Launcherposition sowie Größen von Hauptfenster und Editor.
+
+Schema 20 übernimmt Konfigurationen früherer UNMA-Versionen mit allen
+vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
+**ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
+zugewiesen werden.
+Die Incident-Linse speichert weder Konfiguration noch Ergebnis; 0.10.0 bleibt
+daher bei Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
+UNMA-Schema, lässt sie Hauptdatei und Sicherungsartefakte bytegenau unangetastet,
+verwendet sichere Vorgaben und sperrt Konfigurationsschreibvorgänge für die
+laufende Sitzung, statt unbekannte Zukunftsfelder zu verwerfen.
 
 Ist eine Konfigurationsdatei beschädigt, legt UNMA eine Sicherung an und ersetzt
 sie durch sichere Vorgaben.
@@ -459,14 +654,17 @@ auch weitere Instrumente desselben Messpults als Bedingungen ergänzt werden.
 globalen Variablen. Jede Instrumentmeldung besitzt eine eigene Zielauswahl:
 Ein oder mehrere Meldungspanels können gewählt werden, wobei mindestens eines
 ausgewählt bleiben muss. Es wird kein Panel mehr stillschweigend übernommen. Für
-Papierschreiber öffnet **ARCHIV** eine große
-Historienansicht für einen Spieltag, einen Spielmonat, ein Spieljahr, zehn
-Jahre, ein Jahrhundert oder die gesamte noch gespeicherte Laufzeit. Der
-Schreiber läuft von links nach rechts; neue Werte
-werden nicht in den vorhandenen Ausschnitt zusammengedrückt.
+Mit **HIST** öffnet jedes Instrument unabhängig von seinem Anzeigetyp eine
+große Historienansicht für einen Spieltag, einen Spielmonat, ein Spieljahr,
+zehn Jahre, ein Jahrhundert oder die gesamte noch gespeicherte Laufzeit. Das
+gewählte Fenster gilt gleichzeitig für Diagramm und Analyse. Angezeigt werden
+aktueller Wert, Minimum, Mittelwert, Maximum, lineare Rate pro Spielmonat und
+R². Bei einem belastbaren Trend folgt eine gerichtete ETA zur oberen oder
+unteren Skalenbegrenzung; zu wenige, stabile, unzuverlässige oder weiter als
+100 Spieljahre entfernte Verläufe werden ausdrücklich benannt.
 
 Instrumentdefinitionen und Panelaufteilung werden je Spielwelt gespeichert.
-Die Messproben des Schreiberarchivs existieren nur während der laufenden
+Die Messproben des Historians existieren nur während der laufenden
 Sitzung und beginnen nach erneutem Laden der Welt von vorn.
 
 Über **+ GEÖFFNETES GEBÄUDE MIT GLEICHEM MESSWERT** können weitere geöffnete

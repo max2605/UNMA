@@ -9,14 +9,14 @@ namespace UNMA.Ui;
 
 internal static class InstrumentPanelRenderer
 {
-    internal readonly struct RecorderArchiveColumn
+    internal readonly struct HistorianColumn
     {
         public readonly float First;
         public readonly float Minimum;
         public readonly float Maximum;
         public readonly float Last;
 
-        public RecorderArchiveColumn(
+        public HistorianColumn(
             float first,
             float minimum,
             float maximum,
@@ -30,18 +30,18 @@ internal static class InstrumentPanelRenderer
     }
 
     /// <summary>
-    /// A compact recorder trace that remains compatible with the archive's
+    /// A compact historian trace that remains compatible with the chart's
     /// IReadOnlyList signature. The indexer exposes each column's last value
     /// for the live marker; the renderer additionally consumes its retained
     /// min/max envelope when available.
     /// </summary>
-    internal sealed class RecorderArchiveTrace : IReadOnlyList<float>
+    internal sealed class HistorianTrace : IReadOnlyList<float>
     {
-        private readonly List<RecorderArchiveColumn> m_columns = new();
+        private readonly List<HistorianColumn> m_columns = new();
 
         public int Count => m_columns.Count;
         public float this[int index] => m_columns[index].Last;
-        public RecorderArchiveColumn GetColumn(int index) => m_columns[index];
+        public HistorianColumn GetColumn(int index) => m_columns[index];
 
         public void Clear() => m_columns.Clear();
 
@@ -50,7 +50,7 @@ internal static class InstrumentPanelRenderer
             float minimum,
             float maximum,
             float last) =>
-            m_columns.Add(new RecorderArchiveColumn(
+            m_columns.Add(new HistorianColumn(
                 first,
                 minimum,
                 maximum,
@@ -177,17 +177,16 @@ internal static class InstrumentPanelRenderer
     }
 
     /// <summary>
-    /// Draws the recorder's retained samples as a large paper archive. The
-    /// supplied samples are already normalized so the archive uses exactly
-    /// the same vertical scale as the compact instrument face.
+    /// Draws retained game-time samples and historian analysis for every
+    /// instrument type. Samples are normalized to the instrument scale.
     /// </summary>
-    public static void DrawRecorderArchive(
+    public static void DrawHistorian(
         Rect rect,
         InstrumentDefinition definition,
         IReadOnlyList<float> normalizedSamples,
         double current,
-        double observedMin,
-        double observedMax,
+        InstrumentForecastResult forecast,
+        bool hasForecast,
         string rangeLabel,
         GUIStyle labelStyle,
         GUIStyle smallStyle,
@@ -203,25 +202,25 @@ internal static class InstrumentPanelRenderer
         Fill(panel, CoiUiPalette.Surface);
 
         var headerHeight = Mathf.Clamp(panel.height * 0.09f, 38f, 58f);
-        var footerHeight = Mathf.Clamp(panel.height * 0.11f, 46f, 66f);
+        var footerHeight = Mathf.Clamp(panel.height * 0.24f, 112f, 148f);
         var header = new Rect(panel.x, panel.y, panel.width, headerHeight);
         Fill(header, CoiUiPalette.Window);
 
-        var archiveTitleStyle = new GUIStyle(labelStyle)
+        var historianTitleStyle = new GUIStyle(labelStyle)
         {
             alignment = TextAnchor.MiddleLeft,
             fontSize = Mathf.RoundToInt(Mathf.Clamp(headerHeight * 0.40f, 16f, 24f)),
             fontStyle = FontStyle.Bold,
             clipping = TextClipping.Clip,
         };
-        archiveTitleStyle.normal.textColor = CoiUiPalette.TextBright;
+        historianTitleStyle.normal.textColor = CoiUiPalette.TextBright;
         var headerLabel = string.IsNullOrWhiteSpace(definition.Title)
             ? definition.MetricLabel
             : definition.Title;
         NativeGUI.Label(
             new Rect(header.x + 16f, header.y, header.width * 0.70f - 16f, header.height),
             headerLabel,
-            archiveTitleStyle);
+            historianTitleStyle);
 
         var rangeStyle = new GUIStyle(smallStyle)
         {
@@ -234,7 +233,7 @@ internal static class InstrumentPanelRenderer
         NativeGUI.Label(
             new Rect(header.x + header.width * 0.70f, header.y, header.width * 0.30f - 16f, header.height),
             string.IsNullOrWhiteSpace(rangeLabel)
-                ? UnmaText.Get("ui.recorder.full_history", "FULL HISTORY")
+                ? UnmaText.Get("ui.historian.full_history", "FULL HISTORY")
                 : rangeLabel,
             rangeStyle);
 
@@ -285,16 +284,16 @@ internal static class InstrumentPanelRenderer
                     "MEASUREMENT SOURCE\nUNAVAILABLE"),
                 unavailableStyle);
         }
-        else if (normalizedSamples is RecorderArchiveTrace archiveTrace &&
-            archiveTrace.Count > 0)
+        else if (normalizedSamples is HistorianTrace historianTrace &&
+            historianTrace.Count > 0)
         {
-            DrawArchiveTrace(
+            DrawHistorianTrace(
                 plot,
-                archiveTrace,
+                historianTrace,
                 new Color(0.65f, 0.08f, 0.05f, 1f));
 
             var last = Mathf.Clamp01(
-                archiveTrace[archiveTrace.Count - 1]);
+                historianTrace[historianTrace.Count - 1]);
             var markerCenter = new Vector2(
                 plot.xMax,
                 plot.yMax - last * plot.height);
@@ -330,67 +329,118 @@ internal static class InstrumentPanelRenderer
             emptyStyle.normal.textColor = new Color(0.15f, 0.16f, 0.15f, 0.85f);
             NativeGUI.Label(
                 chart,
-                UnmaText.Get("ui.recorder.no_history", "NO HISTORY YET"),
+                UnmaText.Get("ui.historian.no_history", "NO HISTORY YET"),
                 emptyStyle);
         }
 
-        var paperLabelStyle = new GUIStyle(smallStyle)
+        var timelineLabelStyle = new GUIStyle(smallStyle)
         {
             fontSize = 11,
             fontStyle = FontStyle.Bold,
             clipping = TextClipping.Clip,
         };
-        paperLabelStyle.normal.textColor = new Color(0.10f, 0.11f, 0.10f, 0.92f);
-        paperLabelStyle.alignment = TextAnchor.UpperLeft;
+        timelineLabelStyle.normal.textColor = new Color(0.10f, 0.11f, 0.10f, 0.92f);
+        timelineLabelStyle.alignment = TextAnchor.UpperLeft;
         NativeGUI.Label(
             new Rect(chart.x + 7f, chart.y + 4f, 140f, 20f),
-            UnmaText.Get("ui.recorder.oldest_sample", "OLDEST SAMPLE"),
-            paperLabelStyle);
-        paperLabelStyle.alignment = TextAnchor.UpperRight;
+            UnmaText.Get("ui.historian.range_start", "RANGE START"),
+            timelineLabelStyle);
+        timelineLabelStyle.alignment = TextAnchor.UpperRight;
         NativeGUI.Label(
             new Rect(chart.xMax - 147f, chart.y + 4f, 140f, 20f),
             UnmaText.Get("ui.common.now", "NOW"),
-            paperLabelStyle);
+            timelineLabelStyle);
 
         var footer = new Rect(chart.x, chart.yMax + 9f, chart.width, footerHeight);
-        var gap = 8f;
-        var statWidth = (footer.width - gap * 2f) / 3f;
-        DrawArchiveStat(
-            new Rect(footer.x, footer.y, statWidth, footer.height),
-            UnmaText.Get("ui.common.minimum", "MIN"),
-            observedMin,
-            definition.Unit,
-            labelStyle,
-            smallStyle,
-            hasValue: isValid);
-        DrawArchiveStat(
-            new Rect(footer.x + statWidth + gap, footer.y, statWidth, footer.height),
-            UnmaText.Get("ui.common.maximum", "MAX"),
-            observedMax,
-            definition.Unit,
-            labelStyle,
-            smallStyle,
-            hasValue: isValid);
-        DrawArchiveStat(
-            new Rect(footer.x + (statWidth + gap) * 2f, footer.y, statWidth, footer.height),
+        const float gap = 7f;
+        var statWidth = (footer.width - gap * 3f) / 4f;
+        var rowHeight = (footer.height - gap) * 0.5f;
+        var firstRowY = footer.y;
+        var secondRowY = footer.y + rowHeight + gap;
+        var statisticsAvailable = isValid && hasForecast;
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 0, firstRowY, rowHeight),
             UnmaText.Get("ui.common.current", "CURRENT"),
-            current,
-            definition.Unit,
+            isValid ? FormatMeasurement(current, definition.Unit) : "—",
             labelStyle,
             smallStyle,
-            CoiUiPalette.Orange,
-            isValid);
+            CoiUiPalette.Orange);
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 1, firstRowY, rowHeight),
+            UnmaText.Get("ui.common.minimum", "MIN"),
+            statisticsAvailable
+                ? FormatMeasurement(forecast.MinimumValue, definition.Unit)
+                : "—",
+            labelStyle,
+            smallStyle);
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 2, firstRowY, rowHeight),
+            UnmaText.Get("ui.historian.average", "AVERAGE"),
+            statisticsAvailable
+                ? FormatMeasurement(forecast.AverageValue, definition.Unit)
+                : "—",
+            labelStyle,
+            smallStyle);
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 3, firstRowY, rowHeight),
+            UnmaText.Get("ui.common.maximum", "MAX"),
+            statisticsAvailable
+                ? FormatMeasurement(forecast.MaximumValue, definition.Unit)
+                : "—",
+            labelStyle,
+            smallStyle);
+
+        var trendAvailable = statisticsAvailable &&
+                             forecast.Status !=
+                             InstrumentForecastStatus.InsufficientData;
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 0, secondRowY, rowHeight),
+            UnmaText.Get("ui.historian.forecast", "FORECAST"),
+            HistorianStatusLabel(isValid, hasForecast, forecast),
+            labelStyle,
+            smallStyle,
+            HistorianStatusColor(isValid, hasForecast, forecast));
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 1, secondRowY, rowHeight),
+            UnmaText.Get("ui.historian.rate_per_month", "RATE / MONTH"),
+            trendAvailable
+                ? FormatRatePerMonth(forecast.RatePerMonth, definition.Unit)
+                : "—",
+            labelStyle,
+            smallStyle);
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 2, secondRowY, rowHeight),
+            UnmaText.Get("ui.historian.r_squared", "R²"),
+            trendAvailable
+                ? forecast.RSquared.ToString("0.000", CultureInfo.CurrentCulture)
+                : "—",
+            labelStyle,
+            smallStyle);
+        DrawHistorianStat(
+            HistorianStatRect(footer, statWidth, gap, 3, secondRowY, rowHeight),
+            HistorianEtaCaption(hasForecast, forecast),
+            statisticsAvailable ? HistorianEtaLabel(forecast) : "—",
+            labelStyle,
+            smallStyle,
+            forecast.HasEta ? CoiUiPalette.Yellow : (Color?)null);
     }
 
-    private static void DrawArchiveStat(
+    private static Rect HistorianStatRect(
+        Rect footer,
+        float width,
+        float gap,
+        int column,
+        float y,
+        float height) =>
+        new(footer.x + column * (width + gap), y, width, height);
+
+    private static void DrawHistorianStat(
         Rect rect,
         string caption,
-        double value,
-        string unit,
+        string value,
         GUIStyle labelStyle,
         GUIStyle smallStyle,
-        Color? valueColor = null,
-        bool hasValue = true)
+        Color? valueColor = null)
     {
         Fill(rect, CoiUiPalette.Window);
         var captionStyle = new GUIStyle(smallStyle)
@@ -416,12 +466,153 @@ internal static class InstrumentPanelRenderer
         valueStyle.normal.textColor = valueColor ?? CoiUiPalette.TextBright;
         NativeGUI.Label(
             new Rect(rect.x + rect.width * 0.31f, rect.y, rect.width * 0.69f - 12f, rect.height),
-            hasValue
-                ? FormatValue(value) + (string.IsNullOrWhiteSpace(unit)
-                    ? string.Empty
-                    : " " + unit)
-                : "—",
+            string.IsNullOrWhiteSpace(value) ? "—" : value,
             valueStyle);
+    }
+
+    private static string HistorianStatusLabel(
+        bool isValid,
+        bool hasForecast,
+        InstrumentForecastResult forecast)
+    {
+        if (!isValid)
+        {
+            return UnmaText.Get(
+                "ui.historian.status.source_unavailable",
+                "SOURCE UNAVAILABLE");
+        }
+        if (!hasForecast)
+        {
+            return UnmaText.Get(
+                "ui.historian.status.forecast_unavailable",
+                "FORECAST UNAVAILABLE");
+        }
+        return forecast.Status switch
+        {
+            InstrumentForecastStatus.InsufficientData => UnmaText.Get(
+                "ui.historian.status.insufficient_data",
+                "INSUFFICIENT DATA"),
+            InstrumentForecastStatus.Stable => UnmaText.Get(
+                "ui.historian.status.stable",
+                "STABLE"),
+            InstrumentForecastStatus.Unreliable => UnmaText.Get(
+                "ui.historian.status.unreliable",
+                "UNRELIABLE"),
+            _ => forecast.Direction == InstrumentForecastDirection.Falling
+                ? UnmaText.Get(
+                    "ui.historian.status.moving_falling",
+                    "MOVING ↓")
+                : UnmaText.Get(
+                    "ui.historian.status.moving_rising",
+                    "MOVING ↑"),
+        };
+    }
+
+    private static Color? HistorianStatusColor(
+        bool isValid,
+        bool hasForecast,
+        InstrumentForecastResult forecast)
+    {
+        if (!isValid || !hasForecast)
+        {
+            return CoiUiPalette.TextMuted;
+        }
+        return forecast.Status switch
+        {
+            InstrumentForecastStatus.Stable => CoiUiPalette.Green,
+            InstrumentForecastStatus.Unreliable => CoiUiPalette.Orange,
+            InstrumentForecastStatus.Moving => CoiUiPalette.Yellow,
+            _ => CoiUiPalette.TextMuted,
+        };
+    }
+
+    private static string HistorianEtaCaption(
+        bool hasForecast,
+        InstrumentForecastResult forecast)
+    {
+        if (!hasForecast)
+        {
+            return UnmaText.Get("ui.historian.eta", "ETA");
+        }
+        return forecast.Direction switch
+        {
+            InstrumentForecastDirection.Rising => UnmaText.Get(
+                "ui.historian.eta_to_max",
+                "ETA → SCALE MAX"),
+            InstrumentForecastDirection.Falling => UnmaText.Get(
+                "ui.historian.eta_to_min",
+                "ETA → SCALE MIN"),
+            _ => UnmaText.Get("ui.historian.eta", "ETA"),
+        };
+    }
+
+    private static string HistorianEtaLabel(
+        InstrumentForecastResult forecast)
+    {
+        return forecast.EtaStatus switch
+        {
+            InstrumentForecastEtaStatus.Available => UnmaText.Format(
+                "ui.historian.eta.available",
+                "AVAILABLE · {0}",
+                FormatGameDuration(forecast.EtaTicks)),
+            InstrumentForecastEtaStatus.BeyondHorizon => UnmaText.Get(
+                "ui.historian.eta.beyond_horizon",
+                "BEYOND HORIZON · > 100 YEARS"),
+            _ => UnmaText.Get("ui.historian.eta.none", "NONE"),
+        };
+    }
+
+    private static string FormatGameDuration(double ticks)
+    {
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerYear)
+        {
+            return UnmaText.Format(
+                "ui.historian.duration.years",
+                "{0} YEARS",
+                FormatDurationNumber(
+                    ticks / GameTimeWindowPolicy.SimTicksPerYear));
+        }
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerMonth)
+        {
+            return UnmaText.Format(
+                "ui.historian.duration.months",
+                "{0} MONTHS",
+                FormatDurationNumber(
+                    ticks / GameTimeWindowPolicy.SimTicksPerMonth));
+        }
+        if (ticks >= GameTimeWindowPolicy.SimTicksPerDay)
+        {
+            return UnmaText.Format(
+                "ui.historian.duration.days",
+                "{0} DAYS",
+                FormatDurationNumber(
+                    ticks / GameTimeWindowPolicy.SimTicksPerDay));
+        }
+        return UnmaText.Format(
+            "ui.historian.duration.ticks",
+            "{0} TICKS",
+            FormatDurationNumber(Math.Max(0d, ticks)));
+    }
+
+    private static string FormatDurationNumber(double value) =>
+        value.ToString(
+            value >= 100d ? "0" : "0.##",
+            CultureInfo.CurrentCulture);
+
+    private static string FormatMeasurement(double value, string unit) =>
+        FormatValue(value) + (string.IsNullOrWhiteSpace(unit)
+            ? string.Empty
+            : " " + unit);
+
+    private static string FormatRatePerMonth(double value, string unit)
+    {
+        var formatted = value.ToString(
+            Math.Abs(value) >= 1000d ? "+0;-0;0" : "+0.###;-0.###;0",
+            CultureInfo.CurrentCulture);
+        return formatted + (string.IsNullOrWhiteSpace(unit)
+                   ? string.Empty
+                   : " " + unit) + " / " +
+               UnmaText.Get("ui.historian.month_short", "MO");
     }
 
     private static void DrawEdgewise(
@@ -596,9 +787,9 @@ internal static class InstrumentPanelRenderer
         NativeGUI.Label(Inset(rect, 4f), FormatValue(value) + " " + definition.Unit, style);
     }
 
-    private static void DrawArchiveTrace(
+    private static void DrawHistorianTrace(
         Rect rect,
-        RecorderArchiveTrace trace,
+        HistorianTrace trace,
         Color color)
     {
         if (trace == null || trace.Count == 0)

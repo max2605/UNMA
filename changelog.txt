@@ -1,3 +1,91 @@
+v0.10.0 | 2026-08-11
+Consolidated operations release
+* Consolidated and stabilized the complete 0.9.19 through 0.9.26 feature line: operator keybinds, history search/export, atomic panel cloning, persistent timing and hysteresis, per-slot audio snooze, escalation and safe operator attention, Historian forecasting, operational areas, and the read-only Incident Lens.
+* Suppressed every optional Keybind Framework action while a native UNMA text field owns focus, preventing rebound letter keys from triggering operator actions during text entry.
+* Added viewport-bounded scale-aware minimum sizes for the main window, editor, and detached panels so their usable logical workspace remains intact at 200 percent.
+* Added a fail-safe for schema 21 or newer: the main configuration plus backup, temporary, and broken-file artifacts remain untouched, and writes stay blocked for the session instead of dropping unknown future fields.
+* Kept the public extension API and assembly binding on V1 and the persistence model on schema 20; no migration is required for 0.10.0.
+* Passed the warning-free Release build, 125,569 core assertions, and all IL/reflection, localization, rollback, and package checks.
+* Intentionally advanced directly from 0.9.26 to 0.10.0; no 0.9.27 release was published.
+
+v0.9.26 | 2026-08-11
+Incident Lens and alarm pressure
+* Added a dashboard-only Incident Lens that groups active alarms by a two-game-day temporal burst heuristic.
+* Labeled the earliest member as FIRST SIGNAL without claiming a confirmed cause or root cause.
+* Kept incident clusters within ALL, UNASSIGNED, or the selected operational area while deriving one global ten-game-day weighted pressure level: NORMAL, ELEVATED, STORM, or SEVERE.
+* Added recent-occurrence and distinct-alarm counts plus an expanded view capped at six incident cards and eight visible members per card.
+* Made member focus a read-only navigation action with no acknowledgement, hiding, audio, history, or alarm-state mutation.
+* Added a revision-bound immutable history cache over the newest 8,192 occurrences; unchanged frames do not rescan history, sorting plus analysis run outside the alarm lock, and continuous revisions fall back to a coherent uncached snapshot after at most two attempts.
+* Kept every result transient and derived from current snapshots, with no persisted result fields or new schema migration.
+
+v0.9.25 | 2026-08-11
+Operational alarm areas
+* Added user-defined areas that group global panels without changing alarm state, history, historian data, or audio behavior.
+* Added ALL, UNASSIGNED, and concrete area filters for the panel bar and HOME; filtered HOME deduplicates active alarm tiles from its member panels.
+* Added area-scoped acknowledgement and next-alarm navigation while keeping MASTER ACK explicitly global.
+* Kept acknowledgement on the underlying global alarm state, so one alarm visible in several areas becomes acknowledged everywhere without duplicate history.
+* Made area create, rename, reorder, and delete one atomic draft; deleting an area only moves its panels to UNASSIGNED.
+* Added area assignment to panel settings, source-area inheritance for panel clones, and concrete-current-area inheritance for new panels.
+* Protected unsaved panel and area drafts and stacked narrow or 200-percent layouts without hiding required controls.
+* Migrated schema 20 with existing panels UNASSIGNED and the prior ALL behavior unchanged.
+
+v0.9.24 | 2026-08-10
+Instrument historian and directed ETA
+* Added HIST to every instrument type with shared game-time ranges from one day through the complete session history.
+* Added current, minimum, average, maximum, linear rate per game month, and R-squared fit statistics.
+* Added reliable rising/falling ETA toward the configured scale maximum or minimum, with explicit insufficient, stable, unreliable, and beyond-100-years states.
+* Kept chart and forecast on one coherent runtime snapshot and the same inclusive time window.
+* Started a fresh session-history epoch on every game-clock rollback so future-timeline samples cannot contaminate analysis.
+
+v0.9.23 | 2026-08-10
+Escalation and operator attention
+* Added one-shot, game-time custom-alarm escalation to a strictly higher severity with an optional inherited or explicit sound.
+* Started a new alarm occurrence on escalation so acknowledgement and occurrence-bound audio snooze reset correctly.
+* Added safe operator actions to custom escalation and system-stage transitions.
+* Limited actions to opening and scrolling the matching UNMA panel, with an option to end only the temporary five-minute mute.
+* Added a bounded, deterministic attention queue with exact occurrence pruning and no camera, machine, global-audio, or per-slot-snooze mutation.
+* Migrated schema 19 with disabled defaults while preserving all schema-18 timing memories.
+
+v0.9.22 | 2026-08-10
+Alarm timing
+* Added per-rule and per-system-stage activation delay, reset delay, and minimum active time on the COI game calendar.
+* Added per-condition hysteresis for every numeric comparison, with immediate legacy defaults.
+* Persisted running timers and condition latches so save/load and display-only edits do not create artificial alarm transitions.
+
+Operator audio control
+* Added per-slot audio snooze for one game month with an explicit resume action.
+* Kept snooze independent from acknowledgement, visibility, counters, sound assignment, and history.
+* Applied snooze and resume to every real occurrence represented by aggregated object slots.
+
+v0.9.21 | 2026-08-10
+Panel workflows
+* Added safe duplication of global panels with columns, filters, automatic sources, exclusions, and stable slot order.
+* Deep-copied assigned custom alarms to collision-free IDs and left every clone disabled for deliberate review.
+* Kept live alarm state, history, links, dashboards, and entity panels outside the copy operation.
+* Made the operation atomic with rollback on persistence failure and explicit reporting for skipped orphan rule slots.
+
+v0.9.20 | 2026-08-10
+History 2.0
+* Added free-text search across message, detail, source, panel, and alarm ID.
+* Added combinable state and severity filters with stable newest-first ordering.
+* Added game-time stamps for alarm raise, clear, and acknowledgement events.
+* Added filtered RFC 4180 CSV and JSON export to the local UNMA exports folder.
+
+Compatibility and groundwork
+* Kept legacy history entries readable and normalized malformed time values.
+* Added a tested game-tick timing policy with legacy-compatible immediate defaults.
+
+v0.9.19 | 2026-08-10
+Operator controls
+* Added per-slot, per-panel, and global acknowledgement without mutating projected UI copies.
+* Added cyclic next-alarm navigation with panel scrolling and object focus where available.
+* Added optional Keybind Framework 2.0.2 integration for primary and secondary shortcuts.
+* Added a five-minute audio mute that preserves alarm and acknowledgement state.
+
+Fixes and tooling
+* Preserved entity metadata while aggregating panel slots so navigation resolves the correct object.
+* Added deterministic, non-deploying package and release-verification scripts plus automated core tests.
+
 v0.9.18 | 2026-08-10
 Native game UI
 * Moved all visible UNMA launcher, window, editor, detached-panel, form, and instrument rendering into Captain of Industry's native UI hierarchy.

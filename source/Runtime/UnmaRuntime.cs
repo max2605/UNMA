@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Runtime.Serialization.Json;
 using System.Threading;
 using Mafi;
 using Mafi.Collections;
@@ -128,6 +131,9 @@ public sealed class UnmaRuntime : IDisposable
         public AlarmHistoryDefinition History;
         public bool WasGone;
         public bool WasAcknowledged;
+        public double WasRaisedAtTicks;
+        public double WasClearedAtTicks;
+        public double WasAcknowledgedAtTicks;
     }
 
     private sealed class ExternalEntityEvaluation
@@ -141,7 +147,55 @@ public sealed class UnmaRuntime : IDisposable
     private sealed class SustainedConditionState
     {
         public string Signature = "";
-        public double StartedAtTicks;
+        public long StartedAtTick;
+    }
+
+    private sealed class AlarmTimingOwnerRuntimeSnapshot
+    {
+        public bool HasState;
+        public AlarmTimingState State;
+        public bool HasConditionLatches;
+        public Dictionary<int, bool> ConditionLatches;
+        public bool HasSignature;
+        public string Signature = "";
+    }
+
+    private sealed class AlarmAreaPanelSnapshot
+    {
+        public PanelDefinition Panel;
+        public HashSet<string> SlotIds;
+    }
+
+    private sealed class AlarmAreaAcknowledgementTarget
+    {
+        public string Key;
+        public long Sequence;
+    }
+
+    private sealed class AlarmIncidentHistoryCapture
+    {
+        public IReadOnlyDictionary<long, double> RaisedAtTicksBySequence;
+        public IReadOnlyList<AlarmOccurrenceSignal> RecentSignals;
+    }
+
+    private readonly struct AlarmIncidentHistoryRow
+    {
+        public string Key { get; }
+        public AlarmSeverity Severity { get; }
+        public long Sequence { get; }
+        public double RaisedAtTicks { get; }
+
+        public AlarmIncidentHistoryRow(
+            string key,
+            AlarmSeverity severity,
+            long sequence,
+            double raisedAtTicks)
+        {
+            Key = key;
+            Severity = severity;
+            Sequence = sequence;
+            RaisedAtTicks = raisedAtTicks;
+        }
     }
 
     private static readonly string[] s_emergencyNotificationTokens =
@@ -188,6 +242,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_removedEntitiesGate = new();
     private readonly object m_notificationEntityAliasesGate = new();
     private readonly object m_instrumentValuesGate = new();
+    private readonly object m_alarmTimingGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
     private readonly TransportsManager m_transportsManager;
@@ -227,14 +282,65 @@ public sealed class UnmaRuntime : IDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<InstrumentValueSample>>
         m_instrumentHistory = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InstrumentForecastRange>
+        m_instrumentForecastRanges = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> m_instrumentSignatures =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, SustainedConditionState>
         m_sustainedConditionStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AlarmTimingState>
+        m_ruleTimingStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, bool>>
+        m_ruleConditionLatches = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> m_ruleTimingSignatures =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AlarmTimingState>
+        m_systemStageTimingStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, bool>>
+        m_systemStageConditionLatches = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> m_systemStageTimingSignatures =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AlarmAudioSnoozeState>
+        m_alarmAudioSnoozes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> m_escalatedRuleIds =
+        new(StringComparer.Ordinal);
+    private readonly List<AlarmAttentionRequest> m_attentionRequests = new();
+    private double m_lastInstrumentCaptureTimestampTicks;
 
     private const int MaximumInstrumentHistorySamples = 100000;
+    private const int MaximumAlarmIncidentHistoryCaptureAttempts = 2;
     private const double InstrumentHistorySampleIntervalTicks =
         GameTimeWindowPolicy.SimTicksPerDay;
+
+    private readonly struct InstrumentForecastRange
+    {
+        public double Minimum { get; }
+        public double Maximum { get; }
+
+        public InstrumentForecastRange(double minimum, double maximum)
+        {
+            Minimum = minimum;
+            Maximum = maximum;
+        }
+    }
+
+    private static bool IsInstrumentForecastSampleInWindow(
+        double sampleTimestampTicks,
+        double currentTimestampTicks,
+        int windowTicks)
+    {
+        if (sampleTimestampTicks > currentTimestampTicks)
+        {
+            return false;
+        }
+        return windowTicks <= 0 ||
+               sampleTimestampTicks >= currentTimestampTicks - windowTicks;
+    }
+
+    private static bool DidInstrumentClockRollBack(
+        double currentTimestampTicks,
+        double previousTimestampTicks) =>
+        currentTimestampTicks < previousTimestampTicks;
 
     private sealed class NotificationEntityAlias
     {
@@ -245,6 +351,8 @@ public sealed class UnmaRuntime : IDisposable
 
     private long m_sequence;
     private long m_alarmHistoryRevision;
+    private long m_alarmIncidentHistoryCaptureRevision = -1;
+    private AlarmIncidentHistoryCapture m_alarmIncidentHistoryCapture;
     private long m_nextEvaluationTimestamp;
     private long m_nextEvaluationErrorLogTimestamp;
     private long m_externalDefinitionRevision;
@@ -267,6 +375,7 @@ public sealed class UnmaRuntime : IDisposable
     public UnmaConfiguration Configuration { get; }
     public UnmaSettings Settings => m_settings;
     public string LastPersistenceError { get; private set; } = "";
+    public PanelCloneFailure LastPanelCloneFailure { get; private set; }
 
     public UnmaRuntime(
         INotificationsManager notificationsManager,
@@ -306,9 +415,14 @@ public sealed class UnmaRuntime : IDisposable
             .ToArray();
         m_settings = settings ?? new UnmaSettings();
         Configuration = store.Load();
+        if (store.IsWriteBlocked)
+        {
+            LastPersistenceError = store.WriteBlockReason;
+        }
         RefreshDisabledVanillaOverrideIds();
         RestoreAlarmHistory();
         RestoreAlarmMemories();
+        RestoreAlarmTimingStates();
         foreach (var key in m_alarms
                      .Where(pair => string.Equals(
                          pair.Value.View.Source,
@@ -397,7 +511,8 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     closedSuppressedHistory |= history.SetState(
                         isGone: true,
-                        isAcknowledged: true);
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                 }
                 continue;
             }
@@ -448,6 +563,221 @@ public sealed class UnmaRuntime : IDisposable
         if (closedSuppressedHistory)
         {
             m_alarmHistoryRevision++;
+        }
+    }
+
+    private void RestoreAlarmTimingStates()
+    {
+        AlarmView[] restoredActiveAlarms;
+        lock (m_gate)
+        {
+            restoredActiveAlarms = m_alarms.Values
+                .Where(state => state.View.IsActive)
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+
+        AlarmRuleDefinition[] rules;
+        SystemAlarmDefinition[] systemAlarms;
+        AlarmTimingMemoryDefinition[] timingMemories;
+        lock (m_configurationGate)
+        {
+            rules = Configuration.Rules
+                .Where(rule => rule != null)
+                .Select(CloneRuleForEvaluation)
+                .ToArray();
+            systemAlarms = Configuration.SystemAlarms
+                .Where(alarm => alarm != null)
+                .Select(CloneSystemAlarmForEditing)
+                .ToArray();
+            timingMemories = Configuration.AlarmTimingMemories
+                .Where(memory => memory != null)
+                .Select(AlarmTimingMemoryPolicy.CloneMemory)
+                .ToArray();
+        }
+
+        var memoryByOwner = timingMemories
+            .GroupBy(memory => memory.OwnerKey ?? "", StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last(),
+                StringComparer.Ordinal);
+        var currentGameTick = CurrentGameTick;
+        lock (m_alarmTimingGate)
+        {
+            m_ruleTimingStates.Clear();
+            m_ruleConditionLatches.Clear();
+            m_ruleTimingSignatures.Clear();
+            m_systemStageTimingStates.Clear();
+            m_systemStageConditionLatches.Clear();
+            m_systemStageTimingSignatures.Clear();
+            m_escalatedRuleIds.Clear();
+
+            foreach (var rule in rules.Where(rule => rule.Enabled))
+            {
+                var ownerKey = AlarmTimingMemoryPolicy.RuleOwnerKey(rule.Id);
+                var signature =
+                    AlarmTimingMemoryPolicy.RuleDefinitionSignature(rule);
+                if (!memoryByOwner.TryGetValue(ownerKey, out var memory) ||
+                    !AlarmTimingMemoryPolicy.TryRestore(
+                        memory,
+                        ownerKey,
+                        signature,
+                        rule.Conditions?.Count ?? 0,
+                        out var state,
+                        out var latches))
+                {
+                    continue;
+                }
+                m_ruleTimingStates[rule.Id] = state;
+                m_ruleConditionLatches[rule.Id] = latches;
+                m_ruleTimingSignatures[rule.Id] = signature;
+            }
+
+            foreach (var alarm in systemAlarms.Where(alarm => alarm.Enabled))
+            {
+                for (var stageIndex = 0;
+                     stageIndex < alarm.Stages.Count;
+                     stageIndex++)
+                {
+                    var stage = alarm.Stages[stageIndex];
+                    if (stage == null || !stage.Enabled)
+                    {
+                        continue;
+                    }
+                    var ownerKey = AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+                        alarm.Id,
+                        stage.Id,
+                        stageIndex);
+                    var signature = AlarmTimingMemoryPolicy
+                        .SystemStageDefinitionSignature(stage);
+                    if (!memoryByOwner.TryGetValue(ownerKey, out var memory) ||
+                        !AlarmTimingMemoryPolicy.TryRestore(
+                            memory,
+                            ownerKey,
+                            signature,
+                            stage.Conditions?.Count ?? 0,
+                            out var state,
+                            out var latches))
+                    {
+                        continue;
+                    }
+                    var stageKey = SystemStageTimingKey(
+                        alarm.Id,
+                        stage.Id,
+                        stageIndex);
+                    m_systemStageTimingStates[stageKey] = state;
+                    m_systemStageConditionLatches[stageKey] = latches;
+                    m_systemStageTimingSignatures[stageKey] = signature;
+                }
+            }
+
+            // Schema-17 saves have no timing memory. Preserve an already
+            // active annunciation and seed its latches on the active side of
+            // the Schmitt trigger, so the first poll cannot clear it merely
+            // because its value is currently inside the dead band.
+            foreach (var view in restoredActiveAlarms)
+            {
+                if (string.Equals(
+                        view.Source,
+                        "custom",
+                        StringComparison.Ordinal) &&
+                    (PanelTopologyPolicy.TryGetRuleId(
+                         view.Key,
+                         out var ruleId) ||
+                     PanelTopologyPolicy.TryGetRuleId(
+                         view.SlotId,
+                         out ruleId)))
+                {
+                    var rule = rules.FirstOrDefault(candidate =>
+                        candidate.Enabled && string.Equals(
+                            candidate.Id,
+                            ruleId,
+                            StringComparison.Ordinal));
+                    if (rule != null &&
+                        (!m_ruleTimingStates.TryGetValue(
+                             ruleId,
+                             out var state) ||
+                         !state.IsActive))
+                    {
+                        m_ruleTimingStates[ruleId] =
+                            AlarmTimingState.ActiveAt(currentGameTick);
+                        m_ruleConditionLatches[ruleId] =
+                            AlarmTimingPolicy.CreateActiveConditionLatches(
+                                rule.Conditions?.Count ?? 0);
+                        m_ruleTimingSignatures[ruleId] =
+                            AlarmTimingMemoryPolicy
+                                .RuleDefinitionSignature(rule);
+                    }
+                    if (rule != null &&
+                        AlarmEscalationPolicy.IsEscalatedOccurrenceId(
+                            rule.Id,
+                            view.OccurrenceId) &&
+                        AlarmEscalationPolicy.Normalize(
+                            rule.Escalation,
+                            rule.Severity).Enabled)
+                    {
+                        // Escalation memory is deliberately runtime-only.
+                        // Restore it exclusively from the exact active
+                        // occurrence so a base occurrence can never inherit
+                        // a stale escalation latch from severity or priority.
+                        m_escalatedRuleIds.Add(rule.Id);
+                    }
+                    continue;
+                }
+
+                if (!string.Equals(
+                        view.Source,
+                        "system",
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                var alarm = systemAlarms.FirstOrDefault(candidate =>
+                    candidate.Enabled &&
+                    (string.Equals(
+                         candidate.Id,
+                         view.Key,
+                         StringComparison.Ordinal) ||
+                     string.Equals(
+                         candidate.Id,
+                         view.OverrideId,
+                         StringComparison.Ordinal)));
+                if (alarm == null)
+                {
+                    continue;
+                }
+                var restoredStageIndex = AlarmTimingMemoryPolicy
+                    .FindRestoredSystemStageIndex(
+                        alarm.Stages,
+                        view.OccurrenceId,
+                        view.OccurrencePriority,
+                        view.Severity);
+                if (restoredStageIndex < 0)
+                {
+                    continue;
+                }
+                var restoredStage = alarm.Stages[restoredStageIndex];
+                var stageKey = SystemStageTimingKey(
+                    alarm.Id,
+                    restoredStage.Id,
+                    restoredStageIndex);
+                if (!m_systemStageTimingStates.TryGetValue(
+                        stageKey,
+                        out var stageState) ||
+                    !stageState.IsActive)
+                {
+                    m_systemStageTimingStates[stageKey] =
+                        AlarmTimingState.ActiveAt(currentGameTick);
+                    m_systemStageConditionLatches[stageKey] =
+                        AlarmTimingPolicy.CreateActiveConditionLatches(
+                            restoredStage.Conditions?.Count ?? 0);
+                    m_systemStageTimingSignatures[stageKey] =
+                        AlarmTimingMemoryPolicy
+                            .SystemStageDefinitionSignature(
+                                restoredStage);
+                }
+            }
         }
     }
 
@@ -1333,16 +1663,27 @@ public sealed class UnmaRuntime : IDisposable
 
     private void Evaluate()
     {
-        var settings = m_settings;
-        var systemMetrics = CaptureSystemMetrics();
-        var instrumentValues = CaptureInstrumentValues();
-        if (settings.EnableSystemAlarms)
+        BeginAlarmPersistenceBatch();
+        try
         {
-            EvaluateSystemAlarms(systemMetrics);
+            var settings = m_settings;
+            var systemMetrics = CaptureSystemMetrics();
+            var instrumentValues = CaptureInstrumentValues();
+            if (settings.EnableSystemAlarms)
+            {
+                EvaluateSystemAlarms(systemMetrics);
+            }
+            EvaluateSustainedVanillaAlarms();
+            EvaluateCustomRules(systemMetrics, instrumentValues);
+            EvaluateExternalAlarms();
         }
-        EvaluateSustainedVanillaAlarms();
-        EvaluateCustomRules(systemMetrics, instrumentValues);
-        EvaluateExternalAlarms();
+        finally
+        {
+            if (EndAlarmPersistenceBatch())
+            {
+                PersistAlarmState();
+            }
+        }
     }
 
     public IReadOnlyList<AlarmView> GetViews(PanelDefinition panel)
@@ -1419,6 +1760,352 @@ public sealed class UnmaRuntime : IDisposable
         return PanelSlotProjection.Project(slots, candidates);
     }
 
+    public bool TryGetDashboardViews(
+        AlarmAreaFilter filter,
+        out IReadOnlyList<AlarmView> views)
+    {
+        views = Array.Empty<AlarmView>();
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
+        if (!TryCaptureAlarmAreaProjection(
+                filter,
+                disabledVanillaOverrideIds,
+                out var normalizedFilter,
+                out var dashboard,
+                out var panels,
+                out var vanillaRules))
+        {
+            return false;
+        }
+
+        if (normalizedFilter.Kind == AlarmAreaFilterKind.All)
+        {
+            views = GetViews(dashboard);
+            return true;
+        }
+
+        AlarmView[] activeCandidates;
+        lock (m_gate)
+        {
+            activeCandidates = m_alarms.Values
+                .Where(state => state.View.IsActive)
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+        views = ProjectActiveDashboardArea(activeCandidates.Where(candidate =>
+            panels.Any(panel => IsAlarmVisibleOnAreaPanel(
+                candidate,
+                panel,
+                vanillaRules))));
+        return true;
+    }
+
+    public bool TryGetAlarmIncidentSnapshot(
+        AlarmAreaFilter filter,
+        out AlarmIncidentSnapshot snapshot)
+    {
+        snapshot = null;
+
+        // Read the game clock exactly once before taking any UNMA monitor.
+        // The pure policy can then reject an invalid or rolled-back timeline
+        // without reaching back into Mafi while snapshots are being analyzed.
+        var currentGameTick = CurrentGameTicks;
+        if (!TryGetDashboardViews(filter, out var scopedViews))
+        {
+            return false;
+        }
+
+        var activeSamples = new List<AlarmIncidentActiveSample>(
+            Math.Min(
+                scopedViews.Count,
+                AlarmIncidentPolicy.MaximumActiveSamples));
+        var historyCapture = GetAlarmIncidentHistoryCapture();
+
+        foreach (var view in scopedViews)
+        {
+            if (view == null)
+            {
+                continue;
+            }
+            var historyRaisedAtTicks = 0d;
+            var hasExactHistory = view.Sequence > 0 &&
+                historyCapture.RaisedAtTicksBySequence.TryGetValue(
+                    view.Sequence,
+                    out historyRaisedAtTicks);
+            var activeSample = CreateAlarmIncidentActiveSample(
+                view,
+                hasExactHistory ? view.Sequence : 0L,
+                historyRaisedAtTicks,
+                currentGameTick);
+            if (activeSample != null)
+            {
+                activeSamples.Add(activeSample);
+            }
+        }
+
+        snapshot = AlarmIncidentPolicy.Analyze(
+            activeSamples,
+            historyCapture.RecentSignals,
+            currentGameTick);
+        return true;
+    }
+
+    private static AlarmIncidentActiveSample
+        CreateAlarmIncidentActiveSample(
+            AlarmView view,
+            long historySequence,
+            double historyRaisedAtTicks,
+            double currentGameTick)
+    {
+        if (view == null)
+        {
+            return null;
+        }
+        var hasExactHistory = view.Sequence > 0 &&
+            view.Sequence == historySequence &&
+            !double.IsNaN(historyRaisedAtTicks) &&
+            !double.IsInfinity(historyRaisedAtTicks) &&
+            historyRaisedAtTicks >= 0d &&
+            historyRaisedAtTicks <= currentGameTick;
+        var raisedAtTicks = hasExactHistory
+            ? historyRaisedAtTicks
+            : currentGameTick;
+        return new AlarmIncidentActiveSample(
+            view.Key,
+            PanelSlotProjection.StableAlarmId(view),
+            view.Name,
+            view.Detail,
+            view.Source,
+            view.PanelId,
+            view.SlotId,
+            view.EntityId,
+            view.EntityPrototypeId,
+            view.EntityTitle,
+            view.Severity,
+            view.Sequence,
+            raisedAtTicks,
+            view.IsAcknowledged);
+    }
+
+    private AlarmIncidentHistoryCapture GetAlarmIncidentHistoryCapture()
+    {
+        AlarmIncidentHistoryCapture latestCapture = null;
+        for (var attempt = 0;
+             attempt < MaximumAlarmIncidentHistoryCaptureAttempts;
+             attempt++)
+        {
+            long revision;
+            AlarmIncidentHistoryRow[] rows;
+            lock (m_gate)
+            {
+                if (m_alarmIncidentHistoryCapture != null &&
+                    m_alarmIncidentHistoryCaptureRevision ==
+                    m_alarmHistoryRevision)
+                {
+                    return m_alarmIncidentHistoryCapture;
+                }
+                revision = m_alarmHistoryRevision;
+                rows = m_alarmHistory
+                    .Where(item => item != null)
+                    .Select(item => new AlarmIncidentHistoryRow(
+                        item.AlarmKey,
+                        item.Severity,
+                        item.Sequence,
+                        item.RaisedAtTicks))
+                    .ToArray();
+            }
+
+            // Sorting and immutable-map construction are deliberately outside
+            // the alarm monitor. A racing history mutation changes the
+            // revision and causes this optimistic capture to retry at most
+            // once. A second race returns the coherent local result without
+            // caching it so the render path always makes progress.
+            latestCapture = BuildAlarmIncidentHistoryCapture(rows);
+            lock (m_gate)
+            {
+                if (revision != m_alarmHistoryRevision)
+                {
+                    continue;
+                }
+                m_alarmIncidentHistoryCapture = latestCapture;
+                m_alarmIncidentHistoryCaptureRevision = revision;
+                return latestCapture;
+            }
+        }
+        return latestCapture ?? BuildAlarmIncidentHistoryCapture(
+            Array.Empty<AlarmIncidentHistoryRow>());
+    }
+
+    private static AlarmIncidentHistoryCapture
+        BuildAlarmIncidentHistoryCapture(
+            IReadOnlyList<AlarmIncidentHistoryRow> rows)
+    {
+        var raisedAtTicksBySequence = new Dictionary<long, double>();
+        if (rows != null)
+        {
+            for (var index = 0; index < rows.Count; index++)
+            {
+                var row = rows[index];
+                if (row.Sequence > 0 &&
+                    !raisedAtTicksBySequence.ContainsKey(row.Sequence))
+                {
+                    raisedAtTicksBySequence.Add(
+                        row.Sequence,
+                        row.RaisedAtTicks);
+                }
+            }
+        }
+        var recentSignals = (rows ??
+                Array.Empty<AlarmIncidentHistoryRow>())
+            .OrderByDescending(row => row.Sequence)
+            .Take(AlarmIncidentPolicy.MaximumOccurrenceSignals)
+            .Select(row => new AlarmOccurrenceSignal(
+                row.Key,
+                row.Severity,
+                row.Sequence,
+                row.RaisedAtTicks))
+            .ToArray();
+        return new AlarmIncidentHistoryCapture
+        {
+            RaisedAtTicksBySequence =
+                new ReadOnlyDictionary<long, double>(
+                    raisedAtTicksBySequence),
+            RecentSignals = Array.AsReadOnly(recentSignals),
+        };
+    }
+
+    private bool TryCaptureAlarmAreaProjection(
+        AlarmAreaFilter filter,
+        ISet<string> disabledVanillaOverrideIds,
+        out AlarmAreaFilter normalizedFilter,
+        out PanelDefinition dashboard,
+        out AlarmAreaPanelSnapshot[] panels,
+        out VanillaNotificationRule[] vanillaRules)
+    {
+        normalizedFilter = AlarmAreaFilter.All;
+        dashboard = null;
+        panels = Array.Empty<AlarmAreaPanelSnapshot>();
+        vanillaRules = Array.Empty<VanillaNotificationRule>();
+        lock (m_configurationGate)
+        {
+            normalizedFilter = AlarmAreaPolicy.NormalizeFilter(
+                filter,
+                Configuration.AlarmAreas);
+            if (!IsExactAlarmAreaFilter(filter, normalizedFilter))
+            {
+                return false;
+            }
+
+            dashboard = Configuration.Panels.FirstOrDefault(panel =>
+                panel != null && panel.IsDashboard);
+            if (dashboard == null)
+            {
+                return false;
+            }
+            if (normalizedFilter.Kind == AlarmAreaFilterKind.All)
+            {
+                return true;
+            }
+
+            vanillaRules = Configuration.VanillaNotificationRules
+                .Where(rule => rule != null)
+                .Select(CloneVanillaNotificationRule)
+                .ToArray();
+            panels = AlarmAreaPolicy.SelectGlobalPanels(
+                    Configuration.Panels,
+                    normalizedFilter)
+                .Select(panel => CreateAlarmAreaPanelSnapshotLocked(
+                    panel,
+                    disabledVanillaOverrideIds))
+                .ToArray();
+            return true;
+        }
+    }
+
+    private AlarmAreaPanelSnapshot CreateAlarmAreaPanelSnapshotLocked(
+        PanelDefinition panel,
+        ISet<string> disabledVanillaOverrideIds)
+    {
+        return new AlarmAreaPanelSnapshot
+        {
+            Panel = new PanelDefinition
+            {
+                Id = panel.Id,
+                Name = panel.Name,
+                Columns = panel.Columns,
+                IncludeVanilla = panel.IncludeVanilla,
+                IncludeSystem = panel.IncludeSystem,
+                NotificationFilter = panel.NotificationFilter,
+                IsDashboard = panel.IsDashboard,
+                OwnerEntityId = panel.OwnerEntityId,
+                OwnerEntityTitle = panel.OwnerEntityTitle,
+                OwnerEntityPrototypeId = panel.OwnerEntityPrototypeId,
+                OwnerEntityType = panel.OwnerEntityType,
+                AreaId = panel.AreaId,
+            },
+            SlotIds = new HashSet<string>(
+                (panel.Slots ?? new List<PanelSlotDefinition>())
+                .Where(slot =>
+                    slot != null &&
+                    !string.IsNullOrWhiteSpace(slot.AlarmId) &&
+                    IsPersistedSlotAllowedOnPanelLocked(panel, slot) &&
+                    !VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+                        slot,
+                        disabledVanillaOverrideIds))
+                .Select(slot => slot.AlarmId.Trim()),
+                StringComparer.Ordinal),
+        };
+    }
+
+    private bool IsAlarmVisibleOnAreaPanel(
+        AlarmView view,
+        AlarmAreaPanelSnapshot panel,
+        IEnumerable<VanillaNotificationRule> vanillaRules)
+    {
+        if (view == null || panel?.Panel == null ||
+            panel.SlotIds == null ||
+            !panel.SlotIds.Contains(
+                PanelSlotProjection.StableAlarmId(view)))
+        {
+            return false;
+        }
+        return !IsVanillaAlarmHiddenOnPanel(
+            view,
+            vanillaRules,
+            panel.Panel,
+            Array.Empty<int>());
+    }
+
+    private static bool IsExactAlarmAreaFilter(
+        AlarmAreaFilter requested,
+        AlarmAreaFilter normalized)
+    {
+        if (requested.Kind != normalized.Kind)
+        {
+            return false;
+        }
+        return requested.Kind switch
+        {
+            AlarmAreaFilterKind.All => true,
+            AlarmAreaFilterKind.Unassigned => true,
+            AlarmAreaFilterKind.Area =>
+                !string.IsNullOrWhiteSpace(requested.AreaId) &&
+                string.Equals(
+                    requested.AreaId.Trim(),
+                    normalized.AreaId,
+                    StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
+    private static IReadOnlyList<AlarmView> ProjectActiveDashboardArea(
+        IEnumerable<AlarmView> candidates)
+    {
+        return PanelSlotProjection.ProjectActive(
+            (candidates ?? Enumerable.Empty<AlarmView>())
+            .Where(candidate => candidate != null && candidate.IsActive));
+    }
+
     private static AlarmView ProjectAlarmForPanel(
         AlarmView view,
         PanelDefinition panel,
@@ -1444,8 +2131,10 @@ public sealed class UnmaRuntime : IDisposable
 
     public AlarmView GetAudibleAlarm()
     {
+        var currentGameTick = CurrentGameTick;
         if (!Settings.EnableAudio)
         {
+            PruneAlarmAudioSnoozes(currentGameTick);
             return null;
         }
 
@@ -1454,10 +2143,13 @@ public sealed class UnmaRuntime : IDisposable
         var vanillaRules = GetVanillaNotificationRulesSnapshot();
         lock (m_gate)
         {
+            PruneAlarmAudioSnoozesLocked(currentGameTick);
             AlarmState best = null;
             foreach (var candidate in m_alarms.Values)
             {
                 if (!candidate.View.RequiresAcknowledgement ||
+                    m_alarmAudioSnoozes.ContainsKey(
+                        candidate.View.Key ?? "") ||
                     IsSuppressedVanillaAlarm(
                         candidate.View,
                         disabledVanillaOverrideIds) ||
@@ -1481,6 +2173,59 @@ public sealed class UnmaRuntime : IDisposable
                 }
             }
             return best == null ? null : Clone(best.View);
+        }
+    }
+
+    /// <summary>
+    /// Takes the strongest pending presentation request. Requests are
+    /// runtime-only and become stale when their exact occurrence is no
+    /// longer active and unacknowledged. The UI decides how to present the
+    /// request; this method never mutates the simulation or machine state.
+    /// </summary>
+    public bool TryTakeAttentionRequest(
+        out AlarmAttentionRequest request)
+    {
+        lock (m_gate)
+        {
+            return AlarmAttentionQueuePolicy.TryTakeBest(
+                m_attentionRequests,
+                IsAttentionRequestRelevantLocked,
+                out request);
+        }
+    }
+
+    private bool IsAttentionRequestRelevantLocked(
+        AlarmAttentionRequest request)
+    {
+        return m_alarms.TryGetValue(request.AlarmKey, out var alarm) &&
+               alarm.Sequence == request.Sequence &&
+               alarm.View.IsActive &&
+               !alarm.View.IsAcknowledged;
+    }
+
+    private void PruneAlarmAudioSnoozes(long currentGameTick)
+    {
+        lock (m_gate)
+        {
+            PruneAlarmAudioSnoozesLocked(currentGameTick);
+        }
+    }
+
+    private void PruneAlarmAudioSnoozesLocked(long currentGameTick)
+    {
+        foreach (var pair in m_alarmAudioSnoozes.ToArray())
+        {
+            if (!m_alarms.TryGetValue(pair.Key, out var alarm) ||
+                !alarm.View.RequiresAcknowledgement ||
+                !AlarmAudioSnoozePolicy.IsSnoozed(
+                    pair.Value,
+                    alarm.View.Key,
+                    alarm.Sequence,
+                    currentGameTick,
+                    alarm.View.IsActive))
+            {
+                m_alarmAudioSnoozes.Remove(pair.Key);
+            }
         }
     }
 
@@ -1524,6 +2269,591 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public int SnoozeAlarmAudio(
+        string panelId,
+        string slotId,
+        int durationTicks)
+    {
+        if (string.IsNullOrWhiteSpace(slotId) || durationTicks <= 0)
+        {
+            return 0;
+        }
+        var panel = FindPanel(panelId);
+        if (panel == null)
+        {
+            return 0;
+        }
+
+        var currentGameTick = CurrentGameTick;
+        var requestedUntilGameTick =
+            currentGameTick > long.MaxValue - durationTicks
+                ? long.MaxValue
+                : currentGameTick + durationTicks;
+        PruneAlarmAudioSnoozes(currentGameTick);
+        return ApplyToProjectedAlarmStates(
+            panel,
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                slotId.Trim(),
+            },
+            alarm =>
+            {
+                if (!AlarmAudioSnoozePolicy.TryCreateUntilTick(
+                        alarm.View.Key,
+                        alarm.Sequence,
+                        currentGameTick,
+                        requestedUntilGameTick,
+                        out var snooze))
+                {
+                    return false;
+                }
+                m_alarmAudioSnoozes[alarm.View.Key] = snooze;
+                return true;
+            });
+    }
+
+    public int UnsnoozeAlarmAudio(string panelId, string slotId)
+    {
+        if (string.IsNullOrWhiteSpace(slotId))
+        {
+            return 0;
+        }
+        var panel = FindPanel(panelId);
+        if (panel == null)
+        {
+            return 0;
+        }
+
+        PruneAlarmAudioSnoozes(CurrentGameTick);
+        return ApplyToProjectedAlarmStates(
+            panel,
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                slotId.Trim(),
+            },
+            alarm => m_alarmAudioSnoozes.Remove(alarm.View.Key));
+    }
+
+    public bool IsAlarmAudioSnoozed(AlarmView alarm)
+    {
+        if (alarm == null)
+        {
+            return false;
+        }
+        var currentGameTick = CurrentGameTick;
+        lock (m_gate)
+        {
+            PruneAlarmAudioSnoozesLocked(currentGameTick);
+            return m_alarmAudioSnoozes.TryGetValue(
+                       alarm.Key ?? "",
+                       out var snooze) &&
+                   AlarmAudioSnoozePolicy.IsSnoozed(
+                       snooze,
+                       alarm.Key,
+                       alarm.Sequence,
+                       currentGameTick,
+                       alarm.IsActive);
+        }
+    }
+
+    public bool IsAlarmAudioSnoozed(string panelId, string slotId)
+    {
+        if (string.IsNullOrWhiteSpace(slotId))
+        {
+            return false;
+        }
+        var panel = FindPanel(panelId);
+        if (panel == null)
+        {
+            return false;
+        }
+
+        var currentGameTick = CurrentGameTick;
+        PruneAlarmAudioSnoozes(currentGameTick);
+        var matchedCount = 0;
+        var snoozedCount = ApplyToProjectedAlarmStates(
+            panel,
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                slotId.Trim(),
+            },
+            alarm =>
+            {
+                matchedCount++;
+                return m_alarmAudioSnoozes.TryGetValue(
+                           alarm.View.Key ?? "",
+                           out var snooze) &&
+                       AlarmAudioSnoozePolicy.IsSnoozed(
+                           snooze,
+                           alarm.View.Key,
+                           alarm.Sequence,
+                           currentGameTick,
+                           alarm.View.IsActive);
+            });
+        return matchedCount > 0 && snoozedCount == matchedCount;
+    }
+
+    public bool AcknowledgeAlarm(string panelId, string slotId)
+    {
+        if (string.IsNullOrWhiteSpace(slotId))
+        {
+            return false;
+        }
+        return AcknowledgeVisible(panelId, new[] { slotId }) > 0;
+    }
+
+    public int AcknowledgePanel(string panelId)
+    {
+        var panel = FindPanel(panelId);
+        return panel == null
+            ? 0
+            : AcknowledgeProjectedSlots(panel, null);
+    }
+
+    public int AcknowledgeVisible(
+        string panelId,
+        IEnumerable<string> slotIds)
+    {
+        if (slotIds == null)
+        {
+            return 0;
+        }
+        var targets = new HashSet<string>(
+            slotIds
+                .Where(slotId => !string.IsNullOrWhiteSpace(slotId))
+                .Select(slotId => slotId.Trim()),
+            StringComparer.Ordinal);
+        if (targets.Count == 0)
+        {
+            return 0;
+        }
+
+        var panel = FindPanel(panelId);
+        return panel == null
+            ? 0
+            : AcknowledgeProjectedSlots(panel, targets);
+    }
+
+    public bool TryAcknowledgeDashboard(
+        AlarmAreaFilter filter,
+        IEnumerable<string> slotIds,
+        out int count)
+    {
+        count = 0;
+        HashSet<string> targetSlotIds = null;
+        if (slotIds != null)
+        {
+            targetSlotIds = new HashSet<string>(
+                slotIds
+                    .Where(slotId => !string.IsNullOrWhiteSpace(slotId))
+                    .Select(slotId => slotId.Trim()),
+                StringComparer.Ordinal);
+        }
+
+        if (filter.Kind == AlarmAreaFilterKind.All)
+        {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
+            if (!TryCaptureAlarmAreaProjection(
+                    filter,
+                    disabledVanillaOverrideIds,
+                    out var normalizedFilter,
+                    out var dashboard,
+                    out _,
+                    out _) ||
+                normalizedFilter.Kind != AlarmAreaFilterKind.All)
+            {
+                return false;
+            }
+            count = targetSlotIds == null
+                ? AcknowledgePanel(dashboard.Id)
+                : AcknowledgeVisible(dashboard.Id, targetSlotIds);
+            return true;
+        }
+
+        lock (m_persistenceGate)
+        {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
+            if (!TryCaptureAlarmAreaProjection(
+                    filter,
+                    disabledVanillaOverrideIds,
+                    out var normalizedFilter,
+                    out _,
+                    out var panels,
+                    out var vanillaRules) ||
+                normalizedFilter.Kind == AlarmAreaFilterKind.All)
+            {
+                return false;
+            }
+            if (targetSlotIds?.Count == 0)
+            {
+                return true;
+            }
+
+            AlarmView[] candidates;
+            lock (m_gate)
+            {
+                candidates = m_alarms.Values
+                    .Where(state =>
+                        CanAcknowledgeFilteredDashboardAlarm(
+                            state.View))
+                    .Select(state => Clone(state.View, state.Sequence))
+                    .ToArray();
+            }
+            var targets = candidates
+                .Where(candidate =>
+                    (targetSlotIds == null || targetSlotIds.Contains(
+                        PanelSlotProjection.StableAlarmId(candidate))) &&
+                    panels.Any(panel => IsAlarmVisibleOnAreaPanel(
+                        candidate,
+                        panel,
+                        vanillaRules)))
+                .Where(candidate =>
+                    !string.IsNullOrWhiteSpace(candidate.Key))
+                .Select(candidate => new AlarmAreaAcknowledgementTarget
+                {
+                    Key = candidate.Key,
+                    Sequence = candidate.Sequence,
+                })
+                .ToArray();
+
+            if (targets.Length == 0)
+            {
+                return true;
+            }
+            lock (m_gate)
+            {
+                foreach (var target in targets)
+                {
+                    if (!m_alarms.TryGetValue(target.Key, out var alarm) ||
+                        alarm.Sequence != target.Sequence ||
+                        !CanAcknowledgeFilteredDashboardAlarm(alarm.View))
+                    {
+                        continue;
+                    }
+                    if (AcknowledgeAlarmStateLocked(alarm))
+                    {
+                        count++;
+                    }
+                }
+                if (count > 0)
+                {
+                    m_alarmHistoryRevision++;
+                }
+            }
+            if (count > 0)
+            {
+                PersistAlarmState();
+            }
+            return true;
+        }
+    }
+
+    private static bool CanAcknowledgeFilteredDashboardAlarm(
+        AlarmView view)
+    {
+        return view != null &&
+               view.IsActive &&
+               view.RequiresAcknowledgement;
+    }
+
+    public bool TryGetNextDashboardUnacknowledged(
+        AlarmAreaFilter filter,
+        string afterSlotId,
+        out AlarmView view)
+    {
+        view = null;
+        if (!TryGetDashboardViews(filter, out var views))
+        {
+            return false;
+        }
+        if (views.Count == 0)
+        {
+            return true;
+        }
+
+        var startIndex = -1;
+        if (!string.IsNullOrWhiteSpace(afterSlotId))
+        {
+            var normalizedAfterSlotId = afterSlotId.Trim();
+            for (var index = 0; index < views.Count; index++)
+            {
+                if (string.Equals(
+                        PanelSlotProjection.StableAlarmId(views[index]),
+                        normalizedAfterSlotId,
+                        StringComparison.Ordinal))
+                {
+                    startIndex = index;
+                    break;
+                }
+            }
+        }
+
+        for (var offset = 1; offset <= views.Count; offset++)
+        {
+            var candidate = views[(startIndex + offset) % views.Count];
+            if (candidate.RequiresAcknowledgement)
+            {
+                view = candidate;
+                break;
+            }
+        }
+        return true;
+    }
+
+    public AlarmView GetNextUnacknowledged(
+        string panelId,
+        string afterSlotId = null)
+    {
+        var panel = FindPanel(panelId);
+        if (panel == null)
+        {
+            return null;
+        }
+
+        var views = GetViews(panel);
+        if (views.Count == 0)
+        {
+            return null;
+        }
+
+        var startIndex = -1;
+        if (!string.IsNullOrWhiteSpace(afterSlotId))
+        {
+            var normalizedAfterSlotId = afterSlotId.Trim();
+            for (var index = 0; index < views.Count; index++)
+            {
+                if (string.Equals(
+                        PanelSlotProjection.StableAlarmId(views[index]),
+                        normalizedAfterSlotId,
+                        StringComparison.Ordinal))
+                {
+                    startIndex = index;
+                    break;
+                }
+            }
+        }
+
+        for (var offset = 1; offset <= views.Count; offset++)
+        {
+            var candidate = views[(startIndex + offset) % views.Count];
+            if (candidate.RequiresAcknowledgement)
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private PanelDefinition FindPanel(string panelId)
+    {
+        if (string.IsNullOrWhiteSpace(panelId))
+        {
+            return null;
+        }
+        var normalizedPanelId = panelId.Trim();
+        lock (m_configurationGate)
+        {
+            return Configuration.Panels.FirstOrDefault(panel =>
+                panel != null && string.Equals(
+                    panel.Id,
+                    normalizedPanelId,
+                    StringComparison.Ordinal));
+        }
+    }
+
+    private string ResolveAttentionPanelId(
+        string preferredPanelId,
+        string slotId)
+    {
+        var normalizedPreferredPanelId = preferredPanelId?.Trim() ?? "";
+        var normalizedSlotId = slotId?.Trim() ?? "";
+        lock (m_configurationGate)
+        {
+            if (normalizedPreferredPanelId.Length > 0 &&
+                Configuration.Panels.Any(panel =>
+                    panel != null && string.Equals(
+                        panel.Id,
+                        normalizedPreferredPanelId,
+                        StringComparison.Ordinal)))
+            {
+                return normalizedPreferredPanelId;
+            }
+
+            var slottedPanel = Configuration.Panels.FirstOrDefault(panel =>
+                panel != null &&
+                !panel.IsDashboard &&
+                (panel.Slots ?? new List<PanelSlotDefinition>()).Any(slot =>
+                    slot != null && string.Equals(
+                        slot.AlarmId,
+                        normalizedSlotId,
+                        StringComparison.Ordinal)));
+            if (slottedPanel != null)
+            {
+                return slottedPanel.Id ?? "";
+            }
+
+            return Configuration.Panels.FirstOrDefault(panel =>
+                       panel != null && panel.IsDashboard)?.Id ??
+                   Configuration.Panels.FirstOrDefault(panel =>
+                       panel != null)?.Id ??
+                   "";
+        }
+    }
+
+    private int AcknowledgeProjectedSlots(
+        PanelDefinition panel,
+        ISet<string> targetSlotIds)
+    {
+        var acknowledgedCount = ApplyToProjectedAlarmStates(
+            panel,
+            targetSlotIds,
+            AcknowledgeAlarmStateLocked,
+            count =>
+            {
+                if (count > 0)
+                {
+                    m_alarmHistoryRevision++;
+                }
+            });
+
+        var prunedExternal = PruneRetiredExternalAlarms();
+        if (acknowledgedCount > 0 || prunedExternal)
+        {
+            PruneInactiveVanillaHistory(500);
+            PersistAlarmState();
+        }
+        return acknowledgedCount;
+    }
+
+    private int ApplyToProjectedAlarmStates(
+        PanelDefinition panel,
+        ISet<string> targetSlotIds,
+        Func<AlarmState, bool> applyLocked,
+        Action<int> completedLocked = null)
+    {
+        if (panel == null || applyLocked == null)
+        {
+            return 0;
+        }
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
+        var vanillaRules = GetVanillaNotificationRulesSnapshot();
+        HashSet<string> panelSlotIds = null;
+        HashSet<int> relatedEntityIds = null;
+        if (!panel.IsDashboard)
+        {
+            lock (m_configurationGate)
+            {
+                panelSlotIds = new HashSet<string>(
+                    (panel.Slots ?? new List<PanelSlotDefinition>())
+                    .Where(slot =>
+                        slot != null &&
+                        IsPersistedSlotAllowedOnPanelLocked(panel, slot) &&
+                        !VanillaNotificationSuppressionPolicy
+                            .IsSlotSuppressed(
+                                slot,
+                                disabledVanillaOverrideIds))
+                    .Select(slot => slot.AlarmId),
+                    StringComparer.Ordinal);
+            }
+            relatedEntityIds = PanelTopologyPolicy.IsEntityPanel(panel)
+                ? GetNotificationChildIds(panel.OwnerEntityId)
+                : new HashSet<int>();
+        }
+
+        var affectedCount = 0;
+        lock (m_gate)
+        {
+            foreach (var alarm in m_alarms.Values)
+            {
+                if (!alarm.View.RequiresAcknowledgement)
+                {
+                    continue;
+                }
+
+                AlarmView projected;
+                if (panel.IsDashboard)
+                {
+                    if (!alarm.View.IsActive ||
+                        IsSuppressedVanillaAlarm(
+                            alarm.View,
+                            disabledVanillaOverrideIds) ||
+                        IsVanillaAlarmHidden(alarm.View, vanillaRules))
+                    {
+                        continue;
+                    }
+                    projected = alarm.View;
+                }
+                else
+                {
+                    var stableAlarmId =
+                        PanelSlotProjection.StableAlarmId(alarm.View);
+                    var belongsToPanel = panelSlotIds.Contains(stableAlarmId) ||
+                        string.Equals(
+                            alarm.View.Source,
+                            "vanilla",
+                            StringComparison.Ordinal) &&
+                        relatedEntityIds.Contains(alarm.View.EntityId);
+                    if (!belongsToPanel ||
+                        IsVanillaAlarmHiddenOnPanel(
+                            alarm.View,
+                            vanillaRules,
+                            panel,
+                            relatedEntityIds))
+                    {
+                        continue;
+                    }
+                    projected = ProjectAlarmForPanel(
+                        Clone(alarm.View, alarm.Sequence),
+                        panel,
+                        relatedEntityIds);
+                    if (!panelSlotIds.Contains(
+                            PanelSlotProjection.StableAlarmId(projected)))
+                    {
+                        continue;
+                    }
+                }
+
+                var projectedSlotId =
+                    PanelSlotProjection.StableAlarmId(projected);
+                if (targetSlotIds != null &&
+                    !targetSlotIds.Contains(projectedSlotId))
+                {
+                    continue;
+                }
+
+                if (applyLocked(alarm))
+                {
+                    affectedCount++;
+                }
+            }
+            completedLocked?.Invoke(affectedCount);
+        }
+        return affectedCount;
+    }
+
+    private bool AcknowledgeAlarmStateLocked(AlarmState alarm)
+    {
+        if (alarm == null || !alarm.View.RequiresAcknowledgement)
+        {
+            return false;
+        }
+
+        if (alarm.View.IsGoneUnacknowledged)
+        {
+            UpdateHistoryFromStateLocked(alarm, true, true);
+            alarm.View.IsGoneUnacknowledged = false;
+            alarm.View.IsAcknowledged = false;
+            return true;
+        }
+
+        alarm.View.IsAcknowledged = true;
+        UpdateHistoryFromStateLocked(alarm, false, true);
+        return true;
+    }
+
     public void AcknowledgeAll()
     {
         var changed = false;
@@ -1533,7 +2863,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 if (!item.IsAcknowledged)
                 {
-                    item.IsAcknowledged = true;
+                    item.SetState(
+                        item.IsGone,
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                     changed = true;
                 }
             }
@@ -1567,23 +2900,24 @@ public sealed class UnmaRuntime : IDisposable
 
     public bool SaveConfiguration()
     {
-        AlarmView[] knownAlarms;
-        lock (m_gate)
-        {
-            knownAlarms = m_alarms.Values
-                .Select(state => Clone(state.View, state.Sequence))
-                .ToArray();
-        }
-        foreach (var alarm in knownAlarms)
-        {
-            EnsurePanelSlotsForAlarm(alarm);
-        }
-
         lock (m_persistenceGate)
         {
+            AlarmView[] knownAlarms;
+            lock (m_gate)
+            {
+                knownAlarms = m_alarms.Values
+                    .Select(state => Clone(state.View, state.Sequence))
+                    .ToArray();
+            }
+            foreach (var alarm in knownAlarms)
+            {
+                EnsurePanelSlotsForAlarm(alarm);
+            }
+
             CapturePersistentAlarmState(
                 out var alarmMemories,
-                out var alarmHistory);
+                out var alarmHistory,
+                out var alarmTimingMemories);
             bool saved;
             string error;
             lock (m_configurationGate)
@@ -1591,6 +2925,7 @@ public sealed class UnmaRuntime : IDisposable
                 SanitizeEntityPanelSlotsLocked();
                 Configuration.AlarmMemories = alarmMemories;
                 Configuration.AlarmHistory = alarmHistory;
+                Configuration.AlarmTimingMemories = alarmTimingMemories;
                 saved = m_store.Save(Configuration, out error);
             }
 
@@ -1607,7 +2942,8 @@ public sealed class UnmaRuntime : IDisposable
 
     private void CapturePersistentAlarmState(
         out List<AlarmMemoryDefinition> alarmMemories,
-        out List<AlarmHistoryDefinition> alarmHistory)
+        out List<AlarmHistoryDefinition> alarmHistory,
+        out List<AlarmTimingMemoryDefinition> alarmTimingMemories)
     {
         lock (m_gate)
         {
@@ -1654,6 +2990,71 @@ public sealed class UnmaRuntime : IDisposable
                 .Select(CloneHistory)
                 .ToList();
         }
+        alarmTimingMemories = CapturePersistentTimingState();
+    }
+
+    private List<AlarmTimingMemoryDefinition> CapturePersistentTimingState()
+    {
+        var memories = new List<AlarmTimingMemoryDefinition>();
+        lock (m_alarmTimingGate)
+        {
+            foreach (var ruleId in m_ruleTimingStates.Keys
+                         .Concat(m_ruleConditionLatches.Keys)
+                         .Concat(m_ruleTimingSignatures.Keys)
+                         .Distinct(StringComparer.Ordinal)
+                         .OrderBy(id => id, StringComparer.Ordinal))
+            {
+                if (!m_ruleTimingStates.TryGetValue(ruleId, out var state) ||
+                    !m_ruleTimingSignatures.TryGetValue(
+                        ruleId,
+                        out var signature))
+                {
+                    continue;
+                }
+                m_ruleConditionLatches.TryGetValue(ruleId, out var latches);
+                var memory = AlarmTimingMemoryPolicy.CreateMemory(
+                    AlarmTimingMemoryPolicy.RuleOwnerKey(ruleId),
+                    signature,
+                    state,
+                    latches);
+                if (memory != null)
+                {
+                    memories.Add(memory);
+                }
+            }
+
+            foreach (var stageKey in m_systemStageTimingStates.Keys
+                         .Concat(m_systemStageConditionLatches.Keys)
+                         .Concat(m_systemStageTimingSignatures.Keys)
+                         .Distinct(StringComparer.Ordinal)
+                         .OrderBy(key => key, StringComparer.Ordinal))
+            {
+                if (!m_systemStageTimingStates.TryGetValue(
+                        stageKey,
+                        out var state) ||
+                    !m_systemStageTimingSignatures.TryGetValue(
+                        stageKey,
+                        out var signature))
+                {
+                    continue;
+                }
+                m_systemStageConditionLatches.TryGetValue(
+                    stageKey,
+                    out var latches);
+                var memory = AlarmTimingMemoryPolicy.CreateMemory(
+                    stageKey,
+                    signature,
+                    state,
+                    latches);
+                if (memory != null)
+                {
+                    memories.Add(memory);
+                }
+            }
+        }
+        return memories
+            .OrderBy(memory => memory.OwnerKey, StringComparer.Ordinal)
+            .ToList();
     }
 
     public long AlarmHistoryRevision
@@ -1882,9 +3283,9 @@ public sealed class UnmaRuntime : IDisposable
         AlarmRuleDefinition updatedRule)
     {
         AlarmRuleDefinition previousRule;
-        Dictionary<PanelDefinition, List<PanelSlotDefinition>>
-            previousPanelSlots;
-        Dictionary<PanelDefinition, List<string>> previousExcludedAlarmIds;
+        AlarmTimingOwnerRuntimeSnapshot previousTiming;
+        UnmaConfiguration configurationSnapshot;
+        bool timingSemanticsChanged;
         var ruleIndex = -1;
         lock (m_configurationGate)
         {
@@ -1898,35 +3299,43 @@ public sealed class UnmaRuntime : IDisposable
                 return false;
             }
             previousRule = Configuration.Rules[ruleIndex];
-            previousPanelSlots = Configuration.Panels.ToDictionary(
-                panel => panel,
-                panel => (panel.Slots ?? new List<PanelSlotDefinition>())
-                    .Select(PanelSlotProjection.CloneSlot)
-                    .ToList());
-            previousExcludedAlarmIds = Configuration.Panels.ToDictionary(
-                panel => panel,
-                panel => (panel.ExcludedAlarmIds ?? new List<string>())
-                    .ToList());
+            try
+            {
+                configurationSnapshot = CloneConfiguration(Configuration);
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration snapshot could not be created.");
+                return false;
+            }
+            previousTiming = CaptureRuleTimingSnapshot(updatedRule.Id);
             Configuration.Rules[ruleIndex] = updatedRule;
+            timingSemanticsChanged = ReconcileRuleTimingDefinition(
+                previousRule,
+                updatedRule);
         }
 
         if (!SaveConfiguration())
         {
             lock (m_configurationGate)
             {
-                Configuration.Rules[ruleIndex] = previousRule;
-                foreach (var pair in previousPanelSlots)
-                {
-                    pair.Key.Slots = pair.Value;
-                }
-                foreach (var pair in previousExcludedAlarmIds)
-                {
-                    pair.Key.ExcludedAlarmIds = pair.Value;
-                }
+                RestoreConfiguration(Configuration, configurationSnapshot);
             }
+            RestoreRuleTimingSnapshot(updatedRule.Id, previousTiming);
+            RestoreConfigurationAlarmSnapshots();
             return false;
         }
 
+        if (timingSemanticsChanged)
+        {
+            RemoveSustainedStatesForRule(updatedRule.Id);
+        }
+        if (!updatedRule.Enabled)
+        {
+            ForceNormal("rule:" + updatedRule.Id);
+        }
         Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
         return true;
     }
@@ -2048,13 +3457,19 @@ public sealed class UnmaRuntime : IDisposable
             }
             CapturePersistentAlarmState(
                 out var restoredMemories,
-                out var restoredHistory);
+                out var restoredHistory,
+                out var restoredTimingMemories);
             lock (m_configurationGate)
             {
                 Configuration.AlarmMemories = restoredMemories;
                 Configuration.AlarmHistory = restoredHistory;
+                Configuration.AlarmTimingMemories = restoredTimingMemories;
             }
             return false;
+        }
+        foreach (var removedRule in removedRules)
+        {
+            InvalidateRuleTiming(removedRule.Id);
         }
         removedCount = removedRules.Length;
         return true;
@@ -2062,8 +3477,19 @@ public sealed class UnmaRuntime : IDisposable
 
     public bool SetRuleEnabled(string ruleId, bool enabled)
     {
+        lock (m_persistenceGate)
+        {
+            return SetRuleEnabledWithPersistenceLock(ruleId, enabled);
+        }
+    }
+
+    private bool SetRuleEnabledWithPersistenceLock(
+        string ruleId,
+        bool enabled)
+    {
         AlarmRuleDefinition rule;
         bool previous;
+        UnmaConfiguration configurationSnapshot;
         lock (m_configurationGate)
         {
             rule = Configuration.Rules.FirstOrDefault(
@@ -2076,6 +3502,21 @@ public sealed class UnmaRuntime : IDisposable
                 return false;
             }
             previous = rule.Enabled;
+            if (previous == enabled)
+            {
+                return true;
+            }
+            try
+            {
+                configurationSnapshot = CloneConfiguration(Configuration);
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration snapshot could not be created.");
+                return false;
+            }
             rule.Enabled = enabled;
         }
 
@@ -2083,11 +3524,13 @@ public sealed class UnmaRuntime : IDisposable
         {
             lock (m_configurationGate)
             {
-                rule.Enabled = previous;
+                RestoreConfiguration(Configuration, configurationSnapshot);
             }
+            RestoreConfigurationAlarmSnapshots();
             return false;
         }
 
+        InvalidateRuleTiming(ruleId);
         if (!enabled)
         {
             ForceNormal("rule:" + ruleId);
@@ -2124,7 +3567,19 @@ public sealed class UnmaRuntime : IDisposable
             return false;
         }
 
+        lock (m_persistenceGate)
+        {
+            return UpdateSystemAlarmWithPersistenceLock(updatedAlarm);
+        }
+    }
+
+    private bool UpdateSystemAlarmWithPersistenceLock(
+        SystemAlarmDefinition updatedAlarm)
+    {
+
         SystemAlarmDefinition previousAlarm;
+        Dictionary<string, AlarmTimingOwnerRuntimeSnapshot> previousTiming;
+        UnmaConfiguration configurationSnapshot;
         var alarmIndex = -1;
         var replacement = CloneSystemAlarmForEditing(updatedAlarm);
         lock (m_configurationGate)
@@ -2139,15 +3594,35 @@ public sealed class UnmaRuntime : IDisposable
                 return false;
             }
             previousAlarm = Configuration.SystemAlarms[alarmIndex];
+            try
+            {
+                configurationSnapshot = CloneConfiguration(Configuration);
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration snapshot could not be created.");
+                return false;
+            }
+            previousTiming = CaptureSystemAlarmTimingSnapshot(
+                updatedAlarm.Id);
             Configuration.SystemAlarms[alarmIndex] = replacement;
+            ReconcileSystemAlarmTimingDefinition(
+                previousAlarm,
+                replacement);
         }
 
         if (!SaveConfiguration())
         {
             lock (m_configurationGate)
             {
-                Configuration.SystemAlarms[alarmIndex] = previousAlarm;
+                RestoreConfiguration(Configuration, configurationSnapshot);
             }
+            RestoreSystemAlarmTimingSnapshot(
+                replacement.Id,
+                previousTiming);
+            RestoreConfigurationAlarmSnapshots();
             return false;
         }
 
@@ -2358,13 +3833,19 @@ public sealed class UnmaRuntime : IDisposable
             }
             CapturePersistentAlarmState(
                 out var restoredMemories,
-                out var restoredHistory);
+                out var restoredHistory,
+                out var restoredTimingMemories);
             lock (m_configurationGate)
             {
                 Configuration.AlarmMemories = restoredMemories;
                 Configuration.AlarmHistory = restoredHistory;
+                Configuration.AlarmTimingMemories = restoredTimingMemories;
             }
             return false;
+        }
+        foreach (var removedRule in removedRules)
+        {
+            InvalidateRuleTiming(removedRule.Id);
         }
         removedRuleCount = removedRules.Length;
         return true;
@@ -2396,6 +3877,275 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public bool ReplaceAlarmAreas(
+        IReadOnlyList<AlarmAreaDefinition> draft,
+        out int unassignedPanelCount)
+    {
+        unassignedPanelCount = 0;
+        if (!AlarmAreaPolicy.ValidateReplacement(
+                draft,
+                out var replacement,
+                out var failure))
+        {
+            LastPersistenceError =
+                "Alarm area replacement is invalid: " + failure + ".";
+            return false;
+        }
+
+        lock (m_persistenceGate)
+        {
+            UnmaConfiguration configurationSnapshot;
+            var pendingUnassignedPanelCount = 0;
+            lock (m_configurationGate)
+            {
+                try
+                {
+                    configurationSnapshot = CloneConfiguration(Configuration);
+                }
+                catch (Exception exception)
+                {
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Configuration snapshot could not be created.");
+                    return false;
+                }
+
+                var previouslyAssignedPanels = Configuration.Panels
+                    .Where(panel =>
+                        panel != null &&
+                        !string.IsNullOrWhiteSpace(panel.AreaId))
+                    .ToArray();
+                Configuration.AlarmAreas = replacement;
+                AlarmAreaPolicy.NormalizePanelAssignments(
+                    Configuration.Panels,
+                    Configuration.AlarmAreas);
+                pendingUnassignedPanelCount = previouslyAssignedPanels.Count(
+                    panel => string.IsNullOrWhiteSpace(panel.AreaId));
+            }
+
+            var saved = false;
+            try
+            {
+                saved = SaveConfiguration();
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration could not be saved.");
+            }
+            if (saved)
+            {
+                unassignedPanelCount = pendingUnassignedPanelCount;
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                RestoreConfiguration(
+                    Configuration,
+                    configurationSnapshot);
+            }
+            RestoreConfigurationAlarmSnapshots();
+            if (string.IsNullOrWhiteSpace(LastPersistenceError))
+            {
+                LastPersistenceError =
+                    "Configuration could not be saved.";
+            }
+            return false;
+        }
+    }
+
+    public bool TryCloneGlobalPanel(
+        string sourcePanelId,
+        string requestedName,
+        out PanelDefinition clonedPanel,
+        out int clonedRuleCount,
+        out int skippedSlotCount)
+    {
+        clonedPanel = null;
+        clonedRuleCount = 0;
+        skippedSlotCount = 0;
+        LastPanelCloneFailure = PanelCloneFailure.None;
+        sourcePanelId = sourcePanelId?.Trim() ?? "";
+        if (sourcePanelId.Length == 0)
+        {
+            LastPanelCloneFailure = PanelCloneFailure.InvalidSource;
+            LastPersistenceError = "Source panel ID is required.";
+            return false;
+        }
+
+        lock (m_persistenceGate)
+        {
+            PanelClonePlan plan;
+            UnmaConfiguration configurationSnapshot;
+            lock (m_configurationGate)
+            {
+                var sourcePanel = Configuration.Panels.FirstOrDefault(
+                    candidate => candidate != null && string.Equals(
+                        candidate.Id,
+                        sourcePanelId,
+                        StringComparison.Ordinal));
+                if (sourcePanel == null)
+                {
+                    LastPanelCloneFailure = PanelCloneFailure.InvalidSource;
+                    LastPersistenceError = "Source panel was not found.";
+                    return false;
+                }
+                if (!PanelClonePolicy.TryCreatePlan(
+                        sourcePanel,
+                        Configuration.Panels,
+                        Configuration.Rules,
+                        () => Guid.NewGuid().ToString("N"),
+                        out plan,
+                        out var failure))
+                {
+                    LastPanelCloneFailure = failure;
+                    LastPersistenceError = PanelCloneFailureMessage(failure);
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(requestedName))
+                {
+                    plan.Panel.Name = requestedName.Trim();
+                }
+                try
+                {
+                    configurationSnapshot = CloneConfiguration(
+                        Configuration);
+                }
+                catch (Exception exception)
+                {
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Configuration snapshot could not be created.");
+                    return false;
+                }
+                try
+                {
+                    Configuration.Panels.Add(plan.Panel);
+                    Configuration.Rules.AddRange(plan.Rules);
+                }
+                catch (Exception exception)
+                {
+                    RestoreConfiguration(
+                        Configuration,
+                        configurationSnapshot);
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Panel copy could not be prepared.");
+                    return false;
+                }
+            }
+
+            var saved = false;
+            try
+            {
+                saved = SaveConfiguration();
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration could not be saved.");
+            }
+            if (saved)
+            {
+                clonedPanel = plan.Panel;
+                clonedRuleCount = plan.Rules.Count;
+                skippedSlotCount = plan.OrphanRuleSlotCount;
+                Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                RestoreConfiguration(
+                    Configuration,
+                    configurationSnapshot);
+            }
+            if (string.IsNullOrWhiteSpace(LastPersistenceError))
+            {
+                LastPersistenceError =
+                    "Configuration could not be saved.";
+            }
+            return false;
+        }
+    }
+
+    private static string PanelCloneFailureMessage(PanelCloneFailure failure)
+    {
+        return failure switch
+        {
+            PanelCloneFailure.DashboardNotSupported =>
+                "The dashboard cannot be copied.",
+            PanelCloneFailure.EntityPanelNotSupported =>
+                "Entity panels cannot be copied.",
+            PanelCloneFailure.InvalidSourceData =>
+                "Source panel data is invalid.",
+            PanelCloneFailure.IdGenerationFailed =>
+                "Unique IDs could not be generated.",
+            _ => "The source panel is invalid.",
+        };
+    }
+
+    private static UnmaConfiguration CloneConfiguration(
+        UnmaConfiguration source)
+    {
+        using var stream = new MemoryStream();
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        serializer.WriteObject(stream, source);
+        stream.Position = 0;
+        return serializer.ReadObject(stream) as UnmaConfiguration ??
+               throw new InvalidDataException(
+                   "Configuration snapshot is empty.");
+    }
+
+    private static void RestoreConfiguration(
+        UnmaConfiguration target,
+        UnmaConfiguration snapshot)
+    {
+        target.SchemaVersion = snapshot.SchemaVersion;
+        target.Panels = snapshot.Panels;
+        target.Rules = snapshot.Rules;
+        target.WarningColor = snapshot.WarningColor;
+        target.CriticalColor = snapshot.CriticalColor;
+        target.EmergencyColor = snapshot.EmergencyColor;
+        target.WindowX = snapshot.WindowX;
+        target.WindowY = snapshot.WindowY;
+        target.WindowWidth = snapshot.WindowWidth;
+        target.WindowHeight = snapshot.WindowHeight;
+        target.SoundOverrides = snapshot.SoundOverrides;
+        target.LauncherX = snapshot.LauncherX;
+        target.LauncherY = snapshot.LauncherY;
+        target.SystemAlarms = snapshot.SystemAlarms;
+        target.AlarmMemories = snapshot.AlarmMemories;
+        target.AlarmHistory = snapshot.AlarmHistory;
+        target.AlarmTimingMemories = snapshot.AlarmTimingMemories;
+        target.LegacySustainedAlarmReconciliationPending =
+            snapshot.LegacySustainedAlarmReconciliationPending;
+        target.UiScalePercent = snapshot.UiScalePercent;
+        target.EditorWindowX = snapshot.EditorWindowX;
+        target.EditorWindowY = snapshot.EditorWindowY;
+        target.EditorWindowWidth = snapshot.EditorWindowWidth;
+        target.EditorWindowHeight = snapshot.EditorWindowHeight;
+        target.VanillaNotificationRules =
+            snapshot.VanillaNotificationRules;
+        target.Instruments = snapshot.Instruments;
+        target.InstrumentPanels = snapshot.InstrumentPanels;
+        target.AlarmAreas = snapshot.AlarmAreas;
+    }
+
+    private static string ExceptionDetail(
+        Exception exception,
+        string fallback)
+    {
+        return string.IsNullOrWhiteSpace(exception?.Message)
+            ? fallback
+            : exception.Message.Trim();
+    }
+
     public bool UpdatePanelSettings(
         string panelId,
         string name,
@@ -2403,6 +4153,25 @@ public sealed class UnmaRuntime : IDisposable
         bool includeVanilla,
         bool includeSystem,
         string notificationFilter)
+    {
+        return UpdatePanelSettings(
+            panelId,
+            name,
+            columns,
+            includeVanilla,
+            includeSystem,
+            notificationFilter,
+            null);
+    }
+
+    public bool UpdatePanelSettings(
+        string panelId,
+        string name,
+        int columns,
+        bool includeVanilla,
+        bool includeSystem,
+        string notificationFilter,
+        string areaId)
     {
         panelId = panelId?.Trim() ?? "";
         if (panelId.Length == 0)
@@ -2412,17 +4181,10 @@ public sealed class UnmaRuntime : IDisposable
 
         lock (m_persistenceGate)
         {
-            PanelDefinition panel;
-            string previousName;
-            int previousColumns;
-            bool previousIncludeVanilla;
-            bool previousIncludeSystem;
-            string previousFilter;
-            Dictionary<PanelDefinition, List<PanelSlotDefinition>>
-                previousPanelSlots;
+            UnmaConfiguration configurationSnapshot;
             lock (m_configurationGate)
             {
-                panel = Configuration.Panels.FirstOrDefault(candidate =>
+                var panel = Configuration.Panels.FirstOrDefault(candidate =>
                     string.Equals(
                         candidate?.Id,
                         panelId,
@@ -2432,17 +4194,43 @@ public sealed class UnmaRuntime : IDisposable
                     return false;
                 }
 
-                previousName = panel.Name;
-                previousColumns = panel.Columns;
-                previousIncludeVanilla = panel.IncludeVanilla;
-                previousIncludeSystem = panel.IncludeSystem;
-                previousFilter = panel.NotificationFilter;
-                previousPanelSlots = Configuration.Panels.ToDictionary(
-                    candidate => candidate,
-                    candidate => (candidate.Slots ??
-                            new List<PanelSlotDefinition>())
-                        .Select(PanelSlotProjection.CloneSlot)
-                        .ToList());
+                try
+                {
+                    configurationSnapshot = CloneConfiguration(Configuration);
+                }
+                catch (Exception exception)
+                {
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Configuration snapshot could not be created.");
+                    return false;
+                }
+                if (areaId != null && panel.IsDashboard)
+                {
+                    if (!string.IsNullOrWhiteSpace(areaId))
+                    {
+                        LastPersistenceError =
+                            "The dashboard cannot be assigned to an alarm area.";
+                        return false;
+                    }
+                    panel.AreaId = "";
+                }
+                else if (areaId != null)
+                {
+                    if (!AlarmAreaPolicy.TryAssign(
+                            Configuration.Panels,
+                            Configuration.AlarmAreas,
+                            panelId,
+                            areaId,
+                            out panel,
+                            out var assignmentFailure))
+                    {
+                        LastPersistenceError =
+                            "Alarm area assignment is invalid: " +
+                            assignmentFailure + ".";
+                        return false;
+                    }
+                }
 
                 panel.Name = string.IsNullOrWhiteSpace(name)
                     ? UnmaText.Get("default.panel", "PANEL")
@@ -2456,22 +4244,33 @@ public sealed class UnmaRuntime : IDisposable
                 }
             }
 
-            if (SaveConfiguration())
+            var saved = false;
+            try
+            {
+                saved = SaveConfiguration();
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration could not be saved.");
+            }
+            if (saved)
             {
                 return true;
             }
 
             lock (m_configurationGate)
             {
-                panel.Name = previousName;
-                panel.Columns = previousColumns;
-                panel.IncludeVanilla = previousIncludeVanilla;
-                panel.IncludeSystem = previousIncludeSystem;
-                panel.NotificationFilter = previousFilter;
-                foreach (var slotSnapshot in previousPanelSlots)
-                {
-                    slotSnapshot.Key.Slots = slotSnapshot.Value;
-                }
+                RestoreConfiguration(
+                    Configuration,
+                    configurationSnapshot);
+            }
+            RestoreConfigurationAlarmSnapshots();
+            if (string.IsNullOrWhiteSpace(LastPersistenceError))
+            {
+                LastPersistenceError =
+                    "Configuration could not be saved.";
             }
             return false;
         }
@@ -2827,10 +4626,15 @@ public sealed class UnmaRuntime : IDisposable
                         History = history,
                         WasGone = history.IsGone,
                         WasAcknowledged = history.IsAcknowledged,
+                        WasRaisedAtTicks = history.RaisedAtTicks,
+                        WasClearedAtTicks = history.ClearedAtTicks,
+                        WasAcknowledgedAtTicks =
+                            history.AcknowledgedAtTicks,
                     });
                     history.SetState(
                         isGone: true,
-                        isAcknowledged: true);
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                 }
                 m_alarms.Remove(pair.Key);
             }
@@ -2861,6 +4665,12 @@ public sealed class UnmaRuntime : IDisposable
                     closedHistoryState.WasGone;
                 closedHistoryState.History.IsAcknowledged =
                     closedHistoryState.WasAcknowledged;
+                closedHistoryState.History.RaisedAtTicks =
+                    closedHistoryState.WasRaisedAtTicks;
+                closedHistoryState.History.ClearedAtTicks =
+                    closedHistoryState.WasClearedAtTicks;
+                closedHistoryState.History.AcknowledgedAtTicks =
+                    closedHistoryState.WasAcknowledgedAtTicks;
             }
             m_alarmHistoryRevision = previousHistoryRevision;
         }
@@ -3070,6 +4880,78 @@ public sealed class UnmaRuntime : IDisposable
                 .Where(sample => sample.TimestampSeconds >= cutoff)
                 .ToArray();
         }
+    }
+
+    public bool TryGetInstrumentForecast(
+        string instrumentId,
+        out InstrumentForecastResult result) =>
+        TryGetInstrumentForecast(instrumentId, 0, out result);
+
+    /// <summary>
+    /// Creates a session-history forecast from one coherent capture epoch.
+    /// Configuration ranges are mirrored together with current values and
+    /// history, avoiding nested configuration/history locks. The pure policy
+    /// evaluates the defensive sample copy after the lock is released and
+    /// incorporates the current aggregate as the newest sample.
+    /// </summary>
+    public bool TryGetInstrumentForecast(
+        string instrumentId,
+        int windowTicks,
+        out InstrumentForecastResult result)
+    {
+        result = default;
+        var canonicalId = instrumentId ?? "";
+        double currentTimestampTicks;
+        double currentValue;
+        InstrumentForecastRange range;
+        InstrumentValueSample[] historySnapshot;
+
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_instrumentForecastRanges.TryGetValue(
+                    canonicalId,
+                    out range) ||
+                !m_lastInstrumentValues.TryGetValue(
+                    canonicalId,
+                    out currentValue))
+            {
+                return false;
+            }
+
+            currentTimestampTicks = m_lastInstrumentCaptureTimestampTicks;
+            if (!m_instrumentHistory.TryGetValue(
+                    canonicalId,
+                    out var history) ||
+                history.Count == 0)
+            {
+                historySnapshot = Array.Empty<InstrumentValueSample>();
+            }
+            else
+            {
+                var selected = new List<InstrumentValueSample>(
+                    history.Count);
+                for (var index = 0; index < history.Count; index++)
+                {
+                    var sample = history[index];
+                    if (IsInstrumentForecastSampleInWindow(
+                            sample.TimestampSeconds,
+                            currentTimestampTicks,
+                            windowTicks))
+                    {
+                        selected.Add(sample);
+                    }
+                }
+                historySnapshot = selected.ToArray();
+            }
+        }
+
+        return InstrumentForecastPolicy.TryAnalyze(
+            historySnapshot,
+            currentTimestampTicks,
+            currentValue,
+            range.Minimum,
+            range.Maximum,
+            out result);
     }
 
     /// <summary>
@@ -3590,8 +5472,10 @@ public sealed class UnmaRuntime : IDisposable
                     var history = FindHistoryLocked(state.Sequence);
                     if (history != null)
                     {
-                        history.IsGone = true;
-                        history.IsAcknowledged = true;
+                        history.SetState(
+                            isGone: true,
+                            isAcknowledged: true,
+                            currentGameTicks: CurrentGameTicks);
                     }
                     state.View.IsGoneUnacknowledged = false;
                     state.View.IsAcknowledged = false;
@@ -3947,6 +5831,713 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    private bool EvaluateRuleCondition(
+        string ruleId,
+        int conditionIndex,
+        double actual,
+        ComparisonOperator comparison,
+        double threshold,
+        double hysteresis)
+    {
+        return EvaluateConditionLatch(
+            m_ruleConditionLatches,
+            ruleId,
+            conditionIndex,
+            actual,
+            comparison,
+            threshold,
+            hysteresis);
+    }
+
+    private bool EvaluateSystemStageCondition(
+        string stageKey,
+        int conditionIndex,
+        double actual,
+        ComparisonOperator comparison,
+        double threshold,
+        double hysteresis)
+    {
+        return EvaluateConditionLatch(
+            m_systemStageConditionLatches,
+            stageKey,
+            conditionIndex,
+            actual,
+            comparison,
+            threshold,
+            hysteresis);
+    }
+
+    private bool EvaluateConditionLatch(
+        IDictionary<string, Dictionary<int, bool>> conditionLatches,
+        string ownerKey,
+        int conditionIndex,
+        double actual,
+        ComparisonOperator comparison,
+        double threshold,
+        double hysteresis)
+    {
+        bool changed;
+        bool isLatched;
+        lock (m_alarmTimingGate)
+        {
+            if (!conditionLatches.TryGetValue(
+                    ownerKey,
+                    out var latches))
+            {
+                latches = new Dictionary<int, bool>();
+                conditionLatches[ownerKey] = latches;
+            }
+            var hasLatch = latches.TryGetValue(
+                conditionIndex,
+                out var currentLatch);
+            isLatched = AlarmTimingPolicy.EvaluateConditionLatch(
+                actual,
+                comparison,
+                threshold,
+                hysteresis,
+                hasLatch,
+                currentLatch);
+            changed = !hasLatch || currentLatch != isLatched;
+            latches[conditionIndex] = isLatched;
+        }
+        if (changed)
+        {
+            PersistAlarmState();
+        }
+        return isLatched;
+    }
+
+    private void SetRuleConditionLatch(
+        string ruleId,
+        int conditionIndex,
+        bool value)
+    {
+        SetConditionLatch(
+            m_ruleConditionLatches,
+            ruleId,
+            conditionIndex,
+            value);
+    }
+
+    private void SetSystemStageConditionLatch(
+        string stageKey,
+        int conditionIndex,
+        bool value)
+    {
+        SetConditionLatch(
+            m_systemStageConditionLatches,
+            stageKey,
+            conditionIndex,
+            value);
+    }
+
+    private void SetConditionLatch(
+        IDictionary<string, Dictionary<int, bool>> conditionLatches,
+        string ownerKey,
+        int conditionIndex,
+        bool value)
+    {
+        bool changed;
+        lock (m_alarmTimingGate)
+        {
+            if (!conditionLatches.TryGetValue(
+                    ownerKey,
+                    out var latches))
+            {
+                latches = new Dictionary<int, bool>();
+                conditionLatches[ownerKey] = latches;
+            }
+            changed = !latches.TryGetValue(
+                          conditionIndex,
+                          out var previous) ||
+                      previous != value;
+            latches[conditionIndex] = value;
+        }
+        if (changed)
+        {
+            PersistAlarmState();
+        }
+    }
+
+    private bool AdvanceRuleTiming(
+        AlarmRuleDefinition rule,
+        bool conditionMet,
+        long currentGameTick,
+        out AlarmEscalationEvaluation escalation)
+    {
+        AlarmTimingEvaluation evaluation;
+        bool changed;
+        lock (m_alarmTimingGate)
+        {
+            m_ruleTimingStates.TryGetValue(rule.Id, out var state);
+            evaluation = AlarmTimingPolicy.Advance(
+                state,
+                conditionMet,
+                currentGameTick,
+                new AlarmTimingSettings(
+                    rule.ActivationDelayTicks,
+                    rule.ResetDelayTicks,
+                    rule.MinimumActiveTicks,
+                    0d));
+            m_ruleTimingStates[rule.Id] = evaluation.State;
+            changed = AlarmTimingPolicy.HasPersistentStateChanged(
+                state,
+                evaluation.State);
+            var wasEscalated = m_escalatedRuleIds.Contains(rule.Id);
+            escalation = AlarmEscalationPolicy.Evaluate(
+                rule.Escalation,
+                rule.Severity,
+                rule.SoundId,
+                wasEscalated,
+                evaluation.IsActive,
+                evaluation.State.ActiveSinceTick,
+                currentGameTick);
+            if (escalation.IsEscalated)
+            {
+                m_escalatedRuleIds.Add(rule.Id);
+            }
+            else
+            {
+                m_escalatedRuleIds.Remove(rule.Id);
+            }
+        }
+        if (changed)
+        {
+            PersistAlarmState();
+        }
+        return evaluation.IsActive;
+    }
+
+    private bool AdvanceSystemStageTiming(
+        string stageKey,
+        SystemAlarmStageDefinition stage,
+        bool conditionMet,
+        long currentGameTick)
+    {
+        AlarmTimingEvaluation evaluation;
+        bool changed;
+        lock (m_alarmTimingGate)
+        {
+            m_systemStageTimingStates.TryGetValue(stageKey, out var state);
+            evaluation = AlarmTimingPolicy.Advance(
+                state,
+                conditionMet,
+                currentGameTick,
+                new AlarmTimingSettings(
+                    stage.ActivationDelayTicks,
+                    stage.ResetDelayTicks,
+                    stage.MinimumActiveTicks,
+                    0d));
+            m_systemStageTimingStates[stageKey] = evaluation.State;
+            changed = AlarmTimingPolicy.HasPersistentStateChanged(
+                state,
+                evaluation.State);
+        }
+        if (changed)
+        {
+            PersistAlarmState();
+        }
+        return evaluation.IsActive;
+    }
+
+    private static string SystemStageTimingKey(
+        string alarmId,
+        string stageId,
+        int stageIndex)
+    {
+        return AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+            alarmId,
+            stageId,
+            stageIndex);
+    }
+
+    private void EnsureRuleTimingDefinition(AlarmRuleDefinition rule)
+    {
+        var signature =
+            AlarmTimingMemoryPolicy.RuleDefinitionSignature(rule);
+        bool persistentStateChanged;
+        lock (m_alarmTimingGate)
+        {
+            persistentStateChanged = EnsureTimingOwnerDefinitionLocked(
+                m_ruleTimingStates,
+                m_ruleConditionLatches,
+                m_ruleTimingSignatures,
+                rule.Id,
+                signature,
+                rule.Conditions?.Count ?? 0,
+                CurrentGameTick);
+        }
+        if (persistentStateChanged)
+        {
+            PersistAlarmState();
+        }
+    }
+
+    private void EnsureSystemStageTimingDefinition(
+        string stageKey,
+        SystemAlarmStageDefinition stage)
+    {
+        var signature = AlarmTimingMemoryPolicy
+            .SystemStageDefinitionSignature(stage);
+        bool persistentStateChanged;
+        lock (m_alarmTimingGate)
+        {
+            persistentStateChanged = EnsureTimingOwnerDefinitionLocked(
+                m_systemStageTimingStates,
+                m_systemStageConditionLatches,
+                m_systemStageTimingSignatures,
+                stageKey,
+                signature,
+                stage.Conditions?.Count ?? 0,
+                CurrentGameTick);
+        }
+        if (persistentStateChanged)
+        {
+            PersistAlarmState();
+        }
+    }
+
+    private static bool EnsureTimingOwnerDefinitionLocked(
+        IDictionary<string, AlarmTimingState> timingStates,
+        IDictionary<string, Dictionary<int, bool>> conditionLatches,
+        IDictionary<string, string> timingSignatures,
+        string ownerKey,
+        string signature,
+        int conditionCount,
+        long currentGameTick)
+    {
+        if (!timingSignatures.TryGetValue(
+                ownerKey,
+                out var previousSignature))
+        {
+            timingSignatures[ownerKey] = signature;
+            return false;
+        }
+        if (string.Equals(
+                previousSignature,
+                signature,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+        return ReconcileTimingOwnerDefinitionLocked(
+            timingStates,
+            conditionLatches,
+            timingSignatures,
+            ownerKey,
+            signature,
+            conditionCount,
+            currentGameTick);
+    }
+
+    private static bool ReconcileTimingOwnerDefinitionLocked(
+        IDictionary<string, AlarmTimingState> timingStates,
+        IDictionary<string, Dictionary<int, bool>> conditionLatches,
+        IDictionary<string, string> timingSignatures,
+        string ownerKey,
+        string signature,
+        int conditionCount,
+        long currentGameTick)
+    {
+        var hasState = timingStates.TryGetValue(ownerKey, out var state);
+        var hadLatches = conditionLatches.ContainsKey(ownerKey);
+        timingStates.Remove(ownerKey);
+        conditionLatches.Remove(ownerKey);
+        timingSignatures[ownerKey] = signature;
+        if (hasState && state.IsActive)
+        {
+            timingStates[ownerKey] = AlarmTimingPolicy
+                .PreserveActiveForDefinitionChange(
+                    state,
+                    currentGameTick);
+            conditionLatches[ownerKey] =
+                AlarmTimingPolicy.CreateActiveConditionLatches(
+                    conditionCount);
+        }
+        return hasState || hadLatches;
+    }
+
+    private bool ReconcileRuleTimingDefinition(
+        AlarmRuleDefinition previousRule,
+        AlarmRuleDefinition currentRule)
+    {
+        var previousSignature = AlarmTimingMemoryPolicy
+            .RuleDefinitionSignature(previousRule);
+        var currentSignature = AlarmTimingMemoryPolicy
+            .RuleDefinitionSignature(currentRule);
+        var semanticsChanged = !string.Equals(
+            previousSignature,
+            currentSignature,
+            StringComparison.Ordinal);
+        lock (m_alarmTimingGate)
+        {
+            if (!currentRule.Enabled)
+            {
+                m_ruleTimingStates.Remove(currentRule.Id);
+                m_ruleConditionLatches.Remove(currentRule.Id);
+                m_ruleTimingSignatures.Remove(currentRule.Id);
+            }
+            else if (semanticsChanged)
+            {
+                ReconcileTimingOwnerDefinitionLocked(
+                    m_ruleTimingStates,
+                    m_ruleConditionLatches,
+                    m_ruleTimingSignatures,
+                    currentRule.Id,
+                    currentSignature,
+                    currentRule.Conditions?.Count ?? 0,
+                    CurrentGameTick);
+            }
+            else
+            {
+                m_ruleTimingSignatures[currentRule.Id] = currentSignature;
+            }
+        }
+        return semanticsChanged ||
+               previousRule.Enabled != currentRule.Enabled;
+    }
+
+    private void ReconcileSystemAlarmTimingDefinition(
+        SystemAlarmDefinition previousAlarm,
+        SystemAlarmDefinition currentAlarm)
+    {
+        var prefix = AlarmTimingMemoryPolicy.SystemAlarmOwnerPrefix(
+            currentAlarm.Id);
+        lock (m_alarmTimingGate)
+        {
+            var previousRuntime = CaptureSystemAlarmTimingSnapshotLocked(
+                prefix);
+            RemoveSystemAlarmTimingLocked(prefix);
+            if (!currentAlarm.Enabled)
+            {
+                return;
+            }
+
+            var previousStages = previousAlarm?.Stages ??
+                                 new List<SystemAlarmStageDefinition>();
+            var currentStages = currentAlarm.Stages ??
+                                new List<SystemAlarmStageDefinition>();
+            var usedPreviousStageIndexes = new HashSet<int>();
+            for (var currentIndex = 0;
+                 currentIndex < currentStages.Count;
+                 currentIndex++)
+            {
+                var currentStage = currentStages[currentIndex];
+                if (currentStage == null || !currentStage.Enabled)
+                {
+                    continue;
+                }
+                var currentKey = SystemStageTimingKey(
+                    currentAlarm.Id,
+                    currentStage.Id,
+                    currentIndex);
+                var currentSignature = AlarmTimingMemoryPolicy
+                    .SystemStageDefinitionSignature(currentStage);
+                var previousIndex = FindMatchingSystemStageIndex(
+                    previousStages,
+                    currentStage,
+                    currentIndex,
+                    usedPreviousStageIndexes);
+                AlarmTimingOwnerRuntimeSnapshot previous = null;
+                SystemAlarmStageDefinition previousStage = null;
+                if (previousIndex >= 0)
+                {
+                    usedPreviousStageIndexes.Add(previousIndex);
+                    previousStage = previousStages[previousIndex];
+                    var previousKey = SystemStageTimingKey(
+                        previousAlarm.Id,
+                        previousStage.Id,
+                        previousIndex);
+                    previousRuntime.TryGetValue(previousKey, out previous);
+                }
+
+                if (previous == null)
+                {
+                    m_systemStageTimingSignatures[currentKey] =
+                        currentSignature;
+                    continue;
+                }
+                var semanticsChanged = previousStage == null ||
+                    !string.Equals(
+                        AlarmTimingMemoryPolicy
+                            .SystemStageDefinitionSignature(previousStage),
+                        currentSignature,
+                        StringComparison.Ordinal);
+                if (!semanticsChanged)
+                {
+                    RestoreTimingOwnerSnapshotLocked(
+                        m_systemStageTimingStates,
+                        m_systemStageConditionLatches,
+                        m_systemStageTimingSignatures,
+                        currentKey,
+                        previous);
+                    m_systemStageTimingSignatures[currentKey] =
+                        currentSignature;
+                    continue;
+                }
+
+                if (previous.HasState && previous.State.IsActive)
+                {
+                    m_systemStageTimingStates[currentKey] =
+                        AlarmTimingPolicy
+                            .PreserveActiveForDefinitionChange(
+                                previous.State,
+                                CurrentGameTick);
+                    m_systemStageConditionLatches[currentKey] =
+                        AlarmTimingPolicy.CreateActiveConditionLatches(
+                            currentStage.Conditions?.Count ?? 0);
+                }
+                m_systemStageTimingSignatures[currentKey] =
+                    currentSignature;
+            }
+        }
+    }
+
+    private static int FindMatchingSystemStageIndex(
+        IReadOnlyList<SystemAlarmStageDefinition> previousStages,
+        SystemAlarmStageDefinition currentStage,
+        int currentIndex,
+        ISet<int> usedPreviousStageIndexes)
+    {
+        var currentId = currentStage?.Id ?? "";
+        if (currentIndex >= 0 &&
+            currentIndex < previousStages.Count &&
+            !usedPreviousStageIndexes.Contains(currentIndex) &&
+            string.Equals(
+                previousStages[currentIndex]?.Id ?? "",
+                currentId,
+                StringComparison.Ordinal))
+        {
+            return currentIndex;
+        }
+        if (currentId.Length > 0)
+        {
+            for (var index = 0; index < previousStages.Count; index++)
+            {
+                if (!usedPreviousStageIndexes.Contains(index) &&
+                    string.Equals(
+                        previousStages[index]?.Id,
+                        currentId,
+                        StringComparison.Ordinal))
+                {
+                    return index;
+                }
+            }
+        }
+        if (currentIndex >= 0 &&
+            currentIndex < previousStages.Count &&
+            !usedPreviousStageIndexes.Contains(currentIndex) &&
+            string.IsNullOrEmpty(previousStages[currentIndex]?.Id))
+        {
+            return currentIndex;
+        }
+        return -1;
+    }
+
+    private AlarmTimingOwnerRuntimeSnapshot CaptureRuleTimingSnapshot(
+        string ruleId)
+    {
+        lock (m_alarmTimingGate)
+        {
+            return CaptureTimingOwnerSnapshotLocked(
+                m_ruleTimingStates,
+                m_ruleConditionLatches,
+                m_ruleTimingSignatures,
+                ruleId);
+        }
+    }
+
+    private void RestoreRuleTimingSnapshot(
+        string ruleId,
+        AlarmTimingOwnerRuntimeSnapshot snapshot)
+    {
+        lock (m_alarmTimingGate)
+        {
+            RestoreTimingOwnerSnapshotLocked(
+                m_ruleTimingStates,
+                m_ruleConditionLatches,
+                m_ruleTimingSignatures,
+                ruleId,
+                snapshot);
+        }
+    }
+
+    private Dictionary<string, AlarmTimingOwnerRuntimeSnapshot>
+        CaptureSystemAlarmTimingSnapshot(string alarmId)
+    {
+        var prefix = AlarmTimingMemoryPolicy.SystemAlarmOwnerPrefix(alarmId);
+        lock (m_alarmTimingGate)
+        {
+            return CaptureSystemAlarmTimingSnapshotLocked(prefix);
+        }
+    }
+
+    private void RestoreSystemAlarmTimingSnapshot(
+        string alarmId,
+        IReadOnlyDictionary<string, AlarmTimingOwnerRuntimeSnapshot> snapshot)
+    {
+        var prefix = AlarmTimingMemoryPolicy.SystemAlarmOwnerPrefix(alarmId);
+        lock (m_alarmTimingGate)
+        {
+            RemoveSystemAlarmTimingLocked(prefix);
+            foreach (var pair in snapshot)
+            {
+                RestoreTimingOwnerSnapshotLocked(
+                    m_systemStageTimingStates,
+                    m_systemStageConditionLatches,
+                    m_systemStageTimingSignatures,
+                    pair.Key,
+                    pair.Value);
+            }
+        }
+    }
+
+    private Dictionary<string, AlarmTimingOwnerRuntimeSnapshot>
+        CaptureSystemAlarmTimingSnapshotLocked(string prefix)
+    {
+        return m_systemStageTimingStates.Keys
+            .Concat(m_systemStageConditionLatches.Keys)
+            .Concat(m_systemStageTimingSignatures.Keys)
+            .Where(key => key.StartsWith(prefix, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(
+                key => key,
+                key => CaptureTimingOwnerSnapshotLocked(
+                    m_systemStageTimingStates,
+                    m_systemStageConditionLatches,
+                    m_systemStageTimingSignatures,
+                    key),
+                StringComparer.Ordinal);
+    }
+
+    private static AlarmTimingOwnerRuntimeSnapshot
+        CaptureTimingOwnerSnapshotLocked(
+            IDictionary<string, AlarmTimingState> timingStates,
+            IDictionary<string, Dictionary<int, bool>> conditionLatches,
+            IDictionary<string, string> timingSignatures,
+            string ownerKey)
+    {
+        var snapshot = new AlarmTimingOwnerRuntimeSnapshot
+        {
+            HasState = timingStates.TryGetValue(ownerKey, out var state),
+            State = state,
+            HasConditionLatches = conditionLatches.TryGetValue(
+                ownerKey,
+                out var latches),
+            ConditionLatches = latches == null
+                ? null
+                : new Dictionary<int, bool>(latches),
+            HasSignature = timingSignatures.TryGetValue(
+                ownerKey,
+                out var signature),
+            Signature = signature ?? "",
+        };
+        return snapshot;
+    }
+
+    private static void RestoreTimingOwnerSnapshotLocked(
+        IDictionary<string, AlarmTimingState> timingStates,
+        IDictionary<string, Dictionary<int, bool>> conditionLatches,
+        IDictionary<string, string> timingSignatures,
+        string ownerKey,
+        AlarmTimingOwnerRuntimeSnapshot snapshot)
+    {
+        timingStates.Remove(ownerKey);
+        conditionLatches.Remove(ownerKey);
+        timingSignatures.Remove(ownerKey);
+        if (snapshot == null)
+        {
+            return;
+        }
+        if (snapshot.HasState)
+        {
+            timingStates[ownerKey] = snapshot.State;
+        }
+        if (snapshot.HasConditionLatches)
+        {
+            conditionLatches[ownerKey] = new Dictionary<int, bool>(
+                snapshot.ConditionLatches ??
+                new Dictionary<int, bool>());
+        }
+        if (snapshot.HasSignature)
+        {
+            timingSignatures[ownerKey] = snapshot.Signature;
+        }
+    }
+
+    private void RemoveSystemAlarmTimingLocked(string prefix)
+    {
+        foreach (var stageKey in m_systemStageTimingStates.Keys
+                     .Concat(m_systemStageConditionLatches.Keys)
+                     .Concat(m_systemStageTimingSignatures.Keys)
+                     .Where(key => key.StartsWith(
+                         prefix,
+                         StringComparison.Ordinal))
+                     .Distinct(StringComparer.Ordinal)
+                     .ToArray())
+        {
+            m_systemStageTimingStates.Remove(stageKey);
+            m_systemStageConditionLatches.Remove(stageKey);
+            m_systemStageTimingSignatures.Remove(stageKey);
+        }
+    }
+
+    private bool InvalidateRuleTiming(string ruleId)
+    {
+        ruleId ??= "";
+        if (ruleId.Length == 0)
+        {
+            return false;
+        }
+        bool changed;
+        lock (m_alarmTimingGate)
+        {
+            changed = m_ruleTimingStates.Remove(ruleId);
+            changed |= m_ruleConditionLatches.Remove(ruleId);
+            changed |= m_ruleTimingSignatures.Remove(ruleId);
+            changed |= m_escalatedRuleIds.Remove(ruleId);
+        }
+        RemoveSustainedStatesForRule(ruleId);
+        return changed;
+    }
+
+    private bool InvalidateSystemAlarmTiming(string alarmId)
+    {
+        alarmId ??= "";
+        if (alarmId.Length == 0)
+        {
+            return false;
+        }
+        var prefix = AlarmTimingMemoryPolicy.SystemAlarmOwnerPrefix(alarmId);
+        var changed = false;
+        lock (m_alarmTimingGate)
+        {
+            foreach (var stageKey in m_systemStageTimingStates.Keys
+                         .Concat(m_systemStageConditionLatches.Keys)
+                         .Concat(m_systemStageTimingSignatures.Keys)
+                         .Where(key => key.StartsWith(
+                             prefix,
+                             StringComparison.Ordinal))
+                         .Distinct(StringComparer.Ordinal)
+                         .ToArray())
+            {
+                changed |= m_systemStageTimingStates.Remove(stageKey);
+                changed |= m_systemStageConditionLatches.Remove(stageKey);
+                changed |= m_systemStageTimingSignatures.Remove(stageKey);
+            }
+        }
+        return changed;
+    }
+
+    private bool InvalidateTimingForAlarmKey(string alarmKey)
+    {
+        if (PanelTopologyPolicy.TryGetRuleId(alarmKey, out var ruleId))
+        {
+            return InvalidateRuleTiming(ruleId);
+        }
+        return InvalidateSystemAlarmTiming(alarmKey);
+    }
+
     private void EvaluateSystemAlarms(
         IReadOnlyDictionary<string, double> metrics)
     {
@@ -3975,8 +6566,70 @@ public sealed class UnmaRuntime : IDisposable
                 continue;
             }
 
-            var stage = AlarmEvaluation.SelectSystemStage(alarm, metrics);
-            if (stage == null)
+            SystemAlarmStageDefinition selectedStage = null;
+            var currentGameTick = CurrentGameTick;
+            for (var stageIndex = 0;
+                 stageIndex < alarm.Stages.Count;
+                 stageIndex++)
+            {
+                var stage = alarm.Stages[stageIndex];
+                if (stage == null || !stage.Enabled)
+                {
+                    continue;
+                }
+
+                var stageKey = SystemStageTimingKey(
+                    alarm.Id,
+                    stage.Id,
+                    stageIndex);
+                EnsureSystemStageTimingDefinition(stageKey, stage);
+                var conditionValues = new bool[stage.Conditions.Count];
+                for (var conditionIndex = 0;
+                     conditionIndex < stage.Conditions.Count;
+                     conditionIndex++)
+                {
+                    var condition = stage.Conditions[conditionIndex];
+                    if (condition == null ||
+                        metrics == null ||
+                        !metrics.TryGetValue(
+                            condition.MetricId ?? "",
+                            out var actual))
+                    {
+                        SetSystemStageConditionLatch(
+                            stageKey,
+                            conditionIndex,
+                            false);
+                        continue;
+                    }
+                    conditionValues[conditionIndex] =
+                        EvaluateSystemStageCondition(
+                            stageKey,
+                            conditionIndex,
+                            actual,
+                            condition.Comparison,
+                            condition.Threshold,
+                            condition.Hysteresis);
+                }
+
+                var stageIsActive = AdvanceSystemStageTiming(
+                    stageKey,
+                    stage,
+                    AlarmEvaluation.Combine(
+                        conditionValues,
+                        stage.Logic),
+                    currentGameTick);
+                if (!stageIsActive ||
+                    selectedStage != null &&
+                    (stage.Severity < selectedStage.Severity ||
+                     stage.Severity == selectedStage.Severity &&
+                     stage.Priority <= selectedStage.Priority))
+                {
+                    continue;
+                }
+                selectedStage = stage;
+            }
+
+            if (selectedStage == null)
             {
                 ClearAlarm(
                     alarm.Id,
@@ -3984,26 +6637,27 @@ public sealed class UnmaRuntime : IDisposable
                 continue;
             }
 
-            var soundId = string.IsNullOrWhiteSpace(stage.SoundId)
+            var soundId = string.IsNullOrWhiteSpace(selectedStage.SoundId)
                 ? "auto"
-                : stage.SoundId;
-            var activeColor = string.IsNullOrWhiteSpace(stage.ActiveColor) ||
+                : selectedStage.SoundId;
+            var activeColor = string.IsNullOrWhiteSpace(
+                                  selectedStage.ActiveColor) ||
                               string.Equals(
-                                  stage.ActiveColor,
+                                  selectedStage.ActiveColor,
                                   "auto",
                                   StringComparison.OrdinalIgnoreCase)
-                ? ColorFor(stage.Severity)
-                : stage.ActiveColor;
+                ? ColorFor(selectedStage.Severity)
+                : selectedStage.ActiveColor;
 
             SetAlarm(
                 alarm.Id,
-                string.IsNullOrWhiteSpace(stage.Message)
+                string.IsNullOrWhiteSpace(selectedStage.Message)
                     ? alarm.DisplayName
-                    : stage.Message,
+                    : selectedStage.Message,
                 FormatSystemAlarmDetail(alarm.Id, metrics),
                 "system",
                 "",
-                stage.Severity,
+                selectedStage.Severity,
                 true,
                 false,
                 soundId,
@@ -4012,9 +6666,13 @@ public sealed class UnmaRuntime : IDisposable
                 overrideId: alarm.Id,
                 autoAcknowledgeOnClear:
                     alarm.AutoAcknowledgeOnClear,
-                occurrenceId: stage.Id,
-                occurrencePriority: stage.Priority,
-                slotId: alarm.Id);
+                occurrenceId: selectedStage.Id,
+                occurrencePriority: selectedStage.Priority,
+                slotId: alarm.Id,
+                operatorAction: selectedStage.OperatorAction,
+                attentionPanelId: ResolveAttentionPanelId(
+                    preferredPanelId: "",
+                    slotId: alarm.Id));
         }
     }
 
@@ -4124,7 +6782,10 @@ public sealed class UnmaRuntime : IDisposable
             m_sequence = Math.Max(m_sequence, history.Sequence);
 
             history.AlarmKey = key;
-            history.IsGone = false;
+            history.SetState(
+                isGone: false,
+                isAcknowledged: history.IsAcknowledged,
+                currentGameTicks: CurrentGameTicks);
             m_alarmHistoryRevision++;
             slotCandidate = Clone(state.View, state.Sequence);
         }
@@ -4445,9 +7106,26 @@ public sealed class UnmaRuntime : IDisposable
             StringComparer.Ordinal);
         lock (m_instrumentValuesGate)
         {
+            var clockRolledBack = DidInstrumentClockRollBack(
+                timestampSeconds,
+                m_lastInstrumentCaptureTimestampTicks);
             m_lastInstrumentValues.Clear();
+            m_instrumentForecastRanges.Clear();
+            if (clockRolledBack)
+            {
+                // Any backwards jump starts a new session-history epoch,
+                // even when it lands between daily samples or exactly on the
+                // latest retained sample. The last capture timestamp is the
+                // authoritative clock edge for detecting that transition.
+                m_instrumentHistory.Clear();
+            }
+            m_lastInstrumentCaptureTimestampTicks = timestampSeconds;
             foreach (var instrument in instruments)
             {
+                m_instrumentForecastRanges[instrument.Id] =
+                    new InstrumentForecastRange(
+                        instrument.Minimum,
+                        instrument.Maximum);
                 var signature = InstrumentValuePolicy.DefinitionSignature(
                     instrument);
                 if (!m_instrumentSignatures.TryGetValue(
@@ -4481,6 +7159,16 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     history = new List<InstrumentValueSample>();
                     m_instrumentHistory[pair.Key] = history;
+                }
+                else if (history.Count > 0 &&
+                         history[history.Count - 1].TimestampSeconds >
+                         timestampSeconds)
+                {
+                    // Loading or rewinding to an earlier game tick starts a
+                    // new in-memory epoch. Samples from the previous future
+                    // would otherwise distort statistics until time caught
+                    // up again.
+                    history.Clear();
                 }
                 if (history.Count == 0 ||
                     timestampSeconds -
@@ -4585,15 +7273,22 @@ public sealed class UnmaRuntime : IDisposable
     {
         if (!rule.Enabled)
         {
-            RemoveSustainedStatesForRule(rule.Id);
             ForceNormal("rule:" + rule.Id);
             return;
         }
+
+        EnsureRuleTimingDefinition(rule);
 
         var values = new List<bool>(rule.Conditions.Count);
         var details = new List<string>(rule.Conditions.Count);
         var missingSource = false;
         var lastValue = 0d;
+
+        void AddUnavailableCondition(int conditionIndex)
+        {
+            SetRuleConditionLatch(rule.Id, conditionIndex, false);
+            values.Add(false);
+        }
 
         for (var conditionIndex = 0;
              conditionIndex < rule.Conditions.Count;
@@ -4613,7 +7308,7 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     m_sustainedConditionStates.Remove(sustainedStateKey);
                     missingSource = true;
-                    values.Add(false);
+                    AddUnavailableCondition(conditionIndex);
                     details.Add(UnmaText.Format(
                         "runtime.condition.instrument_missing",
                         "{0}: calculated metric is missing",
@@ -4632,11 +7327,18 @@ public sealed class UnmaRuntime : IDisposable
                     if (condition.TrendMode ==
                         InstrumentTrendMode.SustainComparison)
                     {
+                        var comparisonMatches = EvaluateRuleCondition(
+                            rule.Id,
+                            conditionIndex,
+                            instrumentValue,
+                            condition.Comparison,
+                            condition.Threshold,
+                            condition.Hysteresis);
                         var sustained = EvaluateSustainedCondition(
                             sustainedStateKey,
                             condition,
-                            instrumentValue,
-                            windowTicks);
+                            windowTicks,
+                            comparisonMatches);
                         lastValue = instrumentValue;
                         values.Add(sustained);
                         details.Add(UnmaText.Format(
@@ -4658,7 +7360,7 @@ public sealed class UnmaRuntime : IDisposable
                             out var change))
                     {
                         missingSource = true;
-                        values.Add(false);
+                        AddUnavailableCondition(conditionIndex);
                         details.Add(UnmaText.Format(
                             "runtime.condition.instrument_history_incomplete",
                             "{0}: history for {1} is not complete yet",
@@ -4671,6 +7373,10 @@ public sealed class UnmaRuntime : IDisposable
                     var trendMatches = InstrumentValuePolicy.IsTrendTriggered(
                         change,
                         condition.DeltaThreshold);
+                    SetRuleConditionLatch(
+                        rule.Id,
+                        conditionIndex,
+                        trendMatches);
                     values.Add(trendMatches);
                     var isPercent = condition.TrendMode ==
                                     InstrumentTrendMode.DecreasePercent ||
@@ -4699,10 +7405,13 @@ public sealed class UnmaRuntime : IDisposable
 
                 m_sustainedConditionStates.Remove(sustainedStateKey);
                 lastValue = instrumentValue;
-                values.Add(AlarmEvaluation.Compare(
+                values.Add(EvaluateRuleCondition(
+                    rule.Id,
+                    conditionIndex,
                     instrumentValue,
                     condition.Comparison,
-                    condition.Threshold));
+                    condition.Threshold,
+                    condition.Hysteresis));
                 details.Add(UnmaText.Format(
                     "runtime.condition.comparison",
                     "{0} {1} {2:0.###} (actual {3:0.###})",
@@ -4723,7 +7432,7 @@ public sealed class UnmaRuntime : IDisposable
                         out var globalActual))
                 {
                     missingSource = true;
-                    values.Add(false);
+                    AddUnavailableCondition(conditionIndex);
                     details.Add(UnmaText.Format(
                         "runtime.condition.metric_missing",
                         "{0}: metric is missing",
@@ -4742,7 +7451,7 @@ public sealed class UnmaRuntime : IDisposable
                          out globalReference)))
                 {
                     missingSource = true;
-                    values.Add(false);
+                    AddUnavailableCondition(conditionIndex);
                     details.Add(UnmaText.Format(
                         "runtime.condition.reference_metric_missing",
                         "{0}: reference metric is missing",
@@ -4757,7 +7466,7 @@ public sealed class UnmaRuntime : IDisposable
                         out var globalComparable))
                 {
                     missingSource = true;
-                    values.Add(false);
+                    AddUnavailableCondition(conditionIndex);
                     details.Add(UnmaText.Format(
                         "runtime.condition.reference_not_calculable",
                         "{0}: reference cannot be calculated",
@@ -4766,10 +7475,13 @@ public sealed class UnmaRuntime : IDisposable
                 }
 
                 lastValue = globalComparable;
-                values.Add(AlarmEvaluation.Compare(
+                values.Add(EvaluateRuleCondition(
+                    rule.Id,
+                    conditionIndex,
                     globalComparable,
                     condition.Comparison,
-                    condition.Threshold));
+                    condition.Threshold,
+                    condition.Hysteresis));
                 details.Add(UnmaText.Format(
                     "runtime.condition.global_comparison",
                     "GLOBAL · {0} {1} {2:0.###} (actual {3:0.###})",
@@ -4785,7 +7497,7 @@ public sealed class UnmaRuntime : IDisposable
             if (option.IsNone)
             {
                 missingSource = true;
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(
                     condition.EntityTitle + ": " +
                     UnmaText.Get("runtime.source_missing"));
@@ -4802,7 +7514,7 @@ public sealed class UnmaRuntime : IDisposable
                     StringComparison.Ordinal))
             {
                 missingSource = true;
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(UnmaText.Format(
                     "runtime.condition.entity_type_mismatch",
                     "{0}: wrong entity type",
@@ -4817,7 +7529,7 @@ public sealed class UnmaRuntime : IDisposable
                     StringComparison.Ordinal))
             {
                 missingSource = true;
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(UnmaText.Format(
                     "runtime.condition.entity_prototype_mismatch",
                     "{0}: wrong prototype",
@@ -4831,7 +7543,7 @@ public sealed class UnmaRuntime : IDisposable
                     EntityMetricCatalog.TryGetStoredProductId(entity),
                     StringComparison.Ordinal))
             {
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(UnmaText.Format(
                     "runtime.condition.product_mismatch",
                     "{0}: different product",
@@ -4845,7 +7557,7 @@ public sealed class UnmaRuntime : IDisposable
                     out var actual))
             {
                 missingSource = true;
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(UnmaText.Format(
                     "runtime.condition.metric_missing",
                     "{0}: metric is missing",
@@ -4864,7 +7576,7 @@ public sealed class UnmaRuntime : IDisposable
                      out reference)))
             {
                 missingSource = true;
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(UnmaText.Format(
                     "runtime.condition.reference_metric_missing",
                     "{0}: reference metric is missing",
@@ -4879,7 +7591,7 @@ public sealed class UnmaRuntime : IDisposable
                     out var comparable))
             {
                 missingSource = true;
-                values.Add(false);
+                AddUnavailableCondition(conditionIndex);
                 details.Add(UnmaText.Format(
                     "runtime.condition.reference_not_calculable_values",
                     "{0} · {1}: reference cannot be calculated " +
@@ -4892,10 +7604,13 @@ public sealed class UnmaRuntime : IDisposable
             }
 
             lastValue = comparable;
-            var matches = AlarmEvaluation.Compare(
+            var matches = EvaluateRuleCondition(
+                rule.Id,
+                conditionIndex,
                 comparable,
                 condition.Comparison,
-                condition.Threshold);
+                condition.Threshold,
+                condition.Hysteresis);
             values.Add(matches);
             if (condition.ValueMode ==
                 ConditionValueMode.PercentOfReference)
@@ -4930,37 +7645,55 @@ public sealed class UnmaRuntime : IDisposable
             }
         }
 
-        var isActive = AlarmEvaluation.Combine(values, rule.Logic);
+        var currentGameTick = CurrentGameTick;
+        var isActive = AdvanceRuleTiming(
+            rule,
+            AlarmEvaluation.Combine(values, rule.Logic),
+            currentGameTick,
+            out var escalation);
+        var alarmKey = "rule:" + rule.Id;
+        if (!isActive)
+        {
+            ClearAlarm(
+                alarmKey,
+                rule.AutoAcknowledgeOnClear);
+            return;
+        }
         SetAlarm(
-            "rule:" + rule.Id,
+            alarmKey,
             rule.Name,
             string.Join(
                 rule.Logic == AlarmLogic.All ? UnmaText.Get("auto.a3f10eb98ea4") : UnmaText.Get("auto.5f15b34155a9"),
                 details),
             "custom",
             rule.PanelId,
-            rule.Severity,
+            escalation.Severity,
             isActive,
             missingSource,
-            rule.SoundId,
-            rule.ActiveColor,
+            escalation.SoundId,
+            escalation.IsEscalated
+                ? ColorFor(escalation.Severity)
+                : rule.ActiveColor,
             lastValue,
             autoAcknowledgeOnClear:
                 rule.AutoAcknowledgeOnClear,
-            occurrenceId: rule.Id,
-            slotId: "rule:" + rule.Id);
+            occurrenceId: AlarmEscalationPolicy.GetOccurrenceId(
+                rule.Id,
+                escalation.IsEscalated),
+            occurrencePriority: escalation.IsEscalated
+                ? AlarmEscalationPolicy.EscalatedOccurrencePriority
+                : AlarmEscalationPolicy.BaseOccurrencePriority,
+            slotId: "rule:" + rule.Id,
+            operatorAction: escalation.OperatorAction);
     }
 
     private bool EvaluateSustainedCondition(
         string stateKey,
         ConditionDefinition condition,
-        double currentValue,
-        int windowTicks)
+        int windowTicks,
+        bool comparisonMatches)
     {
-        if (!AlarmEvaluation.Compare(
-                currentValue,
-                condition.Comparison,
-                condition.Threshold))
+        if (!comparisonMatches)
         {
             m_sustainedConditionStates.Remove(stateKey);
             return false;
@@ -4971,8 +7704,11 @@ public sealed class UnmaRuntime : IDisposable
                         condition.Threshold.ToString(
                             "R",
                             CultureInfo.InvariantCulture) + "|" +
+                        condition.Hysteresis.ToString(
+                            "R",
+                            CultureInfo.InvariantCulture) + "|" +
                         windowTicks;
-        var nowTicks = (double)m_calendar.RealTime.Ticks;
+        var currentGameTick = CurrentGameTick;
         if (!m_sustainedConditionStates.TryGetValue(
                 stateKey,
                 out var state) ||
@@ -4980,17 +7716,17 @@ public sealed class UnmaRuntime : IDisposable
                 state.Signature,
                 signature,
                 StringComparison.Ordinal) ||
-            nowTicks < state.StartedAtTicks)
+            currentGameTick < state.StartedAtTick)
         {
             m_sustainedConditionStates[stateKey] =
                 new SustainedConditionState
                 {
                     Signature = signature,
-                    StartedAtTicks = nowTicks,
+                    StartedAtTick = currentGameTick,
                 };
             return false;
         }
-        return nowTicks - state.StartedAtTicks >= windowTicks;
+        return currentGameTick - state.StartedAtTick >= windowTicks;
     }
 
     private void RemoveSustainedStatesForRule(string ruleId)
@@ -5776,7 +8512,10 @@ public sealed class UnmaRuntime : IDisposable
                 var history = FindHistoryLocked(alarm.Sequence);
                 if (history != null && !history.IsGone)
                 {
-                    history.IsAcknowledged = true;
+                    history.SetState(
+                        isGone: false,
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                 }
                 if (changed)
                 {
@@ -5818,7 +8557,9 @@ public sealed class UnmaRuntime : IDisposable
         string slotId = "",
         int entityId = -1,
         string entityPrototypeId = "",
-        string entityTitle = "")
+        string entityTitle = "",
+        AlarmOperatorAction operatorAction = AlarmOperatorAction.None,
+        string attentionPanelId = "")
     {
         var shouldPersist = false;
         var shouldPublishExternal = false;
@@ -5924,6 +8665,22 @@ public sealed class UnmaRuntime : IDisposable
                 state.View.Sequence = state.Sequence;
                 m_alarmHistory.Add(CreateHistoryFromState(state));
                 historyChanged = true;
+                if (ShouldEnqueueAttentionRequest(
+                        wasActive,
+                        transition.IsNewOccurrence))
+                {
+                    AlarmAttentionQueuePolicy.TryEnqueue(
+                        m_attentionRequests,
+                        new AlarmAttentionRequest(
+                            state.View.Key,
+                            state.Sequence,
+                            string.IsNullOrWhiteSpace(attentionPanelId)
+                                ? state.View.PanelId
+                                : attentionPanelId,
+                            state.View.SlotId,
+                            state.View.Severity,
+                            operatorAction));
+                }
             }
             else if (state.Sequence > 0 &&
                      (wasActive || wasGoneUnacknowledged ||
@@ -6029,6 +8786,13 @@ public sealed class UnmaRuntime : IDisposable
         {
             PublishExternalDisplayAlarm(slotCandidate, true);
         }
+    }
+
+    private static bool ShouldEnqueueAttentionRequest(
+        bool wasActive,
+        bool isNewOccurrence)
+    {
+        return wasActive && isNewOccurrence;
     }
 
     private void ClearAlarm(
@@ -6199,6 +8963,7 @@ public sealed class UnmaRuntime : IDisposable
                 }
             }
         }
+        changed |= InvalidateTimingForAlarmKey(key);
         if (changed && persist)
         {
             PersistAlarmState();
@@ -6219,7 +8984,10 @@ public sealed class UnmaRuntime : IDisposable
         {
             return false;
         }
-        return history.SetState(true, acknowledged);
+        return history.SetState(
+            isGone: true,
+            isAcknowledged: acknowledged,
+            currentGameTicks: CurrentGameTicks);
     }
 
     private bool UpdateHistoryFromStateLocked(
@@ -6262,12 +9030,19 @@ public sealed class UnmaRuntime : IDisposable
         history.Source = state.View.Source;
         history.PanelId = state.View.PanelId;
         history.Severity = state.View.Severity;
-        return history.SetState(isGone, isAcknowledged) || changed;
+        return history.SetState(
+                   isGone,
+                   isAcknowledged,
+                   CurrentGameTicks) || changed;
     }
 
-    private static AlarmHistoryDefinition CreateHistoryFromState(
+    private AlarmHistoryDefinition CreateHistoryFromState(
         AlarmState state)
     {
+        var currentGameTicks = CurrentGameTicks;
+        var isGone = !state.View.IsActive;
+        var isAcknowledged = state.View.IsActive &&
+                             state.View.IsAcknowledged;
         return new AlarmHistoryDefinition
         {
             Sequence = state.Sequence,
@@ -6277,9 +9052,13 @@ public sealed class UnmaRuntime : IDisposable
             Source = state.View.Source,
             PanelId = state.View.PanelId,
             Severity = state.View.Severity,
-            IsGone = !state.View.IsActive,
-            IsAcknowledged = state.View.IsActive &&
-                             state.View.IsAcknowledged,
+            IsGone = isGone,
+            IsAcknowledged = isAcknowledged,
+            RaisedAtTicks = currentGameTicks,
+            ClearedAtTicks = isGone ? currentGameTicks : 0d,
+            AcknowledgedAtTicks = isAcknowledged
+                ? currentGameTicks
+                : 0d,
         };
     }
 
@@ -6297,8 +9076,16 @@ public sealed class UnmaRuntime : IDisposable
             Severity = source.Severity,
             IsGone = source.IsGone,
             IsAcknowledged = source.IsAcknowledged,
+            RaisedAtTicks = source.RaisedAtTicks,
+            ClearedAtTicks = source.ClearedAtTicks,
+            AcknowledgedAtTicks = source.AcknowledgedAtTicks,
         };
     }
+
+    private long CurrentGameTick =>
+        Math.Max(0L, (long)m_calendar.RealTime.Ticks);
+
+    private double CurrentGameTicks => (double)CurrentGameTick;
 
     private AlarmSeverity ClassifyNotification(INotification notification)
     {
@@ -6526,11 +9313,13 @@ public sealed class UnmaRuntime : IDisposable
     {
         CapturePersistentAlarmState(
             out var alarmMemories,
-            out var alarmHistory);
+            out var alarmHistory,
+            out var alarmTimingMemories);
         lock (m_configurationGate)
         {
             Configuration.AlarmMemories = alarmMemories;
             Configuration.AlarmHistory = alarmHistory;
+            Configuration.AlarmTimingMemories = alarmTimingMemories;
         }
     }
 
@@ -7078,6 +9867,10 @@ public sealed class UnmaRuntime : IDisposable
             SoundId = source.SoundId,
             Enabled = source.Enabled,
             AutoAcknowledgeOnClear = source.AutoAcknowledgeOnClear,
+            ActivationDelayTicks = source.ActivationDelayTicks,
+            ResetDelayTicks = source.ResetDelayTicks,
+            MinimumActiveTicks = source.MinimumActiveTicks,
+            Escalation = AlarmEscalationPolicy.Clone(source.Escalation),
             Conditions = source.Conditions.Select(condition =>
                 new ConditionDefinition
                 {
@@ -7099,6 +9892,7 @@ public sealed class UnmaRuntime : IDisposable
                     DeltaThreshold = condition.DeltaThreshold,
                     WindowAmount = condition.WindowAmount,
                     WindowUnit = condition.WindowUnit,
+                    Hysteresis = condition.Hysteresis,
                 }).ToList(),
         };
     }
@@ -7123,12 +9917,17 @@ public sealed class UnmaRuntime : IDisposable
                     Logic = stage.Logic,
                     ActiveColor = stage.ActiveColor,
                     SoundId = stage.SoundId,
+                    ActivationDelayTicks = stage.ActivationDelayTicks,
+                    ResetDelayTicks = stage.ResetDelayTicks,
+                    MinimumActiveTicks = stage.MinimumActiveTicks,
+                    OperatorAction = stage.OperatorAction,
                     Conditions = stage.Conditions.Select(condition =>
                         new SystemConditionDefinition
                         {
                             MetricId = condition.MetricId,
                             Comparison = condition.Comparison,
                             Threshold = condition.Threshold,
+                            Hysteresis = condition.Hysteresis,
                         }).ToList(),
                 }).ToList(),
         };

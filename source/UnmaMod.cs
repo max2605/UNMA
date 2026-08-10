@@ -23,6 +23,7 @@ using Mafi.Unity.UiToolkit;
 using UnityEngine;
 using UNMA.Localization;
 using UNMA.Extensions;
+using UNMA.Integration;
 using UNMA.Runtime;
 using UNMA.Ui;
 
@@ -69,6 +70,8 @@ public sealed class UnmaMod : IMod
 
     public void Initialize(DependencyResolver resolver, bool gameWasLoaded)
     {
+        KeybindFrameworkBridge.Register();
+
         var gameId = resolver.Resolve<IGameIdProvider>().GameId;
         var store = new UnmaStateStore(
             Manifest.RootDirectoryPath,

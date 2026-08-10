@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using Mafi;
 using UNMA.Domain;
@@ -9,9 +10,18 @@ namespace UNMA.Runtime;
 
 public sealed class UnmaStateStore
 {
+    [DataContract]
+    private sealed class SchemaVersionProbe
+    {
+        [DataMember(Name = "SchemaVersion", Order = 1)]
+        public int SchemaVersion = 0;
+    }
+
     private readonly string m_path;
 
     public string Path => m_path;
+    public bool IsWriteBlocked { get; private set; }
+    public string WriteBlockReason { get; private set; } = "";
 
     public UnmaStateStore(string modRoot, long gameId)
     {
@@ -31,6 +41,15 @@ public sealed class UnmaStateStore
 
         try
         {
+            var storedSchemaVersion = ReadStoredSchemaVersion();
+            if (storedSchemaVersion >
+                UnmaConfiguration.CurrentSchemaVersion)
+            {
+                BlockWritesForFutureSchema(storedSchemaVersion);
+                Log.Warning("UNMA: " + WriteBlockReason);
+                return UnmaConfiguration.CreateDefault();
+            }
+
             using var stream = File.OpenRead(m_path);
             var serializer = new DataContractJsonSerializer(
                 typeof(UnmaConfiguration));
@@ -54,6 +73,32 @@ public sealed class UnmaStateStore
     {
         error = "";
         var temporaryPath = m_path + ".tmp";
+
+        if (IsWriteBlocked)
+        {
+            error = WriteBlockReason;
+            return false;
+        }
+        if (configuration == null)
+        {
+            error = "UNMA configuration is missing.";
+            return false;
+        }
+        if (configuration.SchemaVersion >
+            UnmaConfiguration.CurrentSchemaVersion)
+        {
+            BlockWritesForFutureSchema(configuration.SchemaVersion);
+            error = WriteBlockReason;
+            Log.Warning("UNMA: " + error);
+            return false;
+        }
+        if (TryReadFutureSchemaVersion(out var storedSchemaVersion))
+        {
+            BlockWritesForFutureSchema(storedSchemaVersion);
+            error = WriteBlockReason;
+            Log.Warning("UNMA: " + error);
+            return false;
+        }
 
         try
         {
@@ -86,6 +131,49 @@ public sealed class UnmaStateStore
             TryDelete(temporaryPath);
             return false;
         }
+    }
+
+    private int ReadStoredSchemaVersion()
+    {
+        using var stream = File.OpenRead(m_path);
+        var serializer = new DataContractJsonSerializer(
+            typeof(SchemaVersionProbe));
+        var probe = serializer.ReadObject(stream) as SchemaVersionProbe;
+        return probe?.SchemaVersion ?? 0;
+    }
+
+    private bool TryReadFutureSchemaVersion(out int schemaVersion)
+    {
+        schemaVersion = 0;
+        if (!File.Exists(m_path))
+        {
+            return false;
+        }
+        try
+        {
+            schemaVersion = ReadStoredSchemaVersion();
+            return schemaVersion > UnmaConfiguration.CurrentSchemaVersion;
+        }
+        catch
+        {
+            // Preserve the existing broken-file recovery path. A malformed
+            // current file is still replaced atomically and retained as both
+            // .bak and, when loaded, .broken-*; only a positively identified
+            // future schema makes this store read-only.
+            schemaVersion = 0;
+            return false;
+        }
+    }
+
+    private void BlockWritesForFutureSchema(int schemaVersion)
+    {
+        IsWriteBlocked = true;
+        WriteBlockReason =
+            "UNMA configuration schema " + schemaVersion +
+            " is newer than supported schema " +
+            UnmaConfiguration.CurrentSchemaVersion +
+            ". The original file was left unchanged and saving is disabled " +
+            "for this session.";
     }
 
     private void TryBackupBrokenFile()

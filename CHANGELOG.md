@@ -1,5 +1,178 @@
 # Changelog
 
+## 0.10.0 – 2026-08-11
+
+- 0.10.0 bündelt und stabilisiert die vollständige Ausbaureihe 0.9.19 bis
+  0.9.26: Bediener-Keybinds, Verlaufssuche und -export, atomare Panelkopien,
+  spielzeitpersistente Verzögerungen und Hysterese, schlitzbezogene Tonpause,
+  Eskalation und sichere Operatoraktionen, Historian mit Prognose,
+  Betriebsbereiche sowie die nur lesende Incident-Linse.
+- Alle Belegungen des optionalen Keybind Frameworks werden nun unterdrückt,
+  solange ein natives UNMA-Textfeld Fokus besitzt. Neu belegte Buchstabentasten
+  können beim Schreiben damit keine Quittierung oder andere Aktion auslösen.
+- Hauptfenster, Editor und abgekoppelte Panels verwenden viewportbegrenzte,
+  skalenabhängige Mindestgrößen. Die nutzbare logische Arbeitsfläche bleibt
+  dadurch auch bei 200 Prozent erhalten.
+- Konfigurationen aus Schema 21 oder höher werden vor vollständiger
+  Deserialisierung erkannt. UNMA lässt Hauptdatei, Backup-, Temp- und
+  Broken-Artefakte unangetastet und sperrt weitere Schreibvorgänge für die
+  Sitzung, statt unbekannte Felder mit dem Schema-20-Modell zu verlieren.
+- Das öffentliche Erweiterungs-API und die Assembly-Bindung bleiben auf V1;
+  das Persistenzschema bleibt 20. Für 0.10.0 ist keine neue Migration nötig.
+- Release-Build, 125.569 Core-Assertions sowie alle IL-/Reflection-,
+  Lokalisierungs-, Rollback- und Paketprüfungen wurden erfolgreich ausgeführt.
+- Die Versionsfolge springt bewusst von 0.9.26 auf 0.10.0; 0.9.27 wurde nicht
+  veröffentlicht.
+
+## 0.9.26 – 2026-08-11
+
+- Die nur auf HOME sichtbare **INCIDENT-LINSE** gruppiert aktive Alarme anhand
+  ihrer Kommen-Zeitpunkte. Ein Abstand von höchstens zwei Spieltagen bildet
+  einen zeitlichen Cluster; **ERSTES SIGNAL** bezeichnet nur dessen früheste
+  Meldung und ausdrücklich keine bestätigte Ursache.
+- Cluster respektieren **ALLE**, **NICHT ZUGEORDNET** und konkrete
+  Betriebsbereiche. Der getrennte globale Alarmdruck gewichtet Vorkommen der
+  letzten zehn Spieltage nach Stufe und zeigt Anzahl sowie verschiedene Alarme
+  als **NORMAL**, **ERHÖHT**, **STURM** oder **SCHWER**.
+- Die erweiterte Ansicht zeigt höchstens sechs Incident-Karten mit je acht
+  Mitgliedern und weist auf weitere Einträge hin. **FOKUS** springt nur zu
+  einer noch sichtbaren Meldung beziehungsweise ihrem Objekt.
+- Analyse und Fokus quittieren, verbergen oder löschen keine Meldung, ändern
+  weder Ton noch Verlauf und führen keinerlei eigene Alarmzustände ein.
+- Ein revisionsgebundener, unveränderlich ersetzter History-Cache begrenzt den
+  globalen Druck auf die neuesten 8.192 Vorkommen. Sortierung und Analyse
+  laufen außerhalb des Alarm-Locks; unveränderte Frames scannen den Verlauf
+  nicht erneut. Bei dauerhaft wechselnder Revision liefert UNMA nach höchstens
+  zwei Versuchen einen konsistenten lokalen Snapshot, statt die UI zu blockieren.
+- Die Incident-Linse wird ausschließlich aus Laufzeit-Snapshots abgeleitet und
+  nicht gespeichert. 0.9.26 benötigt deshalb keine neue Schema-Migration.
+
+## 0.9.25 – 2026-08-11
+
+- Benutzerdefinierte Betriebsbereiche gruppieren globale Panels, ohne
+  Alarmzustand, Verlauf, Historian oder Audioverhalten zu verändern. **ALLE**,
+  **NICHT ZUGEORDNET** und jeder eigene Bereich filtern Panelleiste und HOME.
+- Das gefilterte HOME führt aktive Meldungen der zugehörigen Panels zu genau
+  einem Schlitz je Alarm zusammen. **BEREICH QUITT.** und **BEREICH WEITER**
+  arbeiten nur in der ausgewählten Ansicht; **ALLES QUITTIEREN** bleibt global.
+- Quittierung gehört weiterhin zum eigentlichen Alarmzustand: Ist dieselbe
+  Meldung über mehrere Bereiche sichtbar, wird ihre Quittierung überall
+  wirksam und erzeugt weder Kopien noch getrennte Verlaufsereignisse.
+- Bereiche lassen sich in einem atomaren Entwurf anlegen, umbenennen,
+  umsortieren und löschen. Beim Löschen werden ihre Panels ausschließlich
+  **NICHT ZUGEORDNET**; Panels, Schlitze, Regeln und Zustände bleiben erhalten.
+- Die Panel-Einstellungen weisen Bereiche direkt zu. Duplikate übernehmen den
+  Bereich ihrer Quelle; neue Panels übernehmen nur einen konkret ausgewählten
+  Bereich und bleiben unter **ALLE** oder **NICHT ZUGEORDNET** unzugeordnet.
+- Entwurfswechsel und Schließen schützen ungespeicherte Panel- und
+  Bereichseinstellungen. Schmale Fenster und 200-%-Skalierung verwenden
+  gestapelte, scrollbar bleibende Layouts.
+- Schema 20 migriert vorhandene Welten ohne Bereichszuordnung. Dadurch bleibt
+  ihre bisherige **ALLE**-Ansicht unverändert.
+
+## 0.9.24 – 2026-08-10
+
+- Jedes Instrument besitzt jetzt unabhängig vom Anzeigetyp einen gemeinsamen
+  **HIST**-Zugang. Die große Historienansicht verwendet Spielzeitfenster von
+  einem Tag bis zur gesamten sitzungsbasierten Laufzeit.
+- Der Historian zeigt aktuellen Wert, Minimum, Mittelwert und Maximum sowie
+  eine numerisch stabile lineare Rate pro Spielmonat und deren R²-Güte.
+- Bei einem belastbaren steigenden oder fallenden Trend berechnet UNMA eine
+  gerichtete ETA zur oberen beziehungsweise unteren Instrumentenskala. Wenige,
+  stabile, unzuverlässige und über 100 Jahre entfernte Verläufe werden klar
+  getrennt ausgewiesen.
+- Diagramm und Analyse verwenden denselben atomaren Laufzeit-Snapshot und
+  dasselbe inklusive Zeitfenster. Spielzeit-Rücksprünge beginnen eine neue
+  Historienepoche, statt Messpunkte aus einer zukünftigen Zeitleiste zu mischen.
+- Forecast-Ausfall, fehlende Quelle und unzureichende Daten bleiben getrennte
+  Zustände; Diagramm und aktueller Wert werden soweit möglich weiter angezeigt.
+
+## 0.9.23 – 2026-08-10
+
+- Eigene Regeln können nach einer frei wählbaren aktiven Spielzeit einmalig auf
+  eine strikt höhere Alarmstufe und einen eigenen Ton eskalieren. Ein leerer
+  Eskalationston übernimmt bewusst den Grundton.
+- Die Eskalation erzeugt eine neue Meldungsfolge und verlangt damit erneut eine
+  Quittierung. Eine Tonpause der vorherigen Folge wird nicht übernommen.
+- Jede Systemalarmstufe kann eine sichere Operatoraktion auslösen, wenn ein
+  bereits aktiver Alarm in diese Stufe wechselt.
+- Operatoraktionen öffnen ausschließlich das passende UNMA-Panel und scrollen
+  zur Meldung. Optional beenden sie nur die vorübergehende
+  Fünf-Minuten-Stummschaltung; Kamera, Maschinen, globale Audioeinstellung und
+  schlitzbezogene Tonpausen bleiben unangetastet.
+- Eine auf 64 Einträge begrenzte Laufzeit-Queue verwirft veraltete,
+  quittierte oder ersetzte Anforderungen und priorisiert Alarmstufe, Aktion und
+  jüngste Meldungsfolge deterministisch.
+- Schema 19 migriert bestehende Welten mit deaktivierter Eskalation und ohne
+  Operatoraktionen; die in 0.9.22 gespeicherten Timer und Latches bleiben
+  vollständig erhalten.
+
+## 0.9.22 – 2026-08-10
+
+- Eigene Regeln und jede einzelne Systemalarmstufe besitzen jetzt eine
+  spielzeitbasierte Auslöseverzögerung, Rücksetzverzögerung und optionale
+  Mindestaktivzeit. `0` erhält das bisherige Sofortverhalten.
+- Jede numerische Schwellenbedingung kann mit einer Hysterese versehen werden.
+  Die sechs Vergleichsoperatoren verwenden dafür stabile Schmitt-Bänder, damit
+  Messwerte an einer Grenze keine Alarmflut erzeugen.
+- Laufende Timer und Bedingungslatches werden je Welt gespeichert. Laden,
+  Spielzeitrücksprünge und reine Text-, Farb- oder Tonänderungen erzeugen keine
+  künstlichen Alarmwechsel.
+- `Z` pausiert den Ton eines sichtbaren Meldeschlitzes für einen Spielmonat;
+  `R` hebt die Pause wieder auf. Quittierung, Sichtbarkeit, Zähler und Verlauf
+  bleiben unverändert, auch bei zusammengefassten Objektmeldungen.
+- Ungültige Zeit- oder Hystereseentwürfe blockieren das Speichern und
+  strukturelle Systemeditor-Aktionen, statt Eingaben still zu normalisieren
+  oder zu verwerfen.
+
+## 0.9.21 – 2026-08-10
+
+- Globale Panels lassen sich in ihren Einstellungen als unabhängige Vorlage
+  duplizieren. Spalten, Filter, automatische Quellen, Ausschlüsse und feste
+  Schlitzreihenfolge bleiben erhalten.
+- Zugeordnete eigene Meldungen werden tief kopiert, erhalten kollisionsfreie
+  Kennungen und starten bewusst deaktiviert. Verknüpfungen, aktive Zustände und
+  Verlaufseinträge werden nicht übernommen.
+- Dashboard und Objektpanels bleiben von der Funktion ausgeschlossen. Verwaiste
+  Regelplätze aus beschädigten Alt-Konfigurationen werden sicher übersprungen
+  und dem Nutzer gemeldet.
+- Der gesamte Vorgang wird einmal atomar gespeichert; bei einem Schreibfehler
+  werden Panel und Regeln vollständig zurückgerollt.
+
+## 0.9.20 – 2026-08-10
+
+- Der Verlauf besitzt jetzt eine Freitextsuche über Meldung, Detail, Quelle,
+  Panel und Alarmkennung sowie kombinierbare Zustands- und Stufenfilter.
+- Jede neue Verlaufszeile speichert Spielzeitmarken für Kommen, Gehen und
+  Quittieren; die Oberfläche zeigt das jeweils jüngste Ereignis als
+  Spieljahr, -monat und -tag.
+- Die aktuell gefilterte Ansicht lässt sich als RFC-4180-CSV oder als JSON nach
+  `%LOCALAPPDATA%\UNMA\exports` exportieren. Tickwerte und Unicode-Texte bleiben
+  vollständig erhalten.
+- Alte Spielstände ohne Zeitmarken bleiben lesbar; beschädigte oder ungültige
+  Zeitwerte werden beim Laden sicher normalisiert.
+- Eine vollständig getestete, spielzeitbasierte Timing-Policy bereitet
+  Aktivierungs-/Rücksetzverzögerung, Mindestaktivzeit und Hysterese vor, ohne
+  das bisherige Sofortverhalten bestehender Regeln zu verändern.
+
+## 0.9.19 – 2026-08-10
+
+- Meldungen lassen sich jetzt einzeln am Schlitz, panelweise oder weiterhin
+  global quittieren. Aggregierte Objektmeldungen quittieren dabei zuverlässig
+  alle zugrunde liegenden Ereignisse samt Verlauf.
+- **NÄCHSTER ALARM** springt zyklisch zur nächsten unquittierten Meldung,
+  scrollt sie ins Sichtfeld und öffnet nach Möglichkeit das betroffene Objekt.
+- Das optionale Keybind Framework 2.0.2 bindet Fenster, Master-Quittierung,
+  Alarmnavigation und fünfminütige Tonstummschaltung mit primärer und
+  sekundärer Belegung ein; ohne Framework gelten sichere Standardtasten.
+- Eine fünfminütige Stummschaltung pausiert nur die Audioausgabe, ohne
+  Meldungen zu quittieren oder ihren Zustand zu verändern.
+- Entity-Metadaten bleiben beim Zusammenfassen von Meldeschlitzen erhalten,
+  sodass Navigation auch aus projizierten Panels das richtige Ziel findet.
+- Reproduzierbare Paketskripte, vollständige Release-Prüfungen und ein
+  GitHub-Coretest-Workflow verhindern versehentliches Deployment in die aktive
+  Mod-Installation und prüfen Sprachkataloge automatisch.
+
 ## 0.9.18 – 2026-08-10
 
 - Launcher, Hauptfenster, Meldungseditor, abgetrennte Panels, Formulare und
