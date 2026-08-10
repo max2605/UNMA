@@ -7,6 +7,7 @@ using Mafi.Core.Entities.Static;
 using Mafi.Core.Notifications;
 using Mafi.Core.Prototypes;
 using UNMA.Domain;
+using UNMA.Localization;
 
 namespace UNMA.Runtime;
 
@@ -187,6 +188,8 @@ public static class EntityVanillaNotificationCatalog
         entityTitle = entityTitle?.Trim() ?? "";
         return name.Replace(
             "{entity}",
-            entityTitle.Length == 0 ? "Object" : entityTitle);
+            entityTitle.Length == 0
+                ? UnmaText.Get("entity.generic_object", "Object")
+                : entityTitle);
     }
 }

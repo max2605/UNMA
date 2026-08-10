@@ -6,6 +6,7 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using UNMA.Domain;
+using UNMA.Localization;
 
 namespace UNMA.Integration;
 
@@ -53,7 +54,9 @@ internal sealed class ExternalDisplayNotificationWriter
                     .Select((panel, index) => new PanelDto
                     {
                         Id = panel.Id ?? string.Empty,
-                        Name = panel.Name ?? "MELDETAFEL",
+                        Name = panel.Name ?? UnmaText.Get(
+                            "default.panel",
+                            "PANEL"),
                         Columns = Math.Max(1, Math.Min(8, panel.Columns)),
                         Order = index,
                         IsDashboard = panel.IsDashboard,
@@ -65,7 +68,9 @@ internal sealed class ExternalDisplayNotificationWriter
                             {
                                 Key = alarm.Key ?? string.Empty,
                                 SlotId = alarm.SlotId ?? string.Empty,
-                                Title = alarm.Name ?? "MELDUNG",
+                                Title = alarm.Name ?? UnmaText.Get(
+                                    "default.notification",
+                                    "NOTIFICATION"),
                                 Detail = alarm.Detail ?? string.Empty,
                                 Source = alarm.Source ?? string.Empty,
                                 Severity = SeverityName(alarm.Severity),

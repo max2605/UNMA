@@ -1,3 +1,42 @@
+v0.9.17 | 2026-08-10
+Alarm editor
+* Replaced the implicit first-panel destination for instrument alarms with an explicit target-panel picker.
+* Added independent multi-panel assignment per instrument alarm and enforced at least one destination.
+* Added INSTRUMENT as a permanent third source button beside game selection and global variables.
+
+Fixes
+* Fixed rules with missing or invalid target panels during configuration normalization.
+
+v0.9.16 | 2026-08-10
+* Added a dedicated LINKED VALUES source when opening the alarm editor from an instrument.
+* Added direct selection of other instrument values from the same instrument panel as alarm conditions.
+* Restored the linked source context when editing an existing instrument-bound alarm.
+
+v0.9.15 | 2026-08-10
+* Changed recorder archives from real-time ranges to COI game-time ranges spanning one day through one century.
+* Added absolute and percentage increase/decrease conditions plus sustained comparisons over time.
+* Added days, months, years, decades, and centuries as explicit condition units.
+* Migrated legacy second-based conditions to equivalent game-time windows.
+
+v0.9.14 | 2026-08-10
+* Added global stored quantities for every unlocked product to the free-form notification editor.
+* Added global storage capacity and fill percentage conditions per product.
+* Added maintenance fill, reserve, capacity, monthly change, and current/maximum monthly demand conditions.
+* Localized product names through COI and all new labels through MultiLangLib.
+
+v0.9.13 | 2026-08-09
+* Routed all player-visible UNMA UI and runtime text through MultiLangLib.
+* Added complete German and English translations and key-complete English fallbacks for every other language catalog.
+* Made system metric, unit, and built-in sound labels resolve dynamically in the active language.
+* Added regression coverage for catalog parsing, key parity, referenced keys, and format placeholders across all 21 languages.
+
+v0.9.12 | 2026-08-09
+* Integrated UNMA windows with Captain of Industry's native frames and button styling, including resizing and correct input boundaries.
+* Added a maximized paper-recorder archive with selectable time ranges and a continuous trace.
+* Added calculated instruments that aggregate the same metric from multiple buildings as sum, average, minimum, or maximum.
+* Added threshold and timed absolute/percentage decrease alarms for calculated instrument values.
+* Separated instrument titles and action controls so labels no longer overlap.
+
 v0.9.11 | 2026-08-09
 * Fixed the global-variable picker closing whenever its live values refreshed.
 

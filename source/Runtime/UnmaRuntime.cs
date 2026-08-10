@@ -14,6 +14,8 @@ using Mafi.Core.Entities.Static.Layout;
 using Mafi.Core.Factory.Transports;
 using Mafi.Core.Notifications;
 using Mafi.Core.Population;
+using Mafi.Core.Products;
+using Mafi.Core.Maintenance;
 using Mafi.Core.Simulation;
 using UNMA.Api;
 using UNMA.Domain;
@@ -22,6 +24,49 @@ using UNMA.Integration;
 using UNMA.Localization;
 
 namespace UNMA.Runtime;
+
+public readonly struct InstrumentHistoryState
+{
+    public int SampleCount { get; }
+    public double FirstTimestampSeconds { get; }
+    public double LastTimestampSeconds { get; }
+    public double FirstValue { get; }
+    public double LastValue { get; }
+
+    public InstrumentHistoryState(
+        int sampleCount,
+        double firstTimestampSeconds,
+        double lastTimestampSeconds,
+        double firstValue,
+        double lastValue)
+    {
+        SampleCount = sampleCount;
+        FirstTimestampSeconds = firstTimestampSeconds;
+        LastTimestampSeconds = lastTimestampSeconds;
+        FirstValue = firstValue;
+        LastValue = lastValue;
+    }
+}
+
+public readonly struct InstrumentHistoryBucket
+{
+    public double FirstValue { get; }
+    public double MinimumValue { get; }
+    public double MaximumValue { get; }
+    public double LastValue { get; }
+
+    public InstrumentHistoryBucket(
+        double firstValue,
+        double minimumValue,
+        double maximumValue,
+        double lastValue)
+    {
+        FirstValue = firstValue;
+        MinimumValue = minimumValue;
+        MaximumValue = maximumValue;
+        LastValue = lastValue;
+    }
+}
 
 public sealed class UnmaSettings
 {
@@ -93,6 +138,12 @@ public sealed class UnmaRuntime : IDisposable
         public string Detail = "";
     }
 
+    private sealed class SustainedConditionState
+    {
+        public string Signature = "";
+        public double StartedAtTicks;
+    }
+
     private static readonly string[] s_emergencyNotificationTokens =
     {
         "meltdown",
@@ -136,6 +187,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly object m_externalDefinitionsGate = new();
     private readonly object m_removedEntitiesGate = new();
     private readonly object m_notificationEntityAliasesGate = new();
+    private readonly object m_instrumentValuesGate = new();
     private readonly INotificationsManager m_notificationsManager;
     private readonly IEntitiesManager m_entitiesManager;
     private readonly TransportsManager m_transportsManager;
@@ -143,6 +195,9 @@ public sealed class UnmaRuntime : IDisposable
     private readonly IWorkersManager m_workersManager;
     private readonly SettlementsManager m_settlementsManager;
     private readonly PopsHealthManager m_healthManager;
+    private readonly IProductsManager m_productsManager;
+    private readonly MaintenanceManager m_maintenanceManager;
+    private readonly ICalendar m_calendar;
     private readonly ISimLoopEvents m_simLoopEvents;
     private readonly UnmaStateStore m_store;
     private readonly ExternalDisplayNotificationWriter m_externalDisplay =
@@ -168,6 +223,18 @@ public sealed class UnmaRuntime : IDisposable
         m_notificationOwnersByChild = new();
     private readonly Dictionary<int, HashSet<int>>
         m_notificationChildrenByOwner = new();
+    private readonly Dictionary<string, double> m_lastInstrumentValues =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<InstrumentValueSample>>
+        m_instrumentHistory = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> m_instrumentSignatures =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SustainedConditionState>
+        m_sustainedConditionStates = new(StringComparer.Ordinal);
+
+    private const int MaximumInstrumentHistorySamples = 100000;
+    private const double InstrumentHistorySampleIntervalTicks =
+        GameTimeWindowPolicy.SimTicksPerDay;
 
     private sealed class NotificationEntityAlias
     {
@@ -208,6 +275,9 @@ public sealed class UnmaRuntime : IDisposable
         IWorkersManager workersManager,
         SettlementsManager settlementsManager,
         PopsHealthManager healthManager,
+        IProductsManager productsManager,
+        MaintenanceManager maintenanceManager,
+        ICalendar calendar,
         ISimLoopEvents simLoopEvents,
         UnmaStateStore store,
         UnmaSettings settings,
@@ -222,6 +292,9 @@ public sealed class UnmaRuntime : IDisposable
         m_workersManager = workersManager;
         m_settlementsManager = settlementsManager;
         m_healthManager = healthManager;
+        m_productsManager = productsManager;
+        m_maintenanceManager = maintenanceManager;
+        m_calendar = calendar;
         m_simLoopEvents = simLoopEvents;
         m_store = store;
         m_externalProviders = (externalProviders ??
@@ -263,6 +336,8 @@ public sealed class UnmaRuntime : IDisposable
 
     public void Initialize()
     {
+        RestoreNotificationEntityAliases();
+
         // This callback owns runtime-only cleanup state. Registering it with
         // Add() would make COI serialize this UnmaRuntime owner with the game
         // save and fail because runtime services are intentionally not save
@@ -663,6 +738,31 @@ public sealed class UnmaRuntime : IDisposable
             return Configuration.Panels.FirstOrDefault(panel =>
                 PanelTopologyPolicy.IsEntityPanel(panel) &&
                 panel.OwnerEntityId == entityId);
+        }
+    }
+
+    private void RestoreNotificationEntityAliases()
+    {
+        int[] ownerEntityIds;
+        lock (m_configurationGate)
+        {
+            ownerEntityIds = Configuration.Panels
+                .Where(PanelTopologyPolicy.IsEntityPanel)
+                .Select(panel => panel.OwnerEntityId)
+                .Distinct()
+                .ToArray();
+        }
+        foreach (var ownerEntityId in ownerEntityIds)
+        {
+            if (!TryGetLiveEntity(ownerEntityId, out var owner))
+            {
+                continue;
+            }
+            RegisterNotificationEntityAliases(
+                ownerEntityId,
+                owner.Prototype.Id.Value,
+                EntityMetricCatalog.GetEntityTitle(owner),
+                GetNotificationEntities(owner));
         }
     }
 
@@ -1158,9 +1258,21 @@ public sealed class UnmaRuntime : IDisposable
                 }
                 else
                 {
-                    entityId = rule?.Conditions?
-                        .FirstOrDefault(condition => condition != null)?
-                        .EntityId ?? -1;
+                    var firstCondition = rule?.Conditions?
+                        .FirstOrDefault(condition => condition != null);
+                    entityId = firstCondition?.EntityId ?? -1;
+                    if (entityId < 0 &&
+                        !string.IsNullOrWhiteSpace(
+                            firstCondition?.InstrumentId))
+                    {
+                        var instrument = Configuration.Instruments
+                            .FirstOrDefault(candidate => string.Equals(
+                                candidate?.Id,
+                                firstCondition.InstrumentId,
+                                StringComparison.Ordinal));
+                        entityId = GetInstrumentSources(instrument)
+                            .FirstOrDefault()?.EntityId ?? -1;
+                    }
                 }
             }
         }
@@ -1223,12 +1335,13 @@ public sealed class UnmaRuntime : IDisposable
     {
         var settings = m_settings;
         var systemMetrics = CaptureSystemMetrics();
+        var instrumentValues = CaptureInstrumentValues();
         if (settings.EnableSystemAlarms)
         {
             EvaluateSystemAlarms(systemMetrics);
         }
         EvaluateSustainedVanillaAlarms();
-        EvaluateCustomRules(systemMetrics);
+        EvaluateCustomRules(systemMetrics, instrumentValues);
         EvaluateExternalAlarms();
     }
 
@@ -1292,7 +1405,11 @@ public sealed class UnmaRuntime : IDisposable
                          "vanilla",
                          StringComparison.Ordinal) &&
                      relatedEntityIds.Contains(state.View.EntityId)) &&
-                    !IsVanillaAlarmHidden(state.View, vanillaRules))
+                    !IsVanillaAlarmHiddenOnPanel(
+                        state.View,
+                        vanillaRules,
+                        panel,
+                        relatedEntityIds))
                 .Select(state => ProjectAlarmForPanel(
                     Clone(state.View, state.Sequence),
                     panel,
@@ -2328,7 +2445,7 @@ public sealed class UnmaRuntime : IDisposable
                         .ToList());
 
                 panel.Name = string.IsNullOrWhiteSpace(name)
-                    ? "MELDETAFEL"
+                    ? UnmaText.Get("default.panel", "PANEL")
                     : name.Trim();
                 panel.Columns = Math.Max(1, Math.Min(8, columns));
                 if (!panel.IsDashboard)
@@ -2376,7 +2493,9 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     AlarmId = alarm.Id,
                     DisplayName = alarm.DisplayName,
-                    Detail = "Systemmeldung",
+                    Detail = UnmaText.Get(
+                        "alarm.detail.system_notification",
+                        "System notification"),
                     Source = "system",
                     Severity = stage?.Severity ?? AlarmSeverity.Warning,
                     ActiveColor = stage?.ActiveColor ?? "auto",
@@ -2767,6 +2886,416 @@ public sealed class UnmaRuntime : IDisposable
                         entityPrototypeId))?.Behavior ??
                    VanillaNotificationBehavior.Normal;
         }
+    }
+
+    public IReadOnlyList<SystemMetricDescriptor> GetAvailableSystemMetrics()
+    {
+        var result = new List<SystemMetricDescriptor>(SystemMetricCatalog.All);
+        var quantityUnit = UnmaText.Get("unit.quantity", "units");
+        var quantityPerMonthUnit = UnmaText.Get(
+            "unit.quantity_per_month",
+            "units/month");
+        var percentUnit = UnmaText.Get("unit.percent", "%");
+
+        foreach (var buffer in m_maintenanceManager.MaintenanceBuffers
+                     .Where(item => item != null && item.ShouldShowInUi)
+                     .OrderBy(
+                         item => ProductDisplayName(item.Product),
+                         StringComparer.CurrentCultureIgnoreCase))
+        {
+            var productId = buffer.Product.Id.Value;
+            var productName = ProductDisplayName(buffer.Product);
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.MaintenanceFillId(productId),
+                UnmaText.Format(
+                    "system_metric.maintenance.fill.label",
+                    "{0} · maintenance fill",
+                    productName),
+                percentUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.MaintenanceQuantityId(productId),
+                UnmaText.Format(
+                    "system_metric.maintenance.quantity.label",
+                    "{0} · maintenance reserve",
+                    productName),
+                quantityUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.MaintenanceCapacityId(productId),
+                UnmaText.Format(
+                    "system_metric.maintenance.capacity.label",
+                    "{0} · maintenance capacity",
+                    productName),
+                quantityUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.MaintenanceDeltaId(productId),
+                UnmaText.Format(
+                    "system_metric.maintenance.delta_month.label",
+                    "{0} · maintenance change last month",
+                    productName),
+                quantityPerMonthUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.MaintenanceNeededId(productId),
+                UnmaText.Format(
+                    "system_metric.maintenance.needed_month.label",
+                    "{0} · maintenance demand per month",
+                    productName),
+                quantityPerMonthUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.MaintenanceNeededMaxId(productId),
+                UnmaText.Format(
+                    "system_metric.maintenance.needed_month_max.label",
+                    "{0} · maximum maintenance demand per month",
+                    productName),
+                quantityPerMonthUnit));
+        }
+
+        foreach (var stats in m_productsManager.ProductStats
+                     .Where(item => IsSelectableGlobalProduct(item?.Product))
+                     .OrderBy(
+                         item => ProductDisplayName(item.Product),
+                         StringComparer.CurrentCultureIgnoreCase))
+        {
+            var productId = stats.Product.Id.Value;
+            var productName = ProductDisplayName(stats.Product);
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.ProductStoredId(productId),
+                UnmaText.Format(
+                    "system_metric.product.stored.label",
+                    "{0} · global stored quantity",
+                    productName),
+                quantityUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.ProductCapacityId(productId),
+                UnmaText.Format(
+                    "system_metric.product.capacity.label",
+                    "{0} · global storage capacity",
+                    productName),
+                quantityUnit));
+            result.Add(new SystemMetricDescriptor(
+                SystemMetricCatalog.ProductFillId(productId),
+                UnmaText.Format(
+                    "system_metric.product.fill.label",
+                    "{0} · global storage fill",
+                    productName),
+                percentUnit));
+        }
+
+        return result;
+    }
+
+    public bool TryReadInstrumentValue(
+        InstrumentDefinition instrument,
+        out double value,
+        out int validSources)
+    {
+        value = 0d;
+        validSources = 0;
+        if (instrument == null ||
+            string.IsNullOrWhiteSpace(instrument.MetricPath))
+        {
+            return false;
+        }
+
+        var sources = GetInstrumentSources(instrument);
+        if (sources.Count == 0)
+        {
+            return false;
+        }
+
+        var sourcesToRead = instrument.Aggregation ==
+                InstrumentAggregationMode.Single
+            ? sources.Take(1).ToArray()
+            : sources;
+
+        var values = new List<double>(sourcesToRead.Count);
+        foreach (var source in sourcesToRead)
+        {
+            if (!TryGetLiveEntity(source.EntityId, out var entity) ||
+                !string.IsNullOrWhiteSpace(source.EntityPrototypeId) &&
+                !string.Equals(
+                    source.EntityPrototypeId,
+                    entity.Prototype.Id.Value,
+                    StringComparison.Ordinal) ||
+                !EntityMetricCatalog.TryRead(
+                    entity,
+                    instrument.MetricPath,
+                    out var sourceValue))
+            {
+                continue;
+            }
+            validSources++;
+            values.Add(sourceValue);
+        }
+
+        // Calculated sums and averages must not silently shrink when one of
+        // their configured buildings is missing or no longer exposes the
+        // selected variable.
+        return validSources == sourcesToRead.Count &&
+               InstrumentValuePolicy.TryAggregate(
+                   instrument.Aggregation,
+                   values,
+                   out value);
+    }
+
+    public bool TryGetInstrumentCurrentValue(
+        string instrumentId,
+        out double value)
+    {
+        lock (m_instrumentValuesGate)
+        {
+            return m_lastInstrumentValues.TryGetValue(
+                instrumentId ?? "",
+                out value);
+        }
+    }
+
+    public IReadOnlyList<InstrumentValueSample> GetInstrumentHistory(
+        string instrumentId,
+        int windowTicks = 0)
+    {
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_instrumentHistory.TryGetValue(
+                    instrumentId ?? "",
+                    out var history))
+            {
+                return Array.Empty<InstrumentValueSample>();
+            }
+            if (windowTicks <= 0 || history.Count == 0)
+            {
+                return history.ToArray();
+            }
+            var cutoff = m_calendar.RealTime.Ticks - windowTicks;
+            return history
+                .Where(sample => sample.TimestampSeconds >= cutoff)
+                .ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Returns a cheap identity for the retained history without copying its
+    /// samples. UI caches use the first/last sample in addition to the count
+    /// because a capacity-limited history can advance while its count stays
+    /// constant.
+    /// </summary>
+    public bool TryGetInstrumentHistoryState(
+        string instrumentId,
+        out InstrumentHistoryState state)
+    {
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_instrumentHistory.TryGetValue(
+                    instrumentId ?? "",
+                    out var history) ||
+                history.Count == 0)
+            {
+                state = default;
+                return false;
+            }
+
+            var first = history[0];
+            var last = history[history.Count - 1];
+            state = new InstrumentHistoryState(
+                history.Count,
+                first.TimestampSeconds,
+                last.TimestampSeconds,
+                first.Value,
+                last.Value);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Copies a min/max-preserving, pixel-width history envelope. At most one
+    /// bucket is emitted per requested column, so the archive renderer never
+    /// receives tens of thousands of points that collapse onto the same
+    /// screen pixels.
+    /// </summary>
+    public bool CopyDecimatedInstrumentHistory(
+        string instrumentId,
+        int windowTicks,
+        int maximumColumns,
+        List<InstrumentHistoryBucket> destination,
+        out InstrumentHistoryState state,
+        out double observedMinimum,
+        out double observedMaximum)
+    {
+        if (destination == null)
+        {
+            throw new ArgumentNullException(nameof(destination));
+        }
+
+        destination.Clear();
+        observedMinimum = 0d;
+        observedMaximum = 0d;
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_instrumentHistory.TryGetValue(
+                    instrumentId ?? "",
+                    out var history) ||
+                history.Count == 0)
+            {
+                state = default;
+                return false;
+            }
+
+            var firstRetained = history[0];
+            var lastRetained = history[history.Count - 1];
+            state = new InstrumentHistoryState(
+                history.Count,
+                firstRetained.TimestampSeconds,
+                lastRetained.TimestampSeconds,
+                firstRetained.Value,
+                lastRetained.Value);
+
+            var startIndex = 0;
+            if (windowTicks > 0)
+            {
+                var cutoff = m_calendar.RealTime.Ticks - windowTicks;
+                var low = 0;
+                var high = history.Count;
+                while (low < high)
+                {
+                    var middle = low + (high - low) / 2;
+                    if (history[middle].TimestampSeconds < cutoff)
+                    {
+                        low = middle + 1;
+                    }
+                    else
+                    {
+                        high = middle;
+                    }
+                }
+                startIndex = low;
+            }
+
+            var selectedCount = history.Count - startIndex;
+            if (selectedCount <= 0)
+            {
+                return false;
+            }
+
+            var columnCount = Math.Min(
+                selectedCount,
+                Math.Max(1, maximumColumns));
+            observedMinimum = double.PositiveInfinity;
+            observedMaximum = double.NegativeInfinity;
+            for (var column = 0; column < columnCount; column++)
+            {
+                var bucketStart = startIndex +
+                                  (int)((long)column * selectedCount /
+                                        columnCount);
+                var bucketEnd = startIndex +
+                                (int)((long)(column + 1) * selectedCount /
+                                      columnCount);
+                bucketEnd = Math.Max(bucketStart + 1, bucketEnd);
+
+                var firstValue = history[bucketStart].Value;
+                var lastValue = history[bucketEnd - 1].Value;
+                var minimum = firstValue;
+                var maximum = firstValue;
+                for (var index = bucketStart + 1;
+                     index < bucketEnd;
+                     index++)
+                {
+                    var value = history[index].Value;
+                    minimum = Math.Min(minimum, value);
+                    maximum = Math.Max(maximum, value);
+                }
+
+                observedMinimum = Math.Min(observedMinimum, minimum);
+                observedMaximum = Math.Max(observedMaximum, maximum);
+                destination.Add(new InstrumentHistoryBucket(
+                    firstValue,
+                    minimum,
+                    maximum,
+                    lastValue));
+            }
+            return destination.Count > 0;
+        }
+    }
+
+    public bool TryEvaluateInstrumentTrend(
+        string instrumentId,
+        InstrumentTrendMode trendMode,
+        int windowTicks,
+        out double change)
+    {
+        change = 0d;
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_lastInstrumentValues.TryGetValue(
+                    instrumentId ?? "",
+                    out var currentValue) ||
+                !m_instrumentHistory.TryGetValue(
+                    instrumentId ?? "",
+                    out var history))
+            {
+                return false;
+            }
+            return InstrumentValuePolicy.TryCalculateTrend(
+                history,
+                m_calendar.RealTime.Ticks,
+                currentValue,
+                trendMode,
+                windowTicks,
+                out change);
+        }
+    }
+
+    public bool TryEvaluateInstrumentComparisonSustained(
+        string instrumentId,
+        int windowTicks,
+        ComparisonOperator comparison,
+        double threshold,
+        out bool sustained)
+    {
+        sustained = false;
+        lock (m_instrumentValuesGate)
+        {
+            if (!m_lastInstrumentValues.TryGetValue(
+                    instrumentId ?? "",
+                    out var currentValue) ||
+                !m_instrumentHistory.TryGetValue(
+                    instrumentId ?? "",
+                    out var history))
+            {
+                return false;
+            }
+            return InstrumentValuePolicy.TryEvaluateSustainedComparison(
+                history,
+                m_calendar.RealTime.Ticks,
+                currentValue,
+                windowTicks,
+                comparison,
+                threshold,
+                out sustained);
+        }
+    }
+
+    private static IReadOnlyList<InstrumentSourceDefinition>
+        GetInstrumentSources(InstrumentDefinition instrument)
+    {
+        if (instrument == null)
+        {
+            return Array.Empty<InstrumentSourceDefinition>();
+        }
+        var sources = (instrument.Sources ??
+                new List<InstrumentSourceDefinition>())
+            .Where(source => source != null && source.EntityId > 0)
+            .GroupBy(source => source.EntityId)
+            .Select(group => group.First())
+            .ToList();
+        if (sources.Count == 0 && instrument.EntityId > 0)
+        {
+            sources.Add(new InstrumentSourceDefinition
+            {
+                EntityId = instrument.EntityId,
+                EntityTitle = instrument.EntityTitle,
+                EntityPrototypeId = instrument.EntityPrototypeId,
+            });
+        }
+        return sources;
     }
 
     public bool SetVanillaNotificationBehavior(
@@ -3283,7 +3812,9 @@ public sealed class UnmaRuntime : IDisposable
             .Where(rule => rule?.Conditions != null)
             .SelectMany(rule => rule.Conditions)
             .Where(condition =>
-                condition != null && IsStaticEntityType(condition.EntityType))
+                condition != null &&
+                string.IsNullOrWhiteSpace(condition.InstrumentId) &&
+                IsStaticEntityType(condition.EntityType))
             .Select(condition => condition.EntityId));
         lock (m_configurationGate)
         {
@@ -3723,6 +4254,45 @@ public sealed class UnmaRuntime : IDisposable
                 m_settlementsManager.LastPopulationDiff,
             ["population.total"] = population,
         };
+
+        foreach (var stats in m_productsManager.ProductStats)
+        {
+            if (!IsSelectableGlobalProduct(stats?.Product))
+            {
+                continue;
+            }
+            var productId = stats.Product.Id.Value;
+            var stored = (double)stats.StoredQuantityTotal.Value;
+            var capacity = (double)stats.StorageCapacity.Value;
+            metrics[SystemMetricCatalog.ProductStoredId(productId)] = stored;
+            metrics[SystemMetricCatalog.ProductCapacityId(productId)] = capacity;
+            metrics[SystemMetricCatalog.ProductFillId(productId)] =
+                SystemMetricCatalog.CalculateFillPercent(stored, capacity);
+        }
+
+        foreach (var buffer in m_maintenanceManager.MaintenanceBuffers)
+        {
+            if (buffer == null || !buffer.ShouldShowInUi ||
+                buffer.Product == null)
+            {
+                continue;
+            }
+            var productId = buffer.Product.Id.Value;
+            var quantity = (double)buffer.Quantity.Value;
+            var capacity = (double)buffer.Capacity.Value;
+            metrics[SystemMetricCatalog.MaintenanceQuantityId(productId)] =
+                quantity;
+            metrics[SystemMetricCatalog.MaintenanceCapacityId(productId)] =
+                capacity;
+            metrics[SystemMetricCatalog.MaintenanceFillId(productId)] =
+                SystemMetricCatalog.CalculateFillPercent(quantity, capacity);
+            metrics[SystemMetricCatalog.MaintenanceDeltaId(productId)] =
+                buffer.DeltaLastMonth.Value.ToDouble();
+            metrics[SystemMetricCatalog.MaintenanceNeededId(productId)] =
+                buffer.MonthlyNeededMaintenance.Value.ToDouble();
+            metrics[SystemMetricCatalog.MaintenanceNeededMaxId(productId)] =
+                buffer.MonthlyNeededMaintenanceMax.Value.ToDouble();
+        }
         lock (m_systemMetricsGate)
         {
             m_lastSystemMetrics = new Dictionary<string, double>(
@@ -3732,42 +4302,69 @@ public sealed class UnmaRuntime : IDisposable
         return metrics;
     }
 
+    private static bool IsSelectableGlobalProduct(ProductProto product)
+    {
+        return product != null &&
+               product.IsNotPhantom &&
+               product.IsUnlockedAndAvailable &&
+               product.IsStorable &&
+               !product.IsExcludedFromStats;
+    }
+
+    private static string ProductDisplayName(ProductProto product)
+    {
+        if (product == null)
+        {
+            return UnmaText.Get(
+                "system_metric.product.unknown",
+                "Unknown product");
+        }
+        var translated = product.Strings.Name.TranslatedString;
+        return string.IsNullOrWhiteSpace(translated)
+            ? product.Id.Value
+            : translated;
+    }
+
     private static string FormatSystemAlarmDetail(
         string alarmId,
         IReadOnlyDictionary<string, double> metrics)
     {
         if (string.Equals(alarmId, "system:health", StringComparison.Ordinal))
         {
-            return UnmaText.Get("auto.ae446db0ed2d") + Metric(metrics, "health.value") +
-                   UnmaText.Get("auto.21dcbd739235") +
-                   Metric(metrics, "health.disease_penalty") +
-                   UnmaText.Get("auto.f6301281505f") +
-                   Metric(metrics, "health.disease_mortality") + " %" +
-                   UnmaText.Get("auto.dd15ca245c19") +
-                   Metric(metrics, "health.pollution_penalty") +
-                   UnmaText.Get("auto.6ef1a6c3fad0") +
-                   Metric(metrics, "workers.reserve_percent") + " %" +
-                   UnmaText.Get("auto.863c4e001bd8") +
-                   Metric(metrics, "health.expected_loss") + "/Monat";
+            return UnmaText.Format(
+                "runtime.system.health_detail",
+                "Health {0} (neutral 10) · disease {1} · disease mortality " +
+                "{2} % · pollution/waste {3} · worker reserve {4} % · " +
+                "expected net loss {5}/month",
+                Metric(metrics, "health.value"),
+                Metric(metrics, "health.disease_penalty"),
+                Metric(metrics, "health.disease_mortality"),
+                Metric(metrics, "health.pollution_penalty"),
+                Metric(metrics, "workers.reserve_percent"),
+                Metric(metrics, "health.expected_loss"));
         }
         if (string.Equals(alarmId, "system:food", StringComparison.Ordinal))
         {
-            return UnmaText.Get("auto.d956b9a281db") + Metric(metrics, "food.months") +
-                   UnmaText.Get("auto.def3f955a1d1") +
-                   (MetricValue(metrics, "food.starving") >= 1d
-                       ? "JA"
-                       : "nein") +
-                   UnmaText.Get("auto.407b1f41ae3c") +
-                   Metric(metrics, "food.starved_last_month");
+            return UnmaText.Format(
+                "runtime.system.food_detail",
+                "Food {0} months · starving {1} · starved {2}",
+                Metric(metrics, "food.months"),
+                MetricValue(metrics, "food.starving") >= 1d
+                    ? UnmaText.Get("common.yes", "yes")
+                    : UnmaText.Get("common.no", "no"),
+                Metric(metrics, "food.starved_last_month"));
         }
         if (string.Equals(alarmId, "system:workers", StringComparison.Ordinal))
         {
-            return UnmaText.Get("auto.41b9b814c3ef") +
-                   Metric(metrics, "workers.reserve_percent") + " % · " +
-                   UnmaText.Get("auto.d7a78ffa1014") +
-                   Metric(metrics, "workers.free_or_missing");
+            return UnmaText.Format(
+                "runtime.system.workers_detail",
+                "Worker reserve {0} % · free/missing {1}",
+                Metric(metrics, "workers.reserve_percent"),
+                Metric(metrics, "workers.free_or_missing"));
         }
-        return "Systemmeldung";
+        return UnmaText.Get(
+            "alarm.detail.system_notification",
+            "System notification");
     }
 
     private static double LastValueForSystemAlarm(
@@ -3801,8 +4398,155 @@ public sealed class UnmaRuntime : IDisposable
         return metrics.TryGetValue(metricId, out var value) ? value : 0d;
     }
 
+    private IReadOnlyDictionary<string, double> CaptureInstrumentValues()
+    {
+        InstrumentDefinition[] instruments;
+        Dictionary<string, int> requiredTrendWindows;
+        lock (m_configurationGate)
+        {
+            instruments = Configuration.Instruments
+                .Where(instrument => instrument != null)
+                .Select(CloneInstrumentDefinition)
+                .ToArray();
+            requiredTrendWindows = Configuration.Rules
+                .Where(rule => rule?.Conditions != null)
+                .SelectMany(rule => rule.Conditions)
+                .Where(condition =>
+                    condition != null &&
+                    !string.IsNullOrWhiteSpace(condition.InstrumentId) &&
+                    condition.TrendMode != InstrumentTrendMode.None)
+                .GroupBy(
+                    condition => condition.InstrumentId,
+                    StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Max(condition =>
+                        GameTimeWindowPolicy.ToSimTicks(
+                            condition.WindowAmount,
+                            condition.WindowUnit)),
+                    StringComparer.Ordinal);
+        }
+
+        var timestampSeconds = (double)m_calendar.RealTime.Ticks;
+        var captured = new Dictionary<string, double>(StringComparer.Ordinal);
+        foreach (var instrument in instruments)
+        {
+            if (TryReadInstrumentValue(
+                    instrument,
+                    out var value,
+                    out _))
+            {
+                captured[instrument.Id] = value;
+            }
+        }
+
+        var activeIds = new HashSet<string>(
+            instruments.Select(instrument => instrument.Id),
+            StringComparer.Ordinal);
+        lock (m_instrumentValuesGate)
+        {
+            m_lastInstrumentValues.Clear();
+            foreach (var instrument in instruments)
+            {
+                var signature = InstrumentValuePolicy.DefinitionSignature(
+                    instrument);
+                if (!m_instrumentSignatures.TryGetValue(
+                        instrument.Id,
+                        out var previousSignature) ||
+                    !string.Equals(
+                        previousSignature,
+                        signature,
+                        StringComparison.Ordinal))
+                {
+                    m_instrumentHistory.Remove(instrument.Id);
+                }
+                m_instrumentSignatures[instrument.Id] = signature;
+            }
+
+            // A missing source splits the history into two independent
+            // epochs. Clearing here prevents the first recovered value from
+            // being compared with a pre-outage baseline.
+            foreach (var unavailableId in activeIds.Where(id =>
+                         !captured.ContainsKey(id)))
+            {
+                m_instrumentHistory.Remove(unavailableId);
+            }
+
+            foreach (var pair in captured)
+            {
+                m_lastInstrumentValues[pair.Key] = pair.Value;
+                if (!m_instrumentHistory.TryGetValue(
+                        pair.Key,
+                        out var history))
+                {
+                    history = new List<InstrumentValueSample>();
+                    m_instrumentHistory[pair.Key] = history;
+                }
+                if (history.Count == 0 ||
+                    timestampSeconds -
+                    history[history.Count - 1].TimestampSeconds >=
+                    InstrumentHistorySampleIntervalTicks)
+                {
+                    history.Add(new InstrumentValueSample(
+                        timestampSeconds,
+                        pair.Value));
+                }
+
+                var instrument = instruments.First(candidate =>
+                    string.Equals(
+                        candidate.Id,
+                        pair.Key,
+                        StringComparison.Ordinal));
+                var retentionSeconds = GameTimeWindowPolicy.ToSimTicks(
+                    instrument.HistoryDurationAmount,
+                    instrument.HistoryDurationUnit);
+                if (requiredTrendWindows.TryGetValue(
+                        pair.Key,
+                        out var requiredWindow))
+                {
+                    retentionSeconds = Math.Max(
+                        retentionSeconds,
+                        requiredWindow +
+                        GameTimeWindowPolicy.SimTicksPerDay * 2);
+                }
+                var cutoff = timestampSeconds - retentionSeconds;
+                var removeCount = 0;
+                while (removeCount + 1 < history.Count &&
+                       history[removeCount + 1].TimestampSeconds < cutoff)
+                {
+                    removeCount++;
+                }
+                if (removeCount > 0)
+                {
+                    history.RemoveRange(0, removeCount);
+                }
+                if (history.Count > MaximumInstrumentHistorySamples)
+                {
+                    history.RemoveRange(
+                        0,
+                        history.Count - MaximumInstrumentHistorySamples);
+                }
+            }
+
+            foreach (var staleId in m_instrumentHistory.Keys
+                         .Where(id => !activeIds.Contains(id))
+                         .ToArray())
+            {
+                m_instrumentHistory.Remove(staleId);
+            }
+            foreach (var staleId in m_instrumentSignatures.Keys
+                         .Where(id => !activeIds.Contains(id))
+                         .ToArray())
+            {
+                m_instrumentSignatures.Remove(staleId);
+            }
+        }
+        return captured;
+    }
+
     private void EvaluateCustomRules(
-        IReadOnlyDictionary<string, double> globalMetrics)
+        IReadOnlyDictionary<string, double> globalMetrics,
+        IReadOnlyDictionary<string, double> instrumentValues)
     {
         AlarmRuleDefinition[] rules;
         lock (m_configurationGate)
@@ -3830,16 +4574,18 @@ public sealed class UnmaRuntime : IDisposable
 
         foreach (var rule in rules)
         {
-            EvaluateCustomRule(rule, globalMetrics);
+            EvaluateCustomRule(rule, globalMetrics, instrumentValues);
         }
     }
 
     private void EvaluateCustomRule(
         AlarmRuleDefinition rule,
-        IReadOnlyDictionary<string, double> globalMetrics)
+        IReadOnlyDictionary<string, double> globalMetrics,
+        IReadOnlyDictionary<string, double> instrumentValues)
     {
         if (!rule.Enabled)
         {
+            RemoveSustainedStatesForRule(rule.Id);
             ForceNormal("rule:" + rule.Id);
             return;
         }
@@ -3849,8 +4595,125 @@ public sealed class UnmaRuntime : IDisposable
         var missingSource = false;
         var lastValue = 0d;
 
-        foreach (var condition in rule.Conditions)
+        for (var conditionIndex = 0;
+             conditionIndex < rule.Conditions.Count;
+             conditionIndex++)
         {
+            var condition = rule.Conditions[conditionIndex];
+            var sustainedStateKey = rule.Id + ":" + conditionIndex;
+            if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
+            {
+                var label = string.IsNullOrWhiteSpace(condition.MetricLabel)
+                    ? condition.InstrumentId
+                    : condition.MetricLabel;
+                if (instrumentValues == null ||
+                    !instrumentValues.TryGetValue(
+                        condition.InstrumentId,
+                        out var instrumentValue))
+                {
+                    m_sustainedConditionStates.Remove(sustainedStateKey);
+                    missingSource = true;
+                    values.Add(false);
+                    details.Add(UnmaText.Format(
+                        "runtime.condition.instrument_missing",
+                        "{0}: calculated metric is missing",
+                        label));
+                    continue;
+                }
+
+                if (condition.TrendMode != InstrumentTrendMode.None)
+                {
+                    var windowTicks = GameTimeWindowPolicy.ToSimTicks(
+                        condition.WindowAmount,
+                        condition.WindowUnit);
+                    var windowLabel = FormatGameTimeWindow(
+                        condition.WindowAmount,
+                        condition.WindowUnit);
+                    if (condition.TrendMode ==
+                        InstrumentTrendMode.SustainComparison)
+                    {
+                        var sustained = EvaluateSustainedCondition(
+                            sustainedStateKey,
+                            condition,
+                            instrumentValue,
+                            windowTicks);
+                        lastValue = instrumentValue;
+                        values.Add(sustained);
+                        details.Add(UnmaText.Format(
+                            "runtime.condition.instrument_sustained",
+                            "{0} {1} {2:0.###} for {3} " +
+                            "(actual {4:0.###})",
+                            label,
+                            OperatorText(condition.Comparison),
+                            condition.Threshold,
+                            windowLabel,
+                            instrumentValue));
+                        continue;
+                    }
+                    m_sustainedConditionStates.Remove(sustainedStateKey);
+                    if (!TryEvaluateInstrumentTrend(
+                            condition.InstrumentId,
+                            condition.TrendMode,
+                            windowTicks,
+                            out var change))
+                    {
+                        missingSource = true;
+                        values.Add(false);
+                        details.Add(UnmaText.Format(
+                            "runtime.condition.instrument_history_incomplete",
+                            "{0}: history for {1} is not complete yet",
+                            label,
+                            windowLabel));
+                        continue;
+                    }
+
+                    lastValue = change;
+                    var trendMatches = InstrumentValuePolicy.IsTrendTriggered(
+                        change,
+                        condition.DeltaThreshold);
+                    values.Add(trendMatches);
+                    var isPercent = condition.TrendMode ==
+                                    InstrumentTrendMode.DecreasePercent ||
+                                    condition.TrendMode ==
+                                    InstrumentTrendMode.IncreasePercent;
+                    var isIncrease = condition.TrendMode ==
+                                     InstrumentTrendMode.IncreaseAbsolute ||
+                                     condition.TrendMode ==
+                                     InstrumentTrendMode.IncreasePercent;
+                    details.Add(UnmaText.Format(
+                        isIncrease
+                            ? "runtime.condition.instrument_increase"
+                            : "runtime.condition.instrument_decrease",
+                        isIncrease
+                            ? "{0} · increase {1:0.###}{2} / {3} " +
+                              "(threshold ≥ {4:0.###})"
+                            : "{0} · decrease {1:0.###}{2} / {3} " +
+                              "(threshold ≥ {4:0.###})",
+                        label,
+                        change,
+                        isPercent ? " %" : "",
+                        windowLabel,
+                        condition.DeltaThreshold));
+                    continue;
+                }
+
+                m_sustainedConditionStates.Remove(sustainedStateKey);
+                lastValue = instrumentValue;
+                values.Add(AlarmEvaluation.Compare(
+                    instrumentValue,
+                    condition.Comparison,
+                    condition.Threshold));
+                details.Add(UnmaText.Format(
+                    "runtime.condition.comparison",
+                    "{0} {1} {2:0.###} (actual {3:0.###})",
+                    label,
+                    OperatorText(condition.Comparison),
+                    condition.Threshold,
+                    instrumentValue));
+                continue;
+            }
+
+            m_sustainedConditionStates.Remove(sustainedStateKey);
             if (SystemMetricCatalog.TryParseRulePath(
                     condition.MetricPath,
                     out var globalMetricId))
@@ -3861,7 +4724,10 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     missingSource = true;
                     values.Add(false);
-                    details.Add(condition.MetricLabel + ": Messwert fehlt");
+                    details.Add(UnmaText.Format(
+                        "runtime.condition.metric_missing",
+                        "{0}: metric is missing",
+                        condition.MetricLabel));
                     continue;
                 }
 
@@ -3877,8 +4743,10 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     missingSource = true;
                     values.Add(false);
-                    details.Add(
-                        condition.MetricLabel + ": Bezugsmesswert fehlt");
+                    details.Add(UnmaText.Format(
+                        "runtime.condition.reference_metric_missing",
+                        "{0}: reference metric is missing",
+                        condition.MetricLabel));
                     continue;
                 }
 
@@ -3890,9 +4758,10 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     missingSource = true;
                     values.Add(false);
-                    details.Add(
-                        condition.MetricLabel +
-                        ": Bezug nicht berechenbar");
+                    details.Add(UnmaText.Format(
+                        "runtime.condition.reference_not_calculable",
+                        "{0}: reference cannot be calculated",
+                        condition.MetricLabel));
                     continue;
                 }
 
@@ -3901,15 +4770,13 @@ public sealed class UnmaRuntime : IDisposable
                     globalComparable,
                     condition.Comparison,
                     condition.Threshold));
-                details.Add(
-                    "GLOBAL · " + condition.MetricLabel + " " +
-                    OperatorText(condition.Comparison) + " " +
-                    condition.Threshold.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + " (ist " +
-                    globalComparable.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + ")");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.global_comparison",
+                    "GLOBAL · {0} {1} {2:0.###} (actual {3:0.###})",
+                    condition.MetricLabel,
+                    OperatorText(condition.Comparison),
+                    condition.Threshold,
+                    globalComparable));
                 continue;
             }
 
@@ -3936,7 +4803,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 missingSource = true;
                 values.Add(false);
-                details.Add(condition.EntityTitle + ": falsche Entität");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.entity_type_mismatch",
+                    "{0}: wrong entity type",
+                    condition.EntityTitle));
                 continue;
             }
 
@@ -3948,7 +4818,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 missingSource = true;
                 values.Add(false);
-                details.Add(condition.EntityTitle + ": falscher Prototyp");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.entity_prototype_mismatch",
+                    "{0}: wrong prototype",
+                    condition.EntityTitle));
                 continue;
             }
 
@@ -3959,7 +4832,10 @@ public sealed class UnmaRuntime : IDisposable
                     StringComparison.Ordinal))
             {
                 values.Add(false);
-                details.Add(condition.EntityTitle + ": anderes Produkt");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.product_mismatch",
+                    "{0}: different product",
+                    condition.EntityTitle));
                 continue;
             }
 
@@ -3970,7 +4846,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 missingSource = true;
                 values.Add(false);
-                details.Add(condition.EntityTitle + ": Messwert fehlt");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.metric_missing",
+                    "{0}: metric is missing",
+                    condition.EntityTitle));
                 continue;
             }
 
@@ -3986,8 +4865,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 missingSource = true;
                 values.Add(false);
-                details.Add(
-                    condition.EntityTitle + ": Bezugsmesswert fehlt");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.reference_metric_missing",
+                    "{0}: reference metric is missing",
+                    condition.EntityTitle));
                 continue;
             }
 
@@ -3999,17 +4880,14 @@ public sealed class UnmaRuntime : IDisposable
             {
                 missingSource = true;
                 values.Add(false);
-                details.Add(
-                    condition.EntityTitle + " · " +
-                    condition.MetricLabel +
-                    ": Bezug nicht berechenbar (ist " +
-                    actual.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) +
-                    UnmaText.Get("auto.9a1d422d96f9") +
-                    reference.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + ")");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.reference_not_calculable_values",
+                    "{0} · {1}: reference cannot be calculated " +
+                    "(actual {2:0.###}, reference {3:0.###})",
+                    condition.EntityTitle,
+                    condition.MetricLabel,
+                    actual,
+                    reference));
                 continue;
             }
 
@@ -4026,36 +4904,29 @@ public sealed class UnmaRuntime : IDisposable
                     condition.ReferenceMetricLabel)
                     ? condition.ReferenceMetricPath
                     : condition.ReferenceMetricLabel;
-                details.Add(
-                    condition.EntityTitle + " · " +
-                    condition.MetricLabel + UnmaText.Get("auto.a2a26d7166e8") + referenceLabel +
-                    " " + OperatorText(condition.Comparison) + " " +
-                    condition.Threshold.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + UnmaText.Get("auto.4a7f5dd7bab3") +
-                    comparable.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + " %; " +
-                    actual.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + " / " +
-                    reference.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + ")");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.percent_comparison",
+                    "{0} · {1} % of {2} {3} {4:0.###} " +
+                    "(actual {5:0.###} %; {6:0.###} / {7:0.###})",
+                    condition.EntityTitle,
+                    condition.MetricLabel,
+                    referenceLabel,
+                    OperatorText(condition.Comparison),
+                    condition.Threshold,
+                    comparable,
+                    actual,
+                    reference));
             }
             else
             {
-                details.Add(
-                    condition.EntityTitle + " · " +
-                    condition.MetricLabel + " " +
-                    OperatorText(condition.Comparison) + " " +
-                    condition.Threshold.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) +
-                    UnmaText.Get("auto.ce1d97e09d6b") +
-                    actual.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + ")");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.entity_comparison",
+                    "{0} · {1} {2} {3:0.###} (actual {4:0.###})",
+                    condition.EntityTitle,
+                    condition.MetricLabel,
+                    OperatorText(condition.Comparison),
+                    condition.Threshold,
+                    actual));
             }
         }
 
@@ -4078,6 +4949,61 @@ public sealed class UnmaRuntime : IDisposable
                 rule.AutoAcknowledgeOnClear,
             occurrenceId: rule.Id,
             slotId: "rule:" + rule.Id);
+    }
+
+    private bool EvaluateSustainedCondition(
+        string stateKey,
+        ConditionDefinition condition,
+        double currentValue,
+        int windowTicks)
+    {
+        if (!AlarmEvaluation.Compare(
+                currentValue,
+                condition.Comparison,
+                condition.Threshold))
+        {
+            m_sustainedConditionStates.Remove(stateKey);
+            return false;
+        }
+
+        var signature = condition.InstrumentId + "|" +
+                        (int)condition.Comparison + "|" +
+                        condition.Threshold.ToString(
+                            "R",
+                            CultureInfo.InvariantCulture) + "|" +
+                        windowTicks;
+        var nowTicks = (double)m_calendar.RealTime.Ticks;
+        if (!m_sustainedConditionStates.TryGetValue(
+                stateKey,
+                out var state) ||
+            !string.Equals(
+                state.Signature,
+                signature,
+                StringComparison.Ordinal) ||
+            nowTicks < state.StartedAtTicks)
+        {
+            m_sustainedConditionStates[stateKey] =
+                new SustainedConditionState
+                {
+                    Signature = signature,
+                    StartedAtTicks = nowTicks,
+                };
+            return false;
+        }
+        return nowTicks - state.StartedAtTicks >= windowTicks;
+    }
+
+    private void RemoveSustainedStatesForRule(string ruleId)
+    {
+        var prefix = (ruleId ?? "") + ":";
+        foreach (var key in m_sustainedConditionStates.Keys
+                     .Where(key => key.StartsWith(
+                         prefix,
+                         StringComparison.Ordinal))
+                     .ToArray())
+        {
+            m_sustainedConditionStates.Remove(key);
+        }
     }
 
     private void EvaluateExternalAlarms()
@@ -4488,7 +5414,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 values.Add(false);
                 result.IsMissingSource = true;
-                details.Add(label + ": Messwert fehlt");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.metric_missing",
+                    "{0}: metric is missing",
+                    label));
                 continue;
             }
 
@@ -4507,7 +5436,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 values.Add(false);
                 result.IsMissingSource = true;
-                details.Add(label + ": Bezugsmesswert fehlt");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.reference_metric_missing",
+                    "{0}: reference metric is missing",
+                    label));
                 continue;
             }
 
@@ -4521,7 +5453,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 values.Add(false);
                 result.IsMissingSource = true;
-                details.Add(label + ": Bezug nicht berechenbar");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.reference_not_calculable",
+                    "{0}: reference cannot be calculated",
+                    label));
                 continue;
             }
 
@@ -4539,32 +5474,27 @@ public sealed class UnmaRuntime : IDisposable
                         condition.ReferenceLabelFallback)
                         ? condition.ReferenceMetric
                         : condition.ReferenceLabelFallback);
-                details.Add(
-                    label + UnmaText.Get("auto.a2a26d7166e8") + referenceLabel + " " +
-                    condition.Operator + " " +
-                    condition.Threshold.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) +
-                    UnmaText.Get("auto.4a7f5dd7bab3") + comparable.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + " %; " +
-                    actual.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + " / " +
-                    reference.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + ")");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.external_percent_comparison",
+                    "{0} % of {1} {2} {3:0.###} " +
+                    "(actual {4:0.###} %; {5:0.###} / {6:0.###})",
+                    label,
+                    referenceLabel,
+                    condition.Operator,
+                    condition.Threshold,
+                    comparable,
+                    actual,
+                    reference));
             }
             else
             {
-                details.Add(
-                    label + " " + condition.Operator + " " +
-                    condition.Threshold.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) +
-                    UnmaText.Get("auto.ce1d97e09d6b") + comparable.ToString(
-                        "0.###",
-                        CultureInfo.CurrentCulture) + ")");
+                details.Add(UnmaText.Format(
+                    "runtime.condition.comparison",
+                    "{0} {1} {2:0.###} (actual {3:0.###})",
+                    label,
+                    condition.Operator,
+                    condition.Threshold,
+                    comparable));
             }
         }
 
@@ -4929,7 +5859,9 @@ public sealed class UnmaRuntime : IDisposable
             var previousSlotId = state.View.SlotId;
             var previousOccurrencePriority =
                 state.View.OccurrencePriority;
-            state.View.Name = name ?? "MELDUNG";
+            state.View.Name = name ?? UnmaText.Get(
+                "default.notification",
+                "NOTIFICATION");
             state.View.Detail = detail ?? "";
             state.View.Source = source ?? "";
             state.View.PanelId = panelId ?? "";
@@ -5222,7 +6154,10 @@ public sealed class UnmaRuntime : IDisposable
             : "success";
         var title = active
             ? alarm.Name
-            : "BEHOBEN: " + alarm.Name;
+            : UnmaText.Format(
+                "external_display.resolved_title",
+                "RESOLVED: {0}",
+                alarm.Name);
         var detail = string.IsNullOrWhiteSpace(alarm.Detail)
             ? alarm.EntityTitle
             : alarm.Detail;
@@ -5492,6 +6427,25 @@ public sealed class UnmaRuntime : IDisposable
         var behavior = ResolveVanillaNotificationBehavior(view, rules);
         return behavior == VanillaNotificationBehavior.Hidden ||
                behavior == VanillaNotificationBehavior.Ignored;
+    }
+
+    private bool IsVanillaAlarmHiddenOnPanel(
+        AlarmView view,
+        IEnumerable<VanillaNotificationRule> rules,
+        PanelDefinition panel,
+        IReadOnlyCollection<int> relatedEntityIds)
+    {
+        var behavior = ResolveVanillaNotificationBehavior(view, rules);
+        var isEntityPanel = PanelTopologyPolicy.IsEntityPanel(panel);
+        var belongsToEntityPanel = isEntityPanel &&
+            view != null &&
+            string.Equals(view.Source, "vanilla", StringComparison.Ordinal) &&
+            (view.EntityId == panel.OwnerEntityId ||
+             relatedEntityIds?.Contains(view.EntityId) == true);
+        return VanillaNotificationSuppressionPolicy.IsHiddenFromPanel(
+            behavior,
+            isEntityPanel,
+            belongsToEntityPanel);
     }
 
     private void RefreshDisabledVanillaOverrideIds()
@@ -6074,6 +7028,40 @@ public sealed class UnmaRuntime : IDisposable
         };
     }
 
+    private static InstrumentDefinition CloneInstrumentDefinition(
+        InstrumentDefinition source)
+    {
+        return new InstrumentDefinition
+        {
+            Id = source.Id,
+            Title = source.Title,
+            DisplayType = source.DisplayType,
+            EntityId = source.EntityId,
+            EntityTitle = source.EntityTitle,
+            EntityPrototypeId = source.EntityPrototypeId,
+            MetricPath = source.MetricPath,
+            MetricLabel = source.MetricLabel,
+            Unit = source.Unit,
+            Minimum = source.Minimum,
+            Maximum = source.Maximum,
+            PanelId = source.PanelId,
+            Aggregation = source.Aggregation,
+            HistoryDurationSeconds = source.HistoryDurationSeconds,
+            HistoryDurationAmount = source.HistoryDurationAmount,
+            HistoryDurationUnit = source.HistoryDurationUnit,
+            Sources = (source.Sources ??
+                    new List<InstrumentSourceDefinition>())
+                .Where(item => item != null)
+                .Select(item => new InstrumentSourceDefinition
+                {
+                    EntityId = item.EntityId,
+                    EntityTitle = item.EntityTitle,
+                    EntityPrototypeId = item.EntityPrototypeId,
+                })
+                .ToList(),
+        };
+    }
+
     private static AlarmRuleDefinition CloneRuleForEvaluation(
         AlarmRuleDefinition source)
     {
@@ -6105,6 +7093,12 @@ public sealed class UnmaRuntime : IDisposable
                     ValueMode = condition.ValueMode,
                     ReferenceMetricPath = condition.ReferenceMetricPath,
                     ReferenceMetricLabel = condition.ReferenceMetricLabel,
+                    InstrumentId = condition.InstrumentId,
+                    TrendMode = condition.TrendMode,
+                    WindowSeconds = condition.WindowSeconds,
+                    DeltaThreshold = condition.DeltaThreshold,
+                    WindowAmount = condition.WindowAmount,
+                    WindowUnit = condition.WindowUnit,
                 }).ToList(),
         };
     }
@@ -6152,5 +7146,42 @@ public sealed class UnmaRuntime : IDisposable
             ComparisonOperator.Greater => ">",
             _ => "?",
         };
+    }
+
+    private static string FormatGameTimeWindow(
+        int amount,
+        GameTimeUnit unit)
+    {
+        var key = unit switch
+        {
+            GameTimeUnit.Day => amount == 1
+                ? "time.unit.day.one"
+                : "time.unit.day.many",
+            GameTimeUnit.Month => amount == 1
+                ? "time.unit.month.one"
+                : "time.unit.month.many",
+            GameTimeUnit.Year => amount == 1
+                ? "time.unit.year.one"
+                : "time.unit.year.many",
+            GameTimeUnit.Decade => amount == 1
+                ? "time.unit.decade.one"
+                : "time.unit.decade.many",
+            _ => amount == 1
+                ? "time.unit.century.one"
+                : "time.unit.century.many",
+        };
+        var fallback = unit switch
+        {
+            GameTimeUnit.Day => amount == 1 ? "game day" : "game days",
+            GameTimeUnit.Month => amount == 1 ? "game month" : "game months",
+            GameTimeUnit.Year => amount == 1 ? "game year" : "game years",
+            GameTimeUnit.Decade => amount == 1 ? "decade" : "decades",
+            _ => amount == 1 ? "century" : "centuries",
+        };
+        return UnmaText.Format(
+            "runtime.time_window",
+            "{0} {1}",
+            amount,
+            UnmaText.Get(key, fallback));
     }
 }

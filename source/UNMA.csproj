@@ -8,8 +8,8 @@
     <RootNamespace>UNMA</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>0.9.11</Version>
-    <FileVersion>0.9.11.0</FileVersion>
+    <Version>0.9.17</Version>
+    <FileVersion>0.9.17.0</FileVersion>
     <!-- Keep the public V1 extension ABI bindable across UNMA 0.x updates. -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <Deterministic>true</Deterministic>
@@ -75,6 +75,10 @@
     </Reference>
     <Reference Include="UnityEngine.UIModule">
       <HintPath>$(COI_MANAGED)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIElementsModule">
+      <HintPath>$(COI_MANAGED)\UnityEngine.UIElementsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UnityWebRequestModule">

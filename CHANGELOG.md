@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.9.17 – 2026-08-10
+
+- Instrumentmeldungen wählen ihre Zielpanels jetzt ausdrücklich im
+  Meldungseditor, statt unbemerkt das erste Globalpanel zu verwenden.
+- Pro Instrumentmeldung können mehrere Zielpanels unabhängig gewählt werden;
+  mindestens ein Ziel ist zwingend erforderlich.
+- **INSTRUMENT** steht als dritter Quellenbutton neben Gebäudeauswahl und
+  globalen Variablen bereit.
+- Alte oder beschädigte Regeln ohne gültiges Zielpanel werden beim Laden auf
+  eine vorhandene Meldetafel repariert.
+
+## 0.9.16 – 2026-08-10
+
+- **MELD.** öffnet berechnete Instrumentwerte nun als eigene Quelle
+  **VERKNÜPFTE WERTE: Schildname**.
+- Weitere Instrumentwerte desselben Messpanels lassen sich direkt auswählen
+  und als zusätzliche Bedingungen in die Meldung aufnehmen.
+- Beim erneuten Bearbeiten einer instrumentgebundenen Meldung wird der
+  verknüpfte Quellenkontext automatisch wiederhergestellt.
+
+## 0.9.15 – 2026-08-10
+
+- Schreiberarchive verwenden echte COI-Spielzeit mit Bereichen von einem
+  Spieltag bis zu einem Jahrhundert statt realer Minuten und Stunden.
+- Zeitabhängige Meldungen unterstützen Rückgang und Zunahme jeweils als
+  Betrag oder Prozent sowie das kontinuierliche Halten eines Vergleichs.
+- Zeitfenster werden als Tage, Monate, Jahre, Jahrzehnte oder Jahrhunderte
+  definiert; Pause und Spielgeschwindigkeit werden korrekt berücksichtigt.
+- Alte Sekundenbedingungen werden beim Laden automatisch auf gleichwertige
+  Spielzeiteinheiten migriert.
+
+## 0.9.14 – 2026-08-10
+
+- Im freien Meldungseditor stehen jetzt die globalen Lagerbestände aller
+  freigeschalteten Produkte aus der COI-Ressourcenleiste zur Auswahl.
+- Zusätzlich lassen sich globale Lagerkapazität und Füllstand jedes Produkts
+  als Bedingung verwenden.
+- Für jede sichtbare Wartungsart sind Füllstand, Reserve, Kapazität,
+  Monatsänderung sowie aktueller und maximaler Monatsbedarf verfügbar.
+- Produktnamen stammen lokalisiert aus COI; alle neuen UNMA-Bezeichnungen sind
+  vollständig an MultiLangLib angebunden.
+
+## 0.9.13 – 2026-08-09
+
+- Sämtliche spielersichtbaren UNMA-Texte in Oberfläche, Laufzeitmeldungen,
+  Messinstrumenten und Schreiberarchiv werden nun über MultiLangLib aufgelöst.
+- Deutsche und englische Kataloge enthalten vollständige Übersetzungen; alle
+  weiteren Sprachkataloge sind schlüsselgleich und verwenden für neue, noch
+  nicht übersetzte Einträge einen englischen Fallback.
+- Namen von Systemmesswerten, Einheiten und eingebauten Tönen werden dynamisch
+  in der aktiven Sprache aufgelöst. Formatierte Texte verwenden die
+  MultiLangLib-Formatierung.
+- Automatische Regressionstests prüfen Sprachdateien, verwendete Schlüssel und
+  Platzhalter aller 21 Kataloge auf Vollständigkeit.
+
+## 0.9.12 – 2026-08-09
+
+- Die UNMA-Fenster verwenden den nativen COI-Rahmen, native Schaltflächenoptik,
+  zuverlässige Vordergrundreihenfolge und frei ziehbare Größen; Eingaben
+  außerhalb des tatsächlich sichtbaren Rahmens bleiben beim Spiel.
+- Papierschreiber besitzen eine maximierte Archivansicht mit mehreren
+  Zeitfenstern und durchgehend gezeichneter Historie.
+- Ein Instrument kann mehrere Gebäude derselben Messgröße als Summe,
+  Mittelwert, Minimum oder Maximum zusammenfassen.
+- Berechnete Instrumentwerte können eigene Meldungen auslösen. Neben normalen
+  Grenzwerten stehen Abfälle um Betrag oder Prozent innerhalb eines
+  Zeitfensters zur Verfügung.
+- Instrumenttitel und Aktionsschaltflächen besitzen getrennte Kopfzeilen und
+  überdecken sich auch bei langen Bezeichnungen nicht mehr.
+
 ## 0.9.11 – 2026-08-09
 
 - Der Auswahlbereich für globale Variablen bleibt nun geöffnet, während seine

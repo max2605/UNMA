@@ -77,7 +77,7 @@ public static class PanelSlotProjection
         {
             AlarmId = alarmId,
             DisplayName = string.IsNullOrWhiteSpace(view.Name)
-                ? "MELDUNG"
+                ? UnmaText.Get("default.notification", "NOTIFICATION")
                 : view.Name.Trim(),
             Detail = view.Detail ?? "",
             Source = view.Source ?? "",
@@ -114,7 +114,7 @@ public static class PanelSlotProjection
         {
             AlarmId = RulePrefix + rule.Id.Trim(),
             DisplayName = string.IsNullOrWhiteSpace(rule.Name)
-                ? "MELDUNG"
+                ? UnmaText.Get("default.notification", "NOTIFICATION")
                 : rule.Name.Trim(),
             Detail = (rule.Conditions?.Count ?? 0) +
                      UnmaText.Get("auto.38bf168a03a3"),

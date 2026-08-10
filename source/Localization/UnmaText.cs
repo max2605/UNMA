@@ -108,33 +108,39 @@ public static class UnmaText
         string fallback,
         params object[] arguments)
     {
-        var template = Get(textId, fallback);
+        var canonicalKey = "multilanglib." + ModId + "." + textId;
+        var safeArguments = arguments ?? Array.Empty<object>();
         try
         {
-            return string.Format(
-                CultureInfo.CurrentCulture,
-                template,
-                arguments ?? Array.Empty<object>());
+            if (Lang.TryGet(canonicalKey, out _))
+            {
+                return Lang.Format(canonicalKey, safeArguments);
+            }
         }
-        catch (FormatException)
+        catch (Exception exception)
         {
-            return template;
+            Log.Warning(
+                $"UNMA: Translation '{canonicalKey}' could not be " +
+                $"formatted: {exception.Message}");
         }
+
+        return FormatFallback(fallback ?? canonicalKey, safeArguments);
     }
 
     public static string Format(string textId, params object[] arguments)
     {
-        var template = Get(textId);
+        var canonicalKey = "multilanglib." + ModId + "." + textId;
+        var safeArguments = arguments ?? Array.Empty<object>();
         try
         {
-            return string.Format(
-                CultureInfo.CurrentCulture,
-                template,
-                arguments ?? Array.Empty<object>());
+            return Lang.Format(canonicalKey, safeArguments);
         }
-        catch (FormatException)
+        catch (Exception exception)
         {
-            return template;
+            Log.Warning(
+                $"UNMA: Translation '{canonicalKey}' could not be " +
+                $"formatted: {exception.Message}");
+            return FormatFallback(canonicalKey, safeArguments);
         }
     }
 
@@ -148,5 +154,22 @@ public static class UnmaText
         return character >= 'a' && character <= 'z' ||
                character >= 'A' && character <= 'Z' ||
                character >= '0' && character <= '9';
+    }
+
+    private static string FormatFallback(
+        string template,
+        object[] arguments)
+    {
+        try
+        {
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                template,
+                arguments);
+        }
+        catch (FormatException)
+        {
+            return template;
+        }
     }
 }

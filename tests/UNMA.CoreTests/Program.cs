@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization.Json;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using UNMA.Api;
 using UNMA.Audio;
 using UNMA.Domain;
@@ -18,6 +20,7 @@ internal static class Program
     {
         TestComparisons();
         TestComparableValues();
+        TestInstrumentValuePolicy();
         TestBooleanLogic();
         TestAlarmLatch();
         TestSustainedVanillaAlarmPolicy();
@@ -35,6 +38,7 @@ internal static class Program
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
         TestMechanicalSiren();
+        TestLocalizationCoverage();
         TestExternalRegistryValidationAndSnapshots();
         TestExternalMetricPrecedenceAndIsolation();
         TestExternalAlarmTemplateNormalization();
@@ -42,6 +46,172 @@ internal static class Program
         TestExternalDefinitionLoader();
         Console.WriteLine(
             $"UNMA core tests passed: {s_assertions} assertions.");
+    }
+
+    private static void TestLocalizationCoverage()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using (var manifest = JsonDocument.Parse(File.ReadAllText(
+                   Path.Combine(repositoryRoot, "manifest.json"))))
+        {
+            var dependencies = manifest.RootElement
+                .GetProperty("mod_dependencies")
+                .EnumerateArray()
+                .Select(item => item.GetString() ?? "")
+                .ToArray();
+            IsTrue(dependencies.Any(item => item.StartsWith(
+                "MultiLangLib>=",
+                StringComparison.Ordinal)));
+        }
+        var projectFile = File.ReadAllText(
+            Path.Combine(repositoryRoot, "source", "UNMA.csproj"));
+        IsTrue(Regex.IsMatch(
+            projectFile,
+            "<Reference Include=\"MultiLangLib\">[\\s\\S]*?" +
+            "<Private>false</Private>[\\s\\S]*?</Reference>",
+            RegexOptions.CultureInvariant));
+        var modSource = File.ReadAllText(
+            Path.Combine(repositoryRoot, "source", "UnmaMod.cs"));
+        IsTrue(modSource.Contains(
+            "UnmaText.Initialize(manifest.RootDirectoryPath)",
+            StringComparison.Ordinal));
+
+        var languageDirectory = Path.Combine(repositoryRoot, "lang");
+        var languageFiles = Directory.GetFiles(languageDirectory, "*.json")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        IsTrue(languageFiles.Length >= 2);
+
+        var languages = languageFiles.ToDictionary(
+            Path.GetFileName,
+            ReadLanguageFile,
+            StringComparer.OrdinalIgnoreCase);
+        IsTrue(languages.TryGetValue("en.json", out var english));
+        IsTrue(languages.TryGetValue("de.json", out _));
+
+        var canonicalKeys = english.Keys
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+        var keyPattern = new Regex(
+            "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+            RegexOptions.CultureInvariant);
+        var placeholderPattern = new Regex(
+            "\\{([0-9]+)(?:[^}]*)\\}",
+            RegexOptions.CultureInvariant);
+
+        foreach (var language in languages)
+        {
+            var actualKeys = language.Value.Keys
+                .OrderBy(key => key, StringComparer.Ordinal)
+                .ToArray();
+            AreEqual(
+                string.Join("\n", canonicalKeys),
+                string.Join("\n", actualKeys));
+
+            foreach (var key in canonicalKeys)
+            {
+                IsTrue(keyPattern.IsMatch(key));
+                IsTrue(language.Value.TryGetValue(key, out var translated));
+                IsFalse(string.IsNullOrWhiteSpace(translated));
+                AreEqual(
+                    ExtractPlaceholderSignature(english[key], placeholderPattern),
+                    ExtractPlaceholderSignature(translated, placeholderPattern));
+            }
+        }
+
+        var sourceRoot = Path.Combine(repositoryRoot, "source");
+        var keyUsePattern = new Regex(
+            "UnmaText\\.(?:Get|Format)\\(\\s*\"([^\"]+)\"",
+            RegexOptions.CultureInvariant | RegexOptions.Singleline);
+        var usedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sourceFile in Directory.GetFiles(
+                     sourceRoot,
+                     "*.cs",
+                     SearchOption.AllDirectories))
+        {
+            var source = File.ReadAllText(sourceFile);
+            foreach (Match match in keyUsePattern.Matches(source))
+            {
+                usedKeys.Add(match.Groups[1].Value);
+            }
+        }
+
+        IsTrue(usedKeys.Count > 0);
+        foreach (var key in usedKeys)
+        {
+            IsTrue(english.ContainsKey(key));
+        }
+
+        foreach (var metric in SystemMetricCatalog.All)
+        {
+            IsTrue(english.ContainsKey(metric.LabelKey));
+            IsTrue(english.ContainsKey(metric.UnitKey));
+        }
+
+        var declaredDynamicKeyPattern = new Regex(
+            "\"((?:sounds\\.builtin)\\.[A-Za-z0-9_.-]+)\"",
+            RegexOptions.CultureInvariant);
+        foreach (var sourceFile in Directory.GetFiles(
+                     sourceRoot,
+                     "*.cs",
+                     SearchOption.AllDirectories))
+        {
+            var source = File.ReadAllText(sourceFile);
+            foreach (Match match in declaredDynamicKeyPattern.Matches(source))
+            {
+                IsTrue(english.ContainsKey(match.Groups[1].Value));
+            }
+        }
+    }
+
+    private static Dictionary<string, string> ReadLanguageFile(string path)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        IsTrue(document.RootElement.ValueKind == JsonValueKind.Object);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            IsTrue(property.Value.ValueKind == JsonValueKind.String);
+            IsTrue(result.TryAdd(property.Name, property.Value.GetString() ?? ""));
+        }
+        return result;
+    }
+
+    private static string ExtractPlaceholderSignature(
+        string value,
+        Regex placeholderPattern) =>
+        string.Join(
+            ",",
+            placeholderPattern.Matches(value ?? "")
+                .Cast<Match>()
+                .Select(match => match.Groups[1].Value)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(item => item, StringComparer.Ordinal));
+
+    private static string FindRepositoryRoot()
+    {
+        var candidates = new[]
+        {
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory,
+        };
+        foreach (var candidate in candidates)
+        {
+            var directory = new DirectoryInfo(candidate);
+            while (directory != null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "manifest.json")) &&
+                    Directory.Exists(Path.Combine(directory.FullName, "source")) &&
+                    Directory.Exists(Path.Combine(directory.FullName, "lang")))
+                {
+                    return directory.FullName;
+                }
+                directory = directory.Parent;
+            }
+        }
+
+        throw new DirectoryNotFoundException(
+            "UNMA repository root could not be located for localization tests.");
     }
 
     private static void TestGlobalRuleMetricPaths()
@@ -54,6 +224,33 @@ internal static class Program
             "$stored.quantity",
             out _));
         IsFalse(SystemMetricCatalog.TryParseRulePath("$global: ", out _));
+        AreEqual(
+            "product.stored.Coal",
+            SystemMetricCatalog.ProductStoredId("Coal"));
+        AreEqual(
+            "product.capacity.Coal",
+            SystemMetricCatalog.ProductCapacityId("Coal"));
+        AreEqual(
+            "product.fill.Coal",
+            SystemMetricCatalog.ProductFillId("Coal"));
+        AreEqual(
+            "maintenance.fill.MaintenanceT1",
+            SystemMetricCatalog.MaintenanceFillId("MaintenanceT1"));
+        AreEqual(
+            "maintenance.needed_month_max.MaintenanceT1",
+            SystemMetricCatalog.MaintenanceNeededMaxId("MaintenanceT1"));
+        AreEqual(
+            50d,
+            SystemMetricCatalog.CalculateFillPercent(250d, 500d));
+        AreEqual(
+            100d,
+            SystemMetricCatalog.CalculateFillPercent(600d, 500d));
+        AreEqual(
+            0d,
+            SystemMetricCatalog.CalculateFillPercent(-10d, 500d));
+        AreEqual(
+            0d,
+            SystemMetricCatalog.CalculateFillPercent(10d, 0d));
     }
 
     private static void TestComparisons()
@@ -177,6 +374,291 @@ internal static class Program
             (ConditionValueMode)999,
             100d,
             out _));
+    }
+
+    private static void TestInstrumentValuePolicy()
+    {
+        var values = new[] { 100d, 50d, 25d };
+        IsTrue(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Single,
+            values,
+            out var single));
+        AreEqual(100d, single);
+        IsTrue(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Sum,
+            values,
+            out var sum));
+        AreEqual(175d, sum);
+        IsTrue(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Average,
+            values,
+            out var average));
+        AreEqual(175d / 3d, average);
+        IsTrue(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Minimum,
+            values,
+            out var minimum));
+        AreEqual(25d, minimum);
+        IsTrue(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Maximum,
+            values,
+            out var maximum));
+        AreEqual(100d, maximum);
+        IsFalse(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Sum,
+            Array.Empty<double>(),
+            out _));
+        IsFalse(InstrumentValuePolicy.TryAggregate(
+            InstrumentAggregationMode.Sum,
+            new[] { 1d, double.NaN },
+            out _));
+
+        var signatureSource = new InstrumentSourceDefinition
+        {
+            EntityId = 17,
+            EntityPrototypeId = "AirStorageT1",
+        };
+        var signatureInstrument = new InstrumentDefinition
+        {
+            MetricPath = "$stored.quantity",
+            Aggregation = InstrumentAggregationMode.Sum,
+            Sources = new List<InstrumentSourceDefinition>
+            {
+                signatureSource,
+            },
+        };
+        var signature = InstrumentValuePolicy.DefinitionSignature(
+            signatureInstrument);
+        signatureInstrument.Title = "Nur Anzeige geändert";
+        AreEqual(
+            signature,
+            InstrumentValuePolicy.DefinitionSignature(signatureInstrument));
+        signatureInstrument.Aggregation = InstrumentAggregationMode.Average;
+        IsFalse(string.Equals(
+            signature,
+            InstrumentValuePolicy.DefinitionSignature(signatureInstrument),
+            StringComparison.Ordinal));
+        signatureInstrument.Aggregation = InstrumentAggregationMode.Sum;
+        signatureInstrument.MetricPath = "$stored.percent";
+        IsFalse(string.Equals(
+            signature,
+            InstrumentValuePolicy.DefinitionSignature(signatureInstrument),
+            StringComparison.Ordinal));
+        signatureInstrument.MetricPath = "$stored.quantity";
+        signatureSource.EntityId = 18;
+        IsFalse(string.Equals(
+            signature,
+            InstrumentValuePolicy.DefinitionSignature(signatureInstrument),
+            StringComparison.Ordinal));
+
+        var history = new[]
+        {
+            new InstrumentValueSample(0d, 100d),
+            new InstrumentValueSample(5d, 95d),
+            new InstrumentValueSample(30d, 90d),
+            new InstrumentValueSample(65d, 70d),
+        };
+        IsTrue(InstrumentValuePolicy.TryCalculateTrend(
+            history,
+            65d,
+            70d,
+            InstrumentTrendMode.DecreaseAbsolute,
+            60,
+            out var absoluteDecrease));
+        AreEqual(25d, absoluteDecrease);
+        IsTrue(InstrumentValuePolicy.TryCalculateTrend(
+            history,
+            65d,
+            70d,
+            InstrumentTrendMode.DecreasePercent,
+            60,
+            out var percentDecrease));
+        AreEqual(25d / 95d * 100d, percentDecrease);
+        IsTrue(InstrumentValuePolicy.IsTrendTriggered(
+            percentDecrease,
+            25d));
+        IsFalse(InstrumentValuePolicy.IsTrendTriggered(
+            percentDecrease,
+            27d));
+        IsFalse(InstrumentValuePolicy.TryCalculateTrend(
+            history,
+            30d,
+            90d,
+            InstrumentTrendMode.DecreaseAbsolute,
+            60,
+            out _));
+        IsFalse(InstrumentValuePolicy.TryCalculateTrend(
+            new[]
+            {
+                new InstrumentValueSample(-40d, 100d),
+                new InstrumentValueSample(65d, 70d),
+            },
+            65d,
+            70d,
+            InstrumentTrendMode.DecreaseAbsolute,
+            60,
+            out _));
+        IsTrue(InstrumentValuePolicy.TryCalculateTrend(
+            new[]
+            {
+                new InstrumentValueSample(0d, 50d),
+                new InstrumentValueSample(60d, 75d),
+            },
+            60d,
+            75d,
+            InstrumentTrendMode.IncreaseAbsolute,
+            60,
+            out var absoluteIncrease));
+        AreEqual(25d, absoluteIncrease);
+        IsTrue(InstrumentValuePolicy.TryCalculateTrend(
+            new[]
+            {
+                new InstrumentValueSample(0d, 50d),
+                new InstrumentValueSample(60d, 75d),
+            },
+            60d,
+            75d,
+            InstrumentTrendMode.IncreasePercent,
+            60,
+            out var percentIncrease));
+        AreEqual(50d, percentIncrease);
+        IsTrue(InstrumentValuePolicy.TryEvaluateSustainedComparison(
+            new[]
+            {
+                new InstrumentValueSample(0d, 40d),
+                new InstrumentValueSample(20d, 35d),
+                new InstrumentValueSample(40d, 30d),
+            },
+            40d,
+            30d,
+            40,
+            ComparisonOperator.LessOrEqual,
+            40d,
+            out var sustained));
+        IsTrue(sustained);
+        IsTrue(InstrumentValuePolicy.TryEvaluateSustainedComparison(
+            new[]
+            {
+                new InstrumentValueSample(0d, 40d),
+                new InstrumentValueSample(20d, 45d),
+                new InstrumentValueSample(40d, 30d),
+            },
+            40d,
+            30d,
+            40,
+            ComparisonOperator.LessOrEqual,
+            40d,
+            out sustained));
+        IsFalse(sustained);
+        AreEqual(20, GameTimeWindowPolicy.ToSimTicks(1, GameTimeUnit.Day));
+        AreEqual(600, GameTimeWindowPolicy.ToSimTicks(1, GameTimeUnit.Month));
+        AreEqual(7200, GameTimeWindowPolicy.ToSimTicks(1, GameTimeUnit.Year));
+        AreEqual(72000, GameTimeWindowPolicy.ToSimTicks(1, GameTimeUnit.Decade));
+        AreEqual(720000, GameTimeWindowPolicy.ToSimTicks(1, GameTimeUnit.Century));
+        IsFalse(InstrumentValuePolicy.TryCalculateTrend(
+            new[] { new InstrumentValueSample(0d, 0d) },
+            60d,
+            0d,
+            InstrumentTrendMode.DecreasePercent,
+            60,
+            out _));
+
+        var legacyConfiguration = new UnmaConfiguration
+        {
+            SchemaVersion = 15,
+            Instruments = new List<InstrumentDefinition>
+            {
+                new()
+                {
+                    Id = "legacy-recorder",
+                    EntityId = 42,
+                    EntityTitle = "Kohlelager",
+                    EntityPrototypeId = "AirStorageT1",
+                    MetricPath = "$stored.quantity",
+                    HistoryDurationSeconds = 0,
+                },
+            },
+            Rules = new List<AlarmRuleDefinition>
+            {
+                new()
+                {
+                    Conditions = new List<ConditionDefinition>
+                    {
+                        new()
+                        {
+                            InstrumentId = "legacy-recorder",
+                            TrendMode =
+                                InstrumentTrendMode.DecreaseAbsolute,
+                            WindowSeconds = 0,
+                            DeltaThreshold = 0d,
+                        },
+                    },
+                },
+            },
+        };
+        legacyConfiguration.Normalize();
+        AreEqual(17, legacyConfiguration.SchemaVersion);
+        AreEqual(1, legacyConfiguration.Instruments.Count);
+        AreEqual(1, legacyConfiguration.Instruments[0].Sources.Count);
+        AreEqual(42, legacyConfiguration.Instruments[0].Sources[0].EntityId);
+        AreEqual(
+            InstrumentAggregationMode.Single,
+            legacyConfiguration.Instruments[0].Aggregation);
+        AreEqual(
+            3600,
+            legacyConfiguration.Instruments[0].HistoryDurationSeconds);
+        AreEqual(60, legacyConfiguration.Rules[0].Conditions[0].WindowSeconds);
+        AreEqual(0d, legacyConfiguration.Rules[0].Conditions[0].DeltaThreshold);
+        AreEqual(1, legacyConfiguration.Rules[0].Conditions[0].WindowAmount);
+        AreEqual(
+            GameTimeUnit.Month,
+            legacyConfiguration.Rules[0].Conditions[0].WindowUnit);
+        AreEqual(
+            100,
+            legacyConfiguration.Instruments[0].HistoryDurationAmount);
+        AreEqual(
+            GameTimeUnit.Year,
+            legacyConfiguration.Instruments[0].HistoryDurationUnit);
+
+        var currentMultiSourceConfiguration = new UnmaConfiguration
+        {
+            SchemaVersion = 17,
+            Instruments = new List<InstrumentDefinition>
+            {
+                new()
+                {
+                    Id = "current-calculated",
+                    EntityId = 11,
+                    EntityTitle = "2 QUELLEN · SUMME",
+                    EntityPrototypeId = "RemovedLegacySource",
+                    MetricPath = "$stored.quantity",
+                    Aggregation = InstrumentAggregationMode.Sum,
+                    Sources = new List<InstrumentSourceDefinition>
+                    {
+                        new()
+                        {
+                            EntityId = 22,
+                            EntityTitle = "Kohlelager West",
+                            EntityPrototypeId = "AirStorageT1",
+                        },
+                        new()
+                        {
+                            EntityId = 33,
+                            EntityTitle = "Kohlelager Ost",
+                            EntityPrototypeId = "AirStorageT1",
+                        },
+                    },
+                },
+            },
+        };
+        currentMultiSourceConfiguration.Normalize();
+        var normalizedCalculated =
+            currentMultiSourceConfiguration.Instruments[0];
+        AreEqual(2, normalizedCalculated.Sources.Count);
+        AreEqual(22, normalizedCalculated.Sources[0].EntityId);
+        AreEqual(33, normalizedCalculated.Sources[1].EntityId);
+        AreEqual(22, normalizedCalculated.EntityId);
+        AreEqual("2 QUELLEN · SUMME", normalizedCalculated.EntityTitle);
     }
 
     private static void TestBooleanLogic()
@@ -364,7 +846,7 @@ internal static class Program
             EditorWindowHeight = 780f,
         };
         configuration.Normalize();
-        AreEqual(13, configuration.SchemaVersion);
+        AreEqual(17, configuration.SchemaVersion);
         AreEqual("Lagerhaus III", entityPanel.OwnerEntityTitle);
         AreEqual("AirStorageT3", entityPanel.OwnerEntityPrototypeId);
         AreEqual(
@@ -418,6 +900,36 @@ internal static class Program
             restoredEntityPanel.OwnerEntityType);
         AreEqual(1, restored.Rules[0].LinkedPanelIds.Count);
         AreEqual("global-two", restored.Rules[0].LinkedPanelIds[0]);
+
+        var orphaned = new UnmaConfiguration
+        {
+            Panels = new List<PanelDefinition>
+            {
+                new()
+                {
+                    Id = "home-only",
+                    Name = "HOME",
+                    IsDashboard = true,
+                },
+            },
+            Rules = new List<AlarmRuleDefinition>
+            {
+                new()
+                {
+                    Id = "orphaned-rule",
+                    PanelId = "missing-panel",
+                    Name = "ORPHANED",
+                },
+            },
+        };
+        orphaned.Normalize();
+        AreEqual(2, orphaned.Panels.Count);
+        var repairedPanel = orphaned.Panels.Single(panel =>
+            !panel.IsDashboard);
+        AreEqual(repairedPanel.Id, orphaned.Rules[0].PanelId);
+        IsTrue(PanelTopologyPolicy.GetRulePanelIds(
+            orphaned.Rules[0],
+            orphaned.Panels).Count > 0);
     }
 
     private static void TestEntityVanillaSlotPolicy()
@@ -565,6 +1077,18 @@ internal static class Program
                 new() { EntityId = 99 },
             },
         };
+        var computedRule = new AlarmRuleDefinition
+        {
+            Id = "computed-rule",
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    EntityId = 2,
+                    InstrumentId = "coal-total",
+                },
+            },
+        };
         var malformedRule = new AlarmRuleDefinition
         {
             Id = "malformed-rule",
@@ -594,6 +1118,7 @@ internal static class Program
                     anyRule,
                     disabledRule,
                     unrelatedRule,
+                    computedRule,
                     malformedRule,
                     blankIdRule,
                     allRule,
@@ -604,6 +1129,11 @@ internal static class Program
         AreEqual("all-rule", severalRemoved[0]);
         AreEqual("any-rule", severalRemoved[1]);
         AreEqual("disabled-rule", severalRemoved[2]);
+        AreEqual(0, CustomRuleLifecyclePolicy
+            .FindRulesReferencingEntities(
+                new[] { computedRule },
+                new[] { 2 })
+            .Count);
 
         AreEqual(0, CustomRuleLifecyclePolicy
             .FindRulesReferencingEntities(
@@ -862,6 +1392,27 @@ internal static class Program
         IsFalse(VanillaNotificationSuppressionPolicy
             .IsVanillaOverrideId(null));
 
+        IsTrue(VanillaNotificationSuppressionPolicy.IsHiddenFromPanel(
+            VanillaNotificationBehavior.Hidden,
+            isEntityPanel: false,
+            belongsToEntityPanel: false));
+        IsTrue(VanillaNotificationSuppressionPolicy.IsHiddenFromPanel(
+            VanillaNotificationBehavior.Hidden,
+            isEntityPanel: true,
+            belongsToEntityPanel: false));
+        IsFalse(VanillaNotificationSuppressionPolicy.IsHiddenFromPanel(
+            VanillaNotificationBehavior.Hidden,
+            isEntityPanel: true,
+            belongsToEntityPanel: true));
+        IsTrue(VanillaNotificationSuppressionPolicy.IsHiddenFromPanel(
+            VanillaNotificationBehavior.Ignored,
+            isEntityPanel: true,
+            belongsToEntityPanel: true));
+        IsFalse(VanillaNotificationSuppressionPolicy.IsHiddenFromPanel(
+            VanillaNotificationBehavior.Silent,
+            isEntityPanel: false,
+            belongsToEntityPanel: false));
+
         AreEqual(
             overrideId,
             VanillaNotificationSuppressionPolicy
@@ -1007,7 +1558,7 @@ internal static class Program
             IsGloballyDisabled = true,
         });
         legacyConfig.Normalize();
-        AreEqual(13, legacyConfig.SchemaVersion);
+        AreEqual(17, legacyConfig.SchemaVersion);
         IsFalse(legacyConfig.SoundOverrides.Last().IsGloballyDisabled);
         AreEqual(
             VanillaNotificationBehavior.Hidden,
@@ -1727,6 +2278,16 @@ internal static class Program
                     ReferenceMetricPath = "$input.capacity:Potato",
                     ReferenceMetricLabel = "Kartoffeln · Kapazität",
                 },
+                new()
+                {
+                    InstrumentId = "coal-storage-17",
+                    MetricLabel = "Kohlelager gesamt",
+                    TrendMode = InstrumentTrendMode.DecreasePercent,
+                    WindowSeconds = 300,
+                    DeltaThreshold = 12.5d,
+                    WindowAmount = 2,
+                    WindowUnit = GameTimeUnit.Year,
+                },
             },
         });
         configuration.AlarmMemories.Add(new AlarmMemoryDefinition
@@ -1749,6 +2310,37 @@ internal static class Program
             EntityPrototypeId = "TruckT2",
             EntityTitle = "Truck 17",
         });
+        configuration.Instruments.Add(new InstrumentDefinition
+        {
+            Id = "coal-storage-17",
+            Title = "KOHLE NORD",
+            DisplayType = InstrumentDisplayType.EdgewiseVertical,
+            EntityId = 17,
+            EntityTitle = "Kohlelager Nord",
+            EntityPrototypeId = "AirStorageT1",
+            MetricPath = "$stored.percent",
+            MetricLabel = "Füllstand",
+            Unit = "%",
+            Minimum = 0d,
+            Maximum = 1000d,
+            Aggregation = InstrumentAggregationMode.Sum,
+            HistoryDurationSeconds = 7200,
+            Sources = new List<InstrumentSourceDefinition>
+            {
+                new()
+                {
+                    EntityId = 17,
+                    EntityTitle = "Kohlelager Nord",
+                    EntityPrototypeId = "AirStorageT1",
+                },
+                new()
+                {
+                    EntityId = 27,
+                    EntityTitle = "Kohlelager Süd",
+                    EntityPrototypeId = "AirStorageT1",
+                },
+            },
+        });
 
         var serializer = new DataContractJsonSerializer(
             typeof(UnmaConfiguration));
@@ -1760,7 +2352,7 @@ internal static class Program
 
         AreEqual(2, restored.Panels.Count);
         AreEqual(1, restored.Rules.Count);
-        AreEqual(3, restored.Rules[0].Conditions.Count);
+        AreEqual(4, restored.Rules[0].Conditions.Count);
         AreEqual("LAGER UND BAND LEER", restored.Rules[0].Name);
         AreEqual(20d, restored.Rules[0].Conditions[1].Threshold);
         AreEqual(
@@ -1776,7 +2368,38 @@ internal static class Program
         IsFalse(restoredSystemOverride.IsGloballyDisabled);
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
-        AreEqual(13, restored.SchemaVersion);
+        AreEqual(17, restored.SchemaVersion);
+        AreEqual(1, restored.InstrumentPanels.Count);
+        AreEqual("instruments-main", restored.InstrumentPanels[0].Id);
+        AreEqual(1, restored.Instruments.Count);
+        AreEqual("KOHLE NORD", restored.Instruments[0].Title);
+        AreEqual(
+            InstrumentDisplayType.EdgewiseVertical,
+            restored.Instruments[0].DisplayType);
+        AreEqual("$stored.percent", restored.Instruments[0].MetricPath);
+        AreEqual("instruments-main", restored.Instruments[0].PanelId);
+        AreEqual(
+            InstrumentAggregationMode.Sum,
+            restored.Instruments[0].Aggregation);
+        AreEqual(2, restored.Instruments[0].Sources.Count);
+        AreEqual(27, restored.Instruments[0].Sources[1].EntityId);
+        AreEqual(7200, restored.Instruments[0].HistoryDurationSeconds);
+        AreEqual(
+            "coal-storage-17",
+            restored.Rules[0].Conditions[3].InstrumentId);
+        AreEqual(
+            InstrumentTrendMode.DecreasePercent,
+            restored.Rules[0].Conditions[3].TrendMode);
+        AreEqual(300, restored.Rules[0].Conditions[3].WindowSeconds);
+        AreEqual(12.5d, restored.Rules[0].Conditions[3].DeltaThreshold);
+        AreEqual(2, restored.Rules[0].Conditions[3].WindowAmount);
+        AreEqual(
+            GameTimeUnit.Year,
+            restored.Rules[0].Conditions[3].WindowUnit);
+        AreEqual(100, restored.Instruments[0].HistoryDurationAmount);
+        AreEqual(
+            GameTimeUnit.Year,
+            restored.Instruments[0].HistoryDurationUnit);
         AreEqual(2, restored.VanillaNotificationRules.Count);
         AreEqual(
             VanillaNotificationBehavior.Hidden,
@@ -1903,7 +2526,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(13, restored.SchemaVersion);
+        AreEqual(17, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -1939,7 +2562,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(13, oldConfiguration.SchemaVersion);
+        AreEqual(17, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(100, oldConfiguration.UiScalePercent);
@@ -2054,7 +2677,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(13, schemaSeven.SchemaVersion);
+        AreEqual(17, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -2132,7 +2755,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(13, legacy.SchemaVersion);
+        AreEqual(17, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -2184,7 +2807,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(13, versionFive.SchemaVersion);
+        AreEqual(17, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -2261,7 +2884,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(13, schemaEight.SchemaVersion);
+        AreEqual(17, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

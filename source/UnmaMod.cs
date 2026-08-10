@@ -10,6 +10,8 @@ using Mafi.Core.Game;
 using Mafi.Core.Mods;
 using Mafi.Core.Notifications;
 using Mafi.Core.Population;
+using Mafi.Core.Products;
+using Mafi.Core.Maintenance;
 using Mafi.Core.Prototypes;
 using Mafi.Core.Simulation;
 using Mafi.Logging;
@@ -17,6 +19,7 @@ using Mafi.Unity;
 using Mafi.Unity.Audio;
 using Mafi.Unity.Camera;
 using Mafi.Unity.Ui;
+using Mafi.Unity.UiToolkit;
 using UnityEngine;
 using UNMA.Localization;
 using UNMA.Extensions;
@@ -77,6 +80,9 @@ public sealed class UnmaMod : IMod
             resolver.Resolve<IWorkersManager>(),
             resolver.Resolve<SettlementsManager>(),
             resolver.Resolve<PopsHealthManager>(),
+            resolver.Resolve<IProductsManager>(),
+            resolver.Resolve<MaintenanceManager>(),
+            resolver.Resolve<ICalendar>(),
             resolver.Resolve<ISimLoopEvents>(),
             store,
             ReadSettings(),
@@ -89,6 +95,7 @@ public sealed class UnmaMod : IMod
             resolver.Resolve<CameraController>(),
             resolver.Resolve<IUnityInputMgr>(),
             resolver.Resolve<AudioDb>(),
+            resolver.Resolve<UiRoot>(),
             Manifest.RootDirectoryPath);
         JsonConfig.OnValueChanged += OnConfigValueChanged;
 
@@ -108,6 +115,7 @@ public sealed class UnmaMod : IMod
     public void Dispose()
     {
         JsonConfig.OnValueChanged -= OnConfigValueChanged;
+        m_overlay?.DisposeUi();
         m_runtime?.Dispose();
         m_runtime = null;
 

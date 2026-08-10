@@ -9,6 +9,7 @@ using Mafi.Unity;
 using Mafi.Unity.Audio;
 using Mafi.Unity.Camera;
 using Mafi.Unity.Ui;
+using Mafi.Unity.UiToolkit;
 using UnityEngine;
 using UNMA.Audio;
 using UNMA.Domain;
@@ -27,12 +28,38 @@ public sealed class UnmaOverlayController : MonoBehaviour
         public Vector2 Scroll;
         public Vector2? PendingSize;
         public bool IsOpen = true;
+        public UnmaNativeDetachedPanelShell NativeShell;
+        public long NativeZOrder;
     }
 
     private sealed class PanelViewCacheEntry
     {
         public int Frame = -1;
         public IReadOnlyList<AlarmView> Views = Array.Empty<AlarmView>();
+    }
+
+    private enum NativeSurfaceKind
+    {
+        Main,
+        Editor,
+        Detached,
+    }
+
+    private readonly struct NativeSurfaceTarget
+    {
+        public readonly NativeSurfaceKind Kind;
+        public readonly long ZOrder;
+        public readonly DetachedPanel Detached;
+
+        public NativeSurfaceTarget(
+            NativeSurfaceKind kind,
+            long zOrder,
+            DetachedPanel detached = null)
+        {
+            Kind = kind;
+            ZOrder = zOrder;
+            Detached = detached;
+        }
     }
 
     private const int MainWindowId = 0x554E4D41;
@@ -44,13 +71,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private const int TabSystem = 2;
     private const int TabSounds = 3;
     private const int TabOptions = 4;
+    private const int TabInstruments = 5;
     private const float MainResizeHandleSize = 30f;
     private const float MainResizeHandleInset = 4f;
     private const float MainWindowContentBottomInset =
         MainResizeHandleSize + MainResizeHandleInset + 4f;
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
-
+    private static readonly float[] s_instrumentPreviewSamples =
+    {
+        0.12f, 0.18f, 0.24f, 0.22f, 0.36f, 0.48f, 0.45f, 0.61f,
+        0.70f, 0.66f, 0.79f,
+    };
+    private static readonly int[] s_recorderArchiveRanges =
+    {
+        GameTimeWindowPolicy.SimTicksPerDay,
+        GameTimeWindowPolicy.SimTicksPerMonth,
+        GameTimeWindowPolicy.SimTicksPerYear,
+        GameTimeWindowPolicy.SimTicksPerYear * 10,
+        GameTimeWindowPolicy.SimTicksPerYear * 100,
+        0,
+    };
     private enum EditorWindowMode
     {
         Rule,
@@ -73,17 +114,33 @@ public sealed class UnmaOverlayController : MonoBehaviour
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ConditionDefinition> m_draftConditions = new();
     private readonly List<string> m_draftConditionThresholdTexts = new();
+    private readonly Dictionary<ConditionDefinition, string>
+        m_draftTrendWindowTexts = new();
     private readonly Dictionary<string, PanelViewCacheEntry> m_panelViewCache =
         new(StringComparer.Ordinal);
     private readonly List<Rect> m_inputShieldRects = new();
+    private readonly List<NativeSurfaceTarget> m_nativeSurfaceTargets = new();
+    private readonly Dictionary<string, List<float>> m_instrumentSamples =
+        new(StringComparer.Ordinal);
+    private readonly List<InstrumentHistoryBucket>
+        m_recorderArchiveBucketScratch = new(4096);
+    private readonly InstrumentPanelRenderer.RecorderArchiveTrace
+        m_recorderArchiveTrace = new();
+    private readonly Dictionary<string, double> m_instrumentValues =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<string> m_invalidInstruments =
+        new(StringComparer.Ordinal);
 
     private UnmaRuntime m_runtime;
+    private UiRoot m_uiRoot;
     private InspectorsManager m_inspectorsManager;
     private CameraController m_cameraController;
     private UnmaInputBlocker m_inputBlocker;
     private UnmaPointerRaycastShield m_pointerRaycastShield;
     private UnmaAudioController m_audio;
     private InspectorAlarmButtonBridge m_inspectorAlarmButtons;
+    private UnmaNativeWindowShell m_nativeWindowShell;
+    private UnmaNativeEditorShell m_nativeEditorShell;
     private Rect m_windowRect;
     private Rect m_lastPersistedWindowRect;
     private Rect m_launcherRect;
@@ -98,9 +155,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_referenceMetricPickerScroll;
     private Vector2 m_soundOverrideScroll;
     private Vector2 m_systemAlarmScroll;
+    private Vector2 m_instrumentScroll;
+    private Vector2 m_instrumentPanelTabsScroll;
+    private Vector2 m_instrumentMetricScroll;
+    private Vector2 m_instrumentTypePickerScroll;
     private IReadOnlyList<PanelSlotDefinition> m_panelSlotCandidates =
         Array.Empty<PanelSlotDefinition>();
     private float m_nextPanelSlotCandidateRefresh;
+    private float m_nextInstrumentRefresh;
     private bool m_isOpen;
     private bool m_entityAlarmWindowOpen;
     private bool m_editorClosePromptOpen;
@@ -130,6 +192,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_isResizing;
     private int m_resizeControlId;
     private bool m_isDraggingLauncher;
+    private bool m_clearGuiFocusPending;
+    private bool m_nativeOverlayDrawLogged;
+    private long m_nextNativeZOrder;
+    private long m_mainNativeZOrder;
+    private long m_editorNativeZOrder;
+    private bool m_nativeActivationPending;
+    private NativeSurfaceKind m_pendingNativeActivationKind;
+    private DetachedPanel m_pendingNativeActivationDetached;
+    private long m_pendingNativeActivationZOrder;
     private Vector2 m_resizeStartMouse;
     private Vector2 m_resizeStartSize;
     private Vector2 m_launcherDragOffset;
@@ -147,6 +218,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         Array.Empty<MetricDescriptor>();
     private int m_selectedMetricIndex;
     private int m_selectedReferenceMetricIndex;
+    private string m_linkedInstrumentSourceId = "";
+    private int m_selectedLinkedInstrumentIndex;
+    private bool m_linkedInstrumentPickerOpen;
     private bool m_metricPickerOpen;
     private bool m_referenceMetricPickerOpen;
     private int m_conditionReferencePickerIndex = -1;
@@ -171,6 +245,44 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private string m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     private string m_panelSlotFilter = "";
     private string m_soundOverrideFilter = "";
+    private EntityInspectionSnapshot m_instrumentDraftEntity;
+    private readonly List<InstrumentSourceDefinition>
+        m_instrumentDraftSources = new();
+    private IReadOnlyList<MetricDescriptor> m_instrumentDraftMetrics =
+        Array.Empty<MetricDescriptor>();
+    private int m_instrumentDraftMetricIndex;
+    private int m_currentInstrumentPanelIndex;
+    private string m_instrumentDraftTitle = "";
+    private string m_instrumentDraftMinimum = "0";
+    private string m_instrumentDraftMaximum = "100";
+    private InstrumentDisplayType m_instrumentDraftType =
+        InstrumentDisplayType.RoundGauge;
+    private InstrumentAggregationMode m_instrumentDraftAggregation =
+        InstrumentAggregationMode.Single;
+    private bool m_instrumentTypePickerOpen;
+    private bool m_instrumentPanelCreationOpen;
+    private string m_newInstrumentPanelName = UnmaText.Format(
+        "ui.instrument.panel.default_name",
+        "INSTRUMENT PANEL {0}",
+        2);
+    private string m_pendingInstrumentPanelDeleteId = "";
+    private float m_pendingInstrumentPanelDeleteUntil;
+    private string m_recorderFullscreenInstrumentId = "";
+    private int m_recorderArchiveRangeIndex = 1;
+    private Vector2 m_recorderPreviousWindowSize;
+    private bool m_recorderPreviousWindowSizeValid;
+    private string m_recorderArchiveCacheInstrumentId = "";
+    private int m_recorderArchiveCacheWindowSeconds = -1;
+    private int m_recorderArchiveCachePixelColumns = -1;
+    private bool m_recorderArchiveCacheHasHistory;
+    private InstrumentHistoryState m_recorderArchiveCacheHistoryState;
+    private int m_recorderArchiveCacheFallbackCount = -1;
+    private float m_recorderArchiveCacheFallbackFirst;
+    private float m_recorderArchiveCacheFallbackLast;
+    private double m_recorderArchiveCacheScaleMinimum;
+    private double m_recorderArchiveCacheScaleMaximum;
+    private double m_recorderArchiveCacheObservedMinimum;
+    private double m_recorderArchiveCacheObservedMaximum;
     private SystemAlarmDefinition m_systemAlarmDraft;
     private readonly Dictionary<string, string> m_systemThresholdTexts =
         new(StringComparer.Ordinal);
@@ -192,6 +304,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         Array.Empty<AlarmHistoryDefinition>();
 
     private GUIStyle m_windowStyle;
+    private GUIStyle m_panelStyle;
     private GUIStyle m_headerStyle;
     private GUIStyle m_sectionStyle;
     private GUIStyle m_labelStyle;
@@ -217,6 +330,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         CameraController cameraController,
         IUnityInputMgr inputManager,
         AudioDb audioDb,
+        UiRoot uiRoot,
         string modRoot)
     {
         var gameObject = new GameObject(UnmaText.Get("auto.b2d42e12e3c8"));
@@ -230,7 +344,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             inspectorsManager,
             cameraController,
             inputManager,
-            audio);
+            audio,
+            uiRoot);
         return overlay;
     }
 
@@ -239,9 +354,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         InspectorsManager inspectorsManager,
         CameraController cameraController,
         IUnityInputMgr inputManager,
-        UnmaAudioController audio)
+        UnmaAudioController audio,
+        UiRoot uiRoot)
     {
         m_runtime = runtime;
+        m_uiRoot = uiRoot;
         m_inspectorsManager = inspectorsManager;
         m_cameraController = cameraController;
         m_audio = audio;
@@ -276,11 +393,36 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 : config.LauncherY,
             116f,
             34f);
+        InitializeNativeWindowShell(uiRoot);
+        InitializeNativeEditorShell(uiRoot);
     }
 
     public void ApplySettings(UnmaSettings settings)
     {
         m_runtime.ApplySettings(settings);
+    }
+
+    public void DisposeUi()
+    {
+        m_nativeWindowShell?.Dispose();
+        m_nativeWindowShell = null;
+        m_nativeEditorShell?.Dispose();
+        m_nativeEditorShell = null;
+        foreach (var detached in m_detachedPanels)
+        {
+            detached.NativeShell?.Dispose();
+            detached.NativeShell = null;
+        }
+        m_inspectorAlarmButtons?.Dispose();
+        m_inspectorAlarmButtons = null;
+        m_inputBlocker?.Dispose();
+        m_inputBlocker = null;
+        m_pointerRaycastShield?.Dispose();
+        m_pointerRaycastShield = null;
+        if (m_audio != null)
+        {
+            m_audio.StopAlarm();
+        }
     }
 
     private void Update()
@@ -328,7 +470,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal)))
         {
             ResetDraftRule();
-            m_entityAlarmWindowOpen = false;
+            CloseEditorWindow();
             SetStatus(
                 UnmaText.Get("auto.ced08b6f8b50") +
                 UnmaText.Get("auto.e24c442816b5"));
@@ -338,6 +480,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                  m_editorWindowMode == EditorWindowMode.Rule;
         if (alarmEditorVisible &&
             !m_entityAssignmentPending &&
+            string.IsNullOrWhiteSpace(m_linkedInstrumentSourceId) &&
             m_selectedEntity != null &&
             m_pendingInspectionEntityId < 0 &&
             Time.realtimeSinceStartup >= m_nextEntityInspectionRefresh)
@@ -359,6 +502,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (!m_isUiSuppressedByMenu && Input.GetKeyDown(KeyCode.F8))
         {
             m_isOpen = !m_isOpen;
+            SynchronizeNativeWindowVisibility();
         }
 
         var audible = m_testAlarm != null &&
@@ -373,6 +517,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_audio.UpdateAlarm(
             audible,
             m_runtime.Settings.AudioVolumePercent);
+
+        if (Time.realtimeSinceStartup >= m_nextInstrumentRefresh)
+        {
+            RefreshInstrumentValues();
+            m_nextInstrumentRefresh = Time.realtimeSinceStartup + 0.5f;
+        }
+
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeEditorVisibility();
+        SynchronizeNativeDetachedPanels();
     }
 
     private void OnGUI()
@@ -386,6 +540,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         EnsureStyles();
+        ClearPendingGuiFocus();
         var previousMatrix = GUI.matrix;
         try
         {
@@ -396,6 +551,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             DrawGuiSurfaces();
             UpdateKeyboardInputCapture();
             ConsumePointerEventOverUi();
+            CommitPendingNativeSurfaceActivation();
         }
         finally
         {
@@ -405,9 +561,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawGuiSurfaces()
     {
+        var previousLegacyEnabled = GUI.enabled;
+        var currentEvent = UnityEngine.Event.current;
+        var previousLegacyEventType = currentEvent?.type ?? EventType.Ignore;
+        var legacyPointerOccluded = PointerEventTargetsNativeSurface();
+        if (legacyPointerOccluded)
+        {
+            // Native COI windows are painted above the legacy launcher and
+            // fallback IMGUI windows. Disable those lower controls for this
+            // pointer event so an obscured button cannot react through the
+            // visible foreground window.
+            GUI.enabled = false;
+            currentEvent.type = EventType.Ignore;
+        }
+        try
+        {
         DrawLauncher();
 
-        if (m_isOpen)
+        if (m_isOpen && m_nativeWindowShell == null)
         {
             // Keep the dimensions used inside DrawMainWindow identical to the
             // rectangle passed to GUI.Window, including after a resolution
@@ -436,7 +607,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             CancelResizeCapture();
         }
 
-        if (m_entityAlarmWindowOpen)
+        if (m_entityAlarmWindowOpen && m_nativeEditorShell == null)
         {
             var nextEditorRect = GUI.Window(
                 EntityAlarmWindowId,
@@ -466,7 +637,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             var detached = m_detachedPanels[index];
             if (!detached.IsOpen)
             {
+                detached.NativeShell?.Dispose();
+                detached.NativeShell = null;
                 m_detachedPanels.RemoveAt(index);
+                continue;
+            }
+
+            if (detached.NativeShell != null)
+            {
                 continue;
             }
 
@@ -485,11 +663,191 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             captured.Rect = ClampToScreen(nextDetachedRect);
         }
+        }
+        finally
+        {
+            if (legacyPointerOccluded)
+            {
+                currentEvent.type = previousLegacyEventType;
+            }
+            GUI.enabled = previousLegacyEnabled;
+        }
+
+        DrawNativeSurfacesInZOrder();
 
         // Keep the EventSystem representation in sync with window moves and
         // resizes performed during this IMGUI pass. It will be available to
         // the camera's early input pass on the following frame.
         UpdatePointerRaycastShield(true);
+    }
+
+    private bool PointerEventTargetsNativeSurface()
+    {
+        var currentEvent = UnityEngine.Event.current;
+        if (currentEvent == null ||
+            !IsNativePointerEvent(currentEvent.type))
+        {
+            return false;
+        }
+
+        var pointerTopLeft = new Vector2(
+            Input.mousePosition.x,
+            Screen.height - Input.mousePosition.y);
+        if (m_nativeWindowShell?.ContainsPointer(pointerTopLeft) == true ||
+            m_nativeEditorShell?.ContainsPointer(pointerTopLeft) == true)
+        {
+            return true;
+        }
+
+        foreach (var detached in m_detachedPanels)
+        {
+            if (detached.NativeShell?.ContainsPointer(pointerTopLeft) == true)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void DrawNativeSurfacesInZOrder()
+    {
+        m_nativeSurfaceTargets.Clear();
+        if (m_isOpen && m_nativeWindowShell != null &&
+            m_nativeWindowShell.IsOpen)
+        {
+            m_nativeSurfaceTargets.Add(new NativeSurfaceTarget(
+                NativeSurfaceKind.Main,
+                m_mainNativeZOrder));
+        }
+        if (m_entityAlarmWindowOpen && m_nativeEditorShell != null &&
+            m_nativeEditorShell.IsOpen)
+        {
+            m_nativeSurfaceTargets.Add(new NativeSurfaceTarget(
+                NativeSurfaceKind.Editor,
+                m_editorNativeZOrder));
+        }
+        foreach (var detached in m_detachedPanels)
+        {
+            if (detached.IsOpen && detached.NativeShell != null &&
+                detached.NativeShell.IsOpen)
+            {
+                m_nativeSurfaceTargets.Add(new NativeSurfaceTarget(
+                    NativeSurfaceKind.Detached,
+                    detached.NativeZOrder,
+                    detached));
+            }
+        }
+
+        m_nativeSurfaceTargets.Sort((left, right) =>
+            left.ZOrder.CompareTo(right.ZOrder));
+        var currentEvent = UnityEngine.Event.current;
+        var pointerEvent = currentEvent != null &&
+                           IsNativePointerEvent(currentEvent.type);
+        var pointerTopLeft = new Vector2(
+            Input.mousePosition.x,
+            Screen.height - Input.mousePosition.y);
+        var topPointerTarget = -1;
+        if (pointerEvent)
+        {
+            for (var index = m_nativeSurfaceTargets.Count - 1;
+                 index >= 0;
+                 index--)
+            {
+                if (ContainsNativeSurfacePointer(
+                        m_nativeSurfaceTargets[index],
+                        pointerTopLeft))
+                {
+                    topPointerTarget = index;
+                    break;
+                }
+            }
+        }
+
+        for (var index = 0; index < m_nativeSurfaceTargets.Count; index++)
+        {
+            var target = m_nativeSurfaceTargets[index];
+            var previousEnabled = GUI.enabled;
+            var pointerOccluded = pointerEvent &&
+                                  (topPointerTarget > index &&
+                                   ContainsNativeSurfacePointer(
+                                       target,
+                                       pointerTopLeft) ||
+                                   IsNativeResizeHandlePointer(
+                                       target,
+                                       pointerTopLeft));
+            var previousEventType = currentEvent?.type ?? EventType.Ignore;
+            if (pointerOccluded)
+            {
+                GUI.enabled = false;
+                currentEvent.type = EventType.Ignore;
+            }
+            try
+            {
+                switch (target.Kind)
+                {
+                    case NativeSurfaceKind.Editor:
+                        DrawNativeEditorBody();
+                        break;
+                    case NativeSurfaceKind.Detached:
+                        DrawNativeDetachedPanelBody(target.Detached);
+                        break;
+                    default:
+                        DrawNativeMainBody();
+                        break;
+                }
+            }
+            finally
+            {
+                if (pointerOccluded)
+                {
+                    currentEvent.type = previousEventType;
+                }
+                GUI.enabled = previousEnabled;
+            }
+        }
+    }
+
+    private bool ContainsNativeSurfacePointer(
+        NativeSurfaceTarget target,
+        Vector2 pointerTopLeft)
+    {
+        return target.Kind switch
+        {
+            NativeSurfaceKind.Editor =>
+                m_nativeEditorShell?.ContainsPointer(pointerTopLeft) == true,
+            NativeSurfaceKind.Detached =>
+                target.Detached?.NativeShell?.ContainsPointer(
+                    pointerTopLeft) == true,
+            _ => m_nativeWindowShell?.ContainsPointer(pointerTopLeft) == true,
+        };
+    }
+
+    private bool IsNativeResizeHandlePointer(
+        NativeSurfaceTarget target,
+        Vector2 pointerTopLeft)
+    {
+        return target.Kind switch
+        {
+            NativeSurfaceKind.Editor =>
+                m_nativeEditorShell?.IsPointerOverResizeHandle(
+                    pointerTopLeft) == true,
+            NativeSurfaceKind.Detached =>
+                target.Detached?.NativeShell?.IsPointerOverResizeHandle(
+                    pointerTopLeft) == true,
+            _ => m_nativeWindowShell?.IsPointerOverResizeHandle(
+                pointerTopLeft) == true,
+        };
+    }
+
+    private static bool IsNativePointerEvent(EventType type)
+    {
+        return type == EventType.MouseDown ||
+               type == EventType.MouseUp ||
+               type == EventType.MouseDrag ||
+               type == EventType.ScrollWheel ||
+               type == EventType.ContextClick ||
+               type == EventType.DragUpdated ||
+               type == EventType.DragPerform;
     }
 
     private void DrawLauncher()
@@ -507,7 +865,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_launcherRect.y,
             72f,
             Math.Max(72f, LogicalScreenHeight - m_launcherRect.height - 4f));
-        DrawPanelRect(m_launcherRect, new Color(0.08f, 0.09f, 0.09f, 0.96f));
+        DrawPanelRect(
+            m_launcherRect,
+            CoiUiPalette.WithAlpha(CoiUiPalette.Window, 0.97f));
 
         var buttonRect = new Rect(
             m_launcherRect.x + 3f,
@@ -576,6 +936,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         GUILayout.BeginHorizontal();
         DrawTabButton(TabBoard, UnmaText.Get("tab.board", "MELDETAFEL"));
+        DrawTabButton(
+            TabInstruments,
+            UnmaText.Get("tab.instruments", "MESSPULT"));
         DrawTabButton(TabHistory, UnmaText.Get("tab.history", "VERLAUF"));
         DrawTabButton(TabSystem, UnmaText.Get("tab.system", "SYSTEM"));
         DrawTabButton(
@@ -585,7 +948,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "NOTIFICATION OPTIONS"));
         DrawTabButton(TabOptions, UnmaText.Get("tab.options", "OPTIONEN"));
         GUILayout.FlexibleSpace();
-        if (GUILayout.Button("—", m_buttonStyle, GUILayout.Width(36f)))
+        if (GUILayout.Button(
+                UnmaText.Get("ui.common.minimize_short", "MIN"),
+                m_buttonStyle,
+                GUILayout.Width(54f),
+                GUILayout.Height(30f)))
         {
             m_isOpen = false;
             GUI.FocusControl(null);
@@ -593,6 +960,504 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.Space(8f);
+        DrawSelectedMainTab();
+
+        GUILayout.EndArea();
+        DrawResizeHandle();
+        GUI.DragWindow(new Rect(0f, 0f, m_windowRect.width - 44f, 38f));
+    }
+
+    private void InitializeNativeWindowShell(UiRoot uiRoot)
+    {
+        try
+        {
+            m_nativeWindowShell = new UnmaNativeWindowShell(
+                uiRoot,
+                m_windowRect.width,
+                m_windowRect.height,
+                () => m_tab,
+                SelectMainTab,
+                HandleNativeWindowMinimized,
+                HandleNativeWindowResized,
+                QueueMainNativeSurfaceActivation);
+            ActivateMainNativeSurface();
+            Log.Info(
+                "UNMA: native Captain of Industry window shell ready");
+        }
+        catch (Exception exception)
+        {
+            m_nativeWindowShell?.Dispose();
+            m_nativeWindowShell = null;
+            Log.Warning(
+                "UNMA: native window shell unavailable; using the " +
+                "compatible IMGUI window. " + exception.GetType().Name +
+                ": " + exception.Message);
+        }
+    }
+
+    private void InitializeNativeEditorShell(UiRoot uiRoot)
+    {
+        try
+        {
+            m_nativeEditorShell = new UnmaNativeEditorShell(
+                uiRoot,
+                m_entityAlarmWindowRect.width,
+                m_entityAlarmWindowRect.height,
+                GetEditorWindowTitle(),
+                RequestEditorClose,
+                HandleNativeEditorResized,
+                QueueEditorNativeSurfaceActivation);
+            Log.Info("UNMA: native editor window shell ready");
+        }
+        catch (Exception exception)
+        {
+            m_nativeEditorShell?.Dispose();
+            m_nativeEditorShell = null;
+            Log.Warning(
+                "UNMA: native editor shell unavailable; using the " +
+                "compatible IMGUI editor. " + exception.GetType().Name +
+                ": " + exception.Message);
+        }
+    }
+
+    private void SynchronizeNativeWindowVisibility()
+    {
+        if (m_nativeWindowShell == null)
+        {
+            return;
+        }
+
+        try
+        {
+            m_nativeWindowShell.SetSuppressed(m_isUiSuppressedByMenu);
+            if (m_isUiSuppressedByMenu)
+            {
+                return;
+            }
+
+            if (m_isOpen)
+            {
+                if (!m_nativeWindowShell.IsOpen)
+                {
+                    ActivateMainNativeSurface();
+                }
+                m_nativeWindowShell.Open();
+            }
+            else
+            {
+                m_nativeWindowShell.Close();
+            }
+        }
+        catch (Exception exception)
+        {
+            m_nativeWindowShell.Dispose();
+            m_nativeWindowShell = null;
+            Log.Warning(
+                "UNMA: native window could not be synchronized; " +
+                "falling back to IMGUI. " + exception.GetType().Name +
+                ": " + exception.Message);
+        }
+    }
+
+    private void SynchronizeNativeEditorVisibility()
+    {
+        if (m_nativeEditorShell == null)
+        {
+            return;
+        }
+
+        try
+        {
+            m_nativeEditorShell.SetSuppressed(m_isUiSuppressedByMenu);
+            if (m_isUiSuppressedByMenu)
+            {
+                return;
+            }
+
+            if (m_entityAlarmWindowOpen)
+            {
+                if (!m_nativeEditorShell.IsOpen)
+                {
+                    ActivateEditorNativeSurface();
+                }
+                m_nativeEditorShell.Open(GetEditorWindowTitle());
+            }
+            else
+            {
+                m_nativeEditorShell.Close();
+            }
+        }
+        catch (Exception exception)
+        {
+            m_nativeEditorShell.Dispose();
+            m_nativeEditorShell = null;
+            Log.Warning(
+                "UNMA: native editor could not be synchronized; " +
+                "falling back to IMGUI. " + exception.GetType().Name +
+                ": " + exception.Message);
+        }
+    }
+
+    private void SynchronizeNativeDetachedPanels()
+    {
+        foreach (var detached in m_detachedPanels)
+        {
+            if (detached.NativeShell == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                detached.NativeShell.SetSuppressed(m_isUiSuppressedByMenu);
+                if (m_isUiSuppressedByMenu)
+                {
+                    continue;
+                }
+
+                if (!detached.IsOpen)
+                {
+                    detached.NativeShell.Close();
+                    continue;
+                }
+
+                var panel = m_runtime.Configuration.Panels.FirstOrDefault(
+                    item => item.Id == detached.PanelId);
+                if (panel == null)
+                {
+                    detached.IsOpen = false;
+                    detached.NativeShell.Close();
+                    continue;
+                }
+
+                if (!detached.NativeShell.IsOpen)
+                {
+                    ActivateDetachedNativeSurface(detached);
+                }
+                detached.NativeShell.Open(GetDetachedPanelTitle(panel));
+            }
+            catch (Exception exception)
+            {
+                detached.NativeShell.Dispose();
+                detached.NativeShell = null;
+                Log.Warning(
+                    "UNMA: native detached panel unavailable; using " +
+                    "IMGUI fallback. " + exception.GetType().Name +
+                    ": " + exception.Message);
+            }
+        }
+    }
+
+    private void HandleNativeWindowMinimized()
+    {
+        m_isOpen = false;
+        m_clearGuiFocusPending = true;
+    }
+
+    private void HandleNativeWindowResized(float width, float height)
+    {
+        m_windowRect.width = width;
+        m_windowRect.height = height;
+        PersistWindowRect();
+    }
+
+    private void HandleNativeEditorResized(float width, float height)
+    {
+        m_entityAlarmWindowRect.width = width;
+        m_entityAlarmWindowRect.height = height;
+        PersistEditorWindowRect();
+    }
+
+    private void ActivateMainNativeSurface()
+    {
+        m_mainNativeZOrder = ++m_nextNativeZOrder;
+        m_clearGuiFocusPending = true;
+    }
+
+    private void ActivateEditorNativeSurface()
+    {
+        m_editorNativeZOrder = ++m_nextNativeZOrder;
+        m_clearGuiFocusPending = true;
+    }
+
+    private void ActivateDetachedNativeSurface(DetachedPanel detached)
+    {
+        if (detached == null)
+        {
+            return;
+        }
+
+        detached.NativeZOrder = ++m_nextNativeZOrder;
+        m_clearGuiFocusPending = true;
+    }
+
+    private void QueueMainNativeSurfaceActivation(bool isImGuiBodyPoint)
+    {
+        QueueNativeSurfaceActivation(
+            NativeSurfaceKind.Main,
+            null,
+            isImGuiBodyPoint);
+    }
+
+    private void QueueEditorNativeSurfaceActivation(bool isImGuiBodyPoint)
+    {
+        QueueNativeSurfaceActivation(
+            NativeSurfaceKind.Editor,
+            null,
+            isImGuiBodyPoint);
+    }
+
+    private void QueueDetachedNativeSurfaceActivation(
+        DetachedPanel detached,
+        bool isImGuiBodyPoint)
+    {
+        QueueNativeSurfaceActivation(
+            NativeSurfaceKind.Detached,
+            detached,
+            isImGuiBodyPoint);
+    }
+
+    private void QueueNativeSurfaceActivation(
+        NativeSurfaceKind kind,
+        DetachedPanel detached,
+        bool deferUntilMouseUp)
+    {
+        if (IsNativeSurfaceTopmost(kind, detached))
+        {
+            return;
+        }
+
+        var reservedZOrder = ++m_nextNativeZOrder;
+        if (deferUntilMouseUp)
+        {
+            // IMGUI assigns control IDs in draw order. Keep that order stable
+            // from MouseDown through MouseUp so the first click on a button in
+            // a background body is delivered to the same control. Reserving
+            // the order now also keeps any editor opened by that click above
+            // its parent when the promotion is committed.
+            m_nativeActivationPending = true;
+            m_pendingNativeActivationKind = kind;
+            m_pendingNativeActivationDetached = detached;
+            m_pendingNativeActivationZOrder = reservedZOrder;
+            return;
+        }
+
+        // Chrome and the native resize handle do not own IMGUI hotControl, so
+        // their body can follow COI's frame to the front immediately.
+        SetNativeSurfaceZOrder(kind, detached, reservedZOrder);
+        m_clearGuiFocusPending = true;
+    }
+
+    private void SetNativeSurfaceZOrder(
+        NativeSurfaceKind kind,
+        DetachedPanel detached,
+        long zOrder)
+    {
+        switch (kind)
+        {
+            case NativeSurfaceKind.Editor:
+                m_editorNativeZOrder = zOrder;
+                break;
+            case NativeSurfaceKind.Detached:
+                if (detached != null)
+                {
+                    detached.NativeZOrder = zOrder;
+                }
+                break;
+            default:
+                m_mainNativeZOrder = zOrder;
+                break;
+        }
+    }
+
+    private bool IsNativeSurfaceTopmost(
+        NativeSurfaceKind kind,
+        DetachedPanel detached)
+    {
+        var targetOrder = kind switch
+        {
+            NativeSurfaceKind.Editor => m_editorNativeZOrder,
+            NativeSurfaceKind.Detached => detached?.NativeZOrder ?? long.MinValue,
+            _ => m_mainNativeZOrder,
+        };
+
+        if (m_isOpen && m_nativeWindowShell?.IsOpen == true &&
+            kind != NativeSurfaceKind.Main &&
+            m_mainNativeZOrder > targetOrder)
+        {
+            return false;
+        }
+        if (m_entityAlarmWindowOpen && m_nativeEditorShell?.IsOpen == true &&
+            kind != NativeSurfaceKind.Editor &&
+            m_editorNativeZOrder > targetOrder)
+        {
+            return false;
+        }
+        foreach (var candidate in m_detachedPanels)
+        {
+            if (candidate != detached && candidate.IsOpen &&
+                candidate.NativeShell?.IsOpen == true &&
+                candidate.NativeZOrder > targetOrder)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void CommitPendingNativeSurfaceActivation()
+    {
+        if (!m_nativeActivationPending)
+        {
+            return;
+        }
+
+        var currentEvent = UnityEngine.Event.current;
+        if (currentEvent == null ||
+            (currentEvent.rawType != EventType.MouseUp &&
+             (currentEvent.type != EventType.Repaint ||
+              Input.GetMouseButton(0))))
+        {
+            return;
+        }
+
+        var kind = m_pendingNativeActivationKind;
+        var detached = m_pendingNativeActivationDetached;
+        var zOrder = m_pendingNativeActivationZOrder;
+        m_nativeActivationPending = false;
+        m_pendingNativeActivationDetached = null;
+        SetNativeSurfaceZOrder(kind, detached, zOrder);
+        // Clearing is intentionally deferred to the next IMGUI event. The
+        // current MouseUp must still reach the button that owns hotControl.
+        m_clearGuiFocusPending = true;
+    }
+
+    private void SelectMainTab(int tab)
+    {
+        m_tab = tab;
+        m_clearGuiFocusPending = true;
+    }
+
+    private void DrawNativeMainBody()
+    {
+        if (!m_gameplayWasActive ||
+            m_isUiSuppressedByMenu ||
+            !m_isOpen ||
+            m_nativeWindowShell == null ||
+            !m_nativeWindowShell.TryGetBodyScreenRect(
+                out var bodyScreenRect))
+        {
+            return;
+        }
+
+        if (!m_nativeOverlayDrawLogged)
+        {
+            m_nativeOverlayDrawLogged = true;
+            Log.Info(
+                "UNMA: native body overlay active at " +
+                bodyScreenRect);
+        }
+
+        var contentScale = UiScale;
+        var contentWidth = Mathf.Max(
+            1f,
+            bodyScreenRect.width / contentScale - 12f);
+        var contentHeight = Mathf.Max(
+            1f,
+            bodyScreenRect.height / contentScale - 12f);
+        DrawNativeBodyBackdrop(bodyScreenRect, contentScale);
+        var previousWindowRect = m_windowRect;
+        m_windowRect.width = contentWidth + 24f;
+        m_windowRect.height = contentHeight + 42f +
+                              MainWindowContentBottomInset;
+
+        GUILayout.BeginArea(new Rect(
+            bodyScreenRect.x / contentScale + 6f,
+            bodyScreenRect.y / contentScale + 6f,
+            contentWidth,
+            contentHeight));
+        try
+        {
+            DrawSelectedMainTab();
+        }
+        finally
+        {
+            GUILayout.EndArea();
+            m_windowRect = previousWindowRect;
+        }
+
+        UpdateKeyboardInputCapture();
+    }
+
+    private void DrawNativeEditorBody()
+    {
+        if (!m_gameplayWasActive ||
+            m_isUiSuppressedByMenu ||
+            !m_entityAlarmWindowOpen ||
+            m_nativeEditorShell == null ||
+            !m_nativeEditorShell.TryGetBodyScreenRect(
+                out var bodyScreenRect))
+        {
+            return;
+        }
+
+        var contentScale = UiScale;
+        var contentWidth = Mathf.Max(
+            1f,
+            bodyScreenRect.width / contentScale - 12f);
+        var contentHeight = Mathf.Max(
+            1f,
+            bodyScreenRect.height / contentScale - 12f);
+        DrawNativeBodyBackdrop(bodyScreenRect, contentScale);
+        var previousEditorRect = m_entityAlarmWindowRect;
+        m_entityAlarmWindowRect.width = contentWidth + 24f;
+        m_entityAlarmWindowRect.height = contentHeight + 42f +
+                                         MainWindowContentBottomInset;
+
+        GUILayout.BeginArea(new Rect(
+            bodyScreenRect.x / contentScale + 6f,
+            bodyScreenRect.y / contentScale + 6f,
+            contentWidth,
+            contentHeight));
+        try
+        {
+            DrawEditorBodyContent();
+        }
+        finally
+        {
+            GUILayout.EndArea();
+            m_entityAlarmWindowRect = previousEditorRect;
+        }
+
+        UpdateKeyboardInputCapture();
+    }
+
+    private void DrawNativeBodyBackdrop(Rect bodyScreenRect, float scale)
+    {
+        DrawPanelRect(
+            new Rect(
+                bodyScreenRect.x / scale,
+                bodyScreenRect.y / scale,
+                bodyScreenRect.width / scale,
+                bodyScreenRect.height / scale),
+            CoiUiPalette.Surface);
+    }
+
+    private void ClearPendingGuiFocus()
+    {
+        if (!m_clearGuiFocusPending || UnityEngine.Event.current == null)
+        {
+            return;
+        }
+
+        GUI.FocusControl(null);
+        GUIUtility.keyboardControl = 0;
+        GUIUtility.hotControl = 0;
+        m_clearGuiFocusPending = false;
+    }
+
+    private void DrawSelectedMainTab()
+    {
         switch (m_tab)
         {
             case TabHistory:
@@ -607,14 +1472,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
             case TabOptions:
                 DrawOptions();
                 break;
+            case TabInstruments:
+                DrawInstruments();
+                break;
             default:
                 DrawBoard();
                 break;
         }
-
-        GUILayout.EndArea();
-        DrawResizeHandle();
-        GUI.DragWindow(new Rect(0f, 0f, m_windowRect.width - 44f, 38f));
     }
 
     private void DrawBoard()
@@ -762,6 +1626,1331 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndScrollView();
     }
 
+    private void DrawInstruments()
+    {
+        if (!string.IsNullOrWhiteSpace(m_recorderFullscreenInstrumentId))
+        {
+            DrawRecorderArchiveView();
+            return;
+        }
+
+        GUILayout.Label(
+            UnmaText.Get(
+                "ui.instrument.console_title",
+                "MEASUREMENT AND RECORDING CONSOLE · SERIES 1974"),
+            m_sectionStyle);
+        GUILayout.Space(6f);
+        DrawInstrumentPanelTabs();
+        var currentPanel = CurrentInstrumentPanel;
+        if (currentPanel == null)
+        {
+            GUILayout.Label(
+                UnmaText.Get(
+                    "ui.instrument.no_panel",
+                    "No instrument panel is available."),
+                m_labelStyle);
+            return;
+        }
+        GUILayout.Space(6f);
+        GUILayout.BeginVertical(m_panelStyle);
+        GUILayout.Label(
+            UnmaText.Get(
+                "ui.instrument.add_hint",
+                "Add a measurement point: open a building in the game, take the source, and select a metric."),
+            m_smallLabelStyle);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.instrument.take_open_building",
+                    "SOURCE FROM OPEN BUILDING"),
+                m_primaryButtonStyle,
+                GUILayout.Width(270f),
+                GUILayout.Height(30f)))
+        {
+            CaptureInstrumentEntity();
+        }
+        GUILayout.Label(
+            m_instrumentDraftEntity == null
+                ? UnmaText.Get(
+                    "ui.instrument.no_source_selected",
+                    "No source selected")
+                : m_instrumentDraftEntity.Title,
+            m_labelStyle,
+            GUILayout.Height(30f));
+        GUILayout.EndHorizontal();
+
+        if (m_instrumentDraftEntity != null &&
+            m_instrumentDraftMetrics.Count > 0)
+        {
+            GUILayout.Space(4f);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                UnmaText.Get("ui.instrument.metric", "METRIC"),
+                m_smallLabelStyle,
+                GUILayout.Width(82f));
+            var selectedMetric = m_instrumentDraftMetrics[
+                Math.Max(0, Math.Min(
+                    m_instrumentDraftMetricIndex,
+                    m_instrumentDraftMetrics.Count - 1))];
+            if (GUILayout.Button(
+                    selectedMetric.Label + "  ·  " +
+                    FormatMetricValue(selectedMetric),
+                    m_buttonStyle,
+                    GUILayout.Height(28f)))
+            {
+                m_metricPickerOpen = !m_metricPickerOpen;
+            }
+            GUILayout.EndHorizontal();
+
+            if (m_metricPickerOpen)
+            {
+                m_instrumentMetricScroll = GUILayout.BeginScrollView(
+                    m_instrumentMetricScroll,
+                    m_panelStyle,
+                    GUILayout.Height(145f));
+                for (var index = 0;
+                     index < m_instrumentDraftMetrics.Count;
+                     index++)
+                {
+                    var metric = m_instrumentDraftMetrics[index];
+                    if (GUILayout.Button(
+                            metric.Label + "  [" + metric.Path + "]  " +
+                            FormatMetricValue(metric),
+                            index == m_instrumentDraftMetricIndex
+                                ? m_primaryButtonStyle
+                                : m_buttonStyle,
+                            GUILayout.Height(26f)))
+                    {
+                        SelectInstrumentMetric(index);
+                        m_metricPickerOpen = false;
+                    }
+                }
+                GUILayout.EndScrollView();
+            }
+
+            DrawInstrumentSourceEditor(selectedMetric);
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(
+                UnmaText.Get("ui.instrument.label", "LABEL"),
+                m_smallLabelStyle,
+                GUILayout.Width(62f));
+            m_instrumentDraftTitle = GUILayout.TextField(
+                m_instrumentDraftTitle ?? "",
+                m_textFieldStyle,
+                GUILayout.MinWidth(130f),
+                GUILayout.Height(28f));
+            GUILayout.Label(
+                UnmaText.Get("ui.common.from", "FROM"),
+                m_smallLabelStyle,
+                GUILayout.Width(34f));
+            m_instrumentDraftMinimum = GUILayout.TextField(
+                m_instrumentDraftMinimum,
+                m_textFieldStyle,
+                GUILayout.Width(76f),
+                GUILayout.Height(28f));
+            GUILayout.Label(
+                UnmaText.Get("ui.common.to", "TO"),
+                m_smallLabelStyle,
+                GUILayout.Width(30f));
+            m_instrumentDraftMaximum = GUILayout.TextField(
+                m_instrumentDraftMaximum,
+                m_textFieldStyle,
+                GUILayout.Width(76f),
+                GUILayout.Height(28f));
+            if (GUILayout.Button(
+                    UnmaText.Format(
+                        "ui.instrument.type_button",
+                        "TYPE: {0}  V",
+                        InstrumentTypeLabel(m_instrumentDraftType)),
+                    m_buttonStyle,
+                    GUILayout.Width(220f),
+                    GUILayout.Height(28f)))
+            {
+                m_instrumentTypePickerOpen = !m_instrumentTypePickerOpen;
+            }
+            if (GUILayout.Button(
+                    UnmaText.Get(
+                        "ui.instrument.install",
+                        "INSTALL INSTRUMENT"),
+                    m_primaryButtonStyle,
+                    GUILayout.Width(180f),
+                    GUILayout.Height(28f)))
+            {
+                AddInstrument();
+            }
+            GUILayout.EndHorizontal();
+            if (m_instrumentTypePickerOpen)
+            {
+                DrawInstrumentTypePicker(selectedMetric);
+            }
+        }
+        GUILayout.EndVertical();
+
+        GUILayout.Space(8f);
+        var instruments = m_runtime.Configuration.Instruments
+            .Where(instrument => string.Equals(
+                instrument.PanelId,
+                currentPanel.Id,
+                StringComparison.Ordinal))
+            .ToList();
+        if (instruments.Count == 0)
+        {
+            GUILayout.Label(
+                UnmaText.Get(
+                    "ui.instrument.empty",
+                    "No instruments have been installed yet. The console waits stoically."),
+                m_labelStyle);
+            return;
+        }
+
+        m_instrumentScroll = GUILayout.BeginScrollView(m_instrumentScroll);
+        var availableWidth = Mathf.Max(250f, m_windowRect.width - 62f);
+        var columns = Math.Max(1, Mathf.FloorToInt(availableWidth / 270f));
+        for (var start = 0; start < instruments.Count; start += columns)
+        {
+            GUILayout.BeginHorizontal();
+            for (var column = 0; column < columns; column++)
+            {
+                var index = start + column;
+                if (index >= instruments.Count)
+                {
+                    GUILayout.FlexibleSpace();
+                    continue;
+                }
+                var instrument = instruments[index];
+                var rect = GUILayoutUtility.GetRect(
+                    245f,
+                    310f,
+                    225f,
+                    225f,
+                    GUILayout.ExpandWidth(true));
+                m_instrumentValues.TryGetValue(instrument.Id, out var value);
+                m_instrumentSamples.TryGetValue(instrument.Id, out var samples);
+                InstrumentPanelRenderer.Draw(
+                    rect,
+                    instrument,
+                    value,
+                    !m_invalidInstruments.Contains(instrument.Id),
+                    samples,
+                    m_labelStyle,
+                    m_smallLabelStyle,
+                    reserveActionBar: true);
+                if (GUI.Button(
+                        new Rect(rect.xMax - 27f, rect.y + 5f, 22f, 22f),
+                        "X",
+                        m_dangerButtonStyle))
+                {
+                    RemoveInstrument(instrument.Id);
+                    GUILayout.EndHorizontal();
+                    GUILayout.EndScrollView();
+                    return;
+                }
+                if (GUI.Button(
+                        new Rect(rect.x + 6f, rect.y + 30f, 24f, 22f),
+                        "↗",
+                        m_primaryButtonStyle))
+                {
+                    NavigateToEntity(instrument.EntityId);
+                }
+                if (instrument.DisplayType ==
+                        InstrumentDisplayType.PaperRecorder &&
+                    GUI.Button(
+                        new Rect(rect.x + 34f, rect.y + 30f, 68f, 22f),
+                        UnmaText.Get("ui.recorder.archive", "ARCHIVE"),
+                        m_buttonStyle))
+                {
+                    EnterRecorderArchive(instrument);
+                }
+                if (GUI.Button(
+                        new Rect(
+                            rect.x + (instrument.DisplayType ==
+                                InstrumentDisplayType.PaperRecorder
+                                ? 106f
+                                : 34f),
+                            rect.y + 30f,
+                            58f,
+                            22f),
+                        UnmaText.Get("ui.instrument.alarm_short", "ALARM"),
+                        m_buttonStyle))
+                {
+                    OpenInstrumentAlarmEditor(instrument);
+                }
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(7f);
+        }
+        GUILayout.EndScrollView();
+    }
+
+    private void DrawInstrumentPanelTabs()
+    {
+        var panels = m_runtime.Configuration.InstrumentPanels;
+        if (panels == null || panels.Count == 0)
+        {
+            return;
+        }
+        m_currentInstrumentPanelIndex = Math.Max(
+            0,
+            Math.Min(m_currentInstrumentPanelIndex, panels.Count - 1));
+        GUILayout.BeginHorizontal();
+        m_instrumentPanelTabsScroll = GUILayout.BeginScrollView(
+            m_instrumentPanelTabsScroll,
+            false,
+            false,
+            GUILayout.Height(45f),
+            GUILayout.ExpandWidth(true));
+        GUILayout.BeginHorizontal();
+        for (var index = 0; index < panels.Count; index++)
+        {
+            var panel = panels[index];
+            if (GUILayout.Button(
+                    panel.Name,
+                    index == m_currentInstrumentPanelIndex
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.MinWidth(120f),
+                    GUILayout.MaxWidth(220f),
+                    GUILayout.Height(30f)))
+            {
+                m_currentInstrumentPanelIndex = index;
+                m_instrumentScroll = Vector2.zero;
+            }
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.EndScrollView();
+        if (GUILayout.Button(
+                UnmaText.Get("ui.instrument.panel.add", "+ PANEL"),
+                m_buttonStyle,
+                GUILayout.Width(92f),
+                GUILayout.Height(30f)))
+        {
+            m_instrumentPanelCreationOpen = !m_instrumentPanelCreationOpen;
+        }
+        if (panels.Count > 1)
+        {
+            var current = panels[m_currentInstrumentPanelIndex];
+            var confirmDelete = string.Equals(
+                                    m_pendingInstrumentPanelDeleteId,
+                                    current.Id,
+                                    StringComparison.Ordinal) &&
+                                Time.realtimeSinceStartup <
+                                m_pendingInstrumentPanelDeleteUntil;
+            if (GUILayout.Button(
+                    confirmDelete
+                        ? UnmaText.Get("ui.common.really", "REALLY?")
+                        : UnmaText.Get(
+                            "ui.instrument.panel.remove",
+                            "REMOVE PANEL"),
+                    confirmDelete ? m_dangerButtonStyle : m_buttonStyle,
+                    GUILayout.Width(92f),
+                    GUILayout.Height(30f)))
+            {
+                if (confirmDelete)
+                {
+                    RemoveCurrentInstrumentPanel();
+                }
+                else
+                {
+                    m_pendingInstrumentPanelDeleteId = current.Id;
+                    m_pendingInstrumentPanelDeleteUntil =
+                        Time.realtimeSinceStartup + 5f;
+                    SetStatus(
+                        UnmaText.Get(
+                            "ui.instrument.panel.confirm_remove",
+                            "Press again to remove the panel; its instruments will be moved."));
+                }
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        if (!m_instrumentPanelCreationOpen)
+        {
+            return;
+        }
+        GUILayout.BeginHorizontal(m_panelStyle);
+        GUILayout.Label(
+            UnmaText.Get(
+                "ui.instrument.panel.new",
+                "NEW INSTRUMENT PANEL"),
+            m_smallLabelStyle,
+            GUILayout.Width(125f));
+        m_newInstrumentPanelName = GUILayout.TextField(
+            m_newInstrumentPanelName ?? "",
+            m_textFieldStyle,
+            GUILayout.MinWidth(180f),
+            GUILayout.Height(28f));
+        if (GUILayout.Button(
+                UnmaText.Get("ui.common.create", "CREATE"),
+                m_primaryButtonStyle,
+                GUILayout.Width(100f),
+                GUILayout.Height(28f)))
+        {
+            AddInstrumentPanel();
+        }
+        if (GUILayout.Button(
+                UnmaText.Get("ui.common.cancel", "CANCEL"),
+                m_buttonStyle,
+                GUILayout.Width(100f),
+                GUILayout.Height(28f)))
+        {
+            m_instrumentPanelCreationOpen = false;
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private void AddInstrumentPanel()
+    {
+        var name = string.IsNullOrWhiteSpace(m_newInstrumentPanelName)
+            ? UnmaText.Format(
+                "ui.instrument.panel.default_name",
+                "INSTRUMENT PANEL {0}",
+                m_runtime.Configuration.InstrumentPanels.Count + 1)
+            : m_newInstrumentPanelName.Trim().ToUpperInvariant();
+        m_runtime.Configuration.InstrumentPanels.Add(
+            new InstrumentPanelDefinition
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Name = name,
+            });
+        m_currentInstrumentPanelIndex =
+            m_runtime.Configuration.InstrumentPanels.Count - 1;
+        m_instrumentPanelCreationOpen = false;
+        m_newInstrumentPanelName = UnmaText.Format(
+            "ui.instrument.panel.default_name",
+            "INSTRUMENT PANEL {0}",
+            m_currentInstrumentPanelIndex + 2);
+        SaveConfiguration(UnmaText.Get(
+            "ui.instrument.panel.created",
+            "Instrument panel created."));
+    }
+
+    private void RemoveCurrentInstrumentPanel()
+    {
+        var panels = m_runtime.Configuration.InstrumentPanels;
+        if (panels.Count <= 1)
+        {
+            return;
+        }
+        var removed = panels[m_currentInstrumentPanelIndex];
+        panels.RemoveAt(m_currentInstrumentPanelIndex);
+        m_currentInstrumentPanelIndex = Math.Max(
+            0,
+            Math.Min(m_currentInstrumentPanelIndex, panels.Count - 1));
+        var destination = panels[m_currentInstrumentPanelIndex];
+        foreach (var instrument in m_runtime.Configuration.Instruments.Where(
+                     item => string.Equals(
+                         item.PanelId,
+                         removed.Id,
+                         StringComparison.Ordinal)))
+        {
+            instrument.PanelId = destination.Id;
+        }
+        m_pendingInstrumentPanelDeleteId = "";
+        SaveConfiguration(UnmaText.Format(
+            "ui.instrument.panel.removed",
+            "Instrument panel removed; its instruments were moved to {0}.",
+            destination.Name));
+    }
+
+    private void DrawInstrumentTypePicker(MetricDescriptor selectedMetric)
+    {
+        GUILayout.Space(5f);
+        GUILayout.BeginVertical(m_panelStyle);
+        GUILayout.Label(
+            UnmaText.Get(
+                "ui.instrument.type_picker_title",
+                "SELECT INSTRUMENT TYPE · PREVIEW"),
+            m_smallLabelStyle);
+        m_instrumentTypePickerScroll = GUILayout.BeginScrollView(
+            m_instrumentTypePickerScroll,
+            GUILayout.Height(Mathf.Min(390f, m_windowRect.height * 0.48f)));
+        var types = (InstrumentDisplayType[])Enum.GetValues(
+            typeof(InstrumentDisplayType));
+        const int columns = 3;
+        for (var start = 0; start < types.Length; start += columns)
+        {
+            GUILayout.BeginHorizontal();
+            for (var column = 0; column < columns; column++)
+            {
+                var index = start + column;
+                if (index >= types.Length)
+                {
+                    GUILayout.FlexibleSpace();
+                    continue;
+                }
+                var type = types[index];
+                var rect = GUILayoutUtility.GetRect(
+                    180f,
+                    280f,
+                    164f,
+                    164f,
+                    GUILayout.ExpandWidth(true));
+                var preview = new InstrumentDefinition
+                {
+                    Title = InstrumentTypeLabel(type),
+                    DisplayType = type,
+                    EntityTitle = UnmaText.Get(
+                        "ui.instrument.preview",
+                        "PREVIEW"),
+                    MetricLabel = selectedMetric.Label,
+                    Unit = selectedMetric.Unit,
+                    Minimum = 0d,
+                    Maximum = string.Equals(
+                        selectedMetric.Unit,
+                        "%",
+                        StringComparison.Ordinal)
+                        ? 100d
+                        : Math.Max(1d, selectedMetric.CurrentValue * 1.25d),
+                };
+                InstrumentPanelRenderer.Draw(
+                    rect,
+                    preview,
+                    selectedMetric.CurrentValue,
+                    true,
+                    s_instrumentPreviewSamples,
+                    m_labelStyle,
+                    m_smallLabelStyle);
+                if (GUI.Button(
+                        new Rect(
+                            rect.x + 7f,
+                            rect.yMax - 31f,
+                            rect.width - 14f,
+                            24f),
+                        type == m_instrumentDraftType
+                            ? UnmaText.Get("ui.common.selected", "SELECTED")
+                            : UnmaText.Get("ui.common.select", "SELECT"),
+                        type == m_instrumentDraftType
+                            ? m_primaryButtonStyle
+                            : m_buttonStyle))
+                {
+                    m_instrumentDraftType = type;
+                    m_instrumentTypePickerOpen = false;
+                }
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(5f);
+        }
+        GUILayout.EndScrollView();
+        GUILayout.EndVertical();
+    }
+
+    private void DrawInstrumentSourceEditor(MetricDescriptor selectedMetric)
+    {
+        GUILayout.Space(5f);
+        GUILayout.BeginVertical(m_panelStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            UnmaText.Get("ui.instrument.calculation", "CALCULATION"),
+            m_smallLabelStyle,
+            GUILayout.Width(86f),
+            GUILayout.Height(27f));
+        foreach (InstrumentAggregationMode mode in Enum.GetValues(
+                     typeof(InstrumentAggregationMode)))
+        {
+            if (GUILayout.Button(
+                    InstrumentAggregationLabel(mode),
+                    mode == m_instrumentDraftAggregation
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.MinWidth(72f),
+                    GUILayout.Height(27f)))
+            {
+                m_instrumentDraftAggregation = mode;
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            UnmaText.Format(
+                "ui.instrument.sources_count",
+                "SOURCES {0}",
+                m_instrumentDraftSources.Count),
+            m_smallLabelStyle,
+            GUILayout.Width(86f),
+            GUILayout.Height(27f));
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.instrument.add_matching_source",
+                    "+ OPEN BUILDING WITH SAME METRIC"),
+                m_buttonStyle,
+                GUILayout.Width(330f),
+                GUILayout.Height(27f)))
+        {
+            AddOpenEntityAsInstrumentSource(selectedMetric);
+        }
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
+
+        for (var index = 0; index < m_instrumentDraftSources.Count; index++)
+        {
+            var source = m_instrumentDraftSources[index];
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(88f);
+            GUILayout.Label(
+                UnmaText.Format(
+                    "ui.instrument.source_row",
+                    "{0} · {1} · ID {2}",
+                    index + 1,
+                    source.EntityTitle,
+                    source.EntityId),
+                m_labelStyle,
+                GUILayout.Height(24f));
+            if (m_instrumentDraftSources.Count > 1 && GUILayout.Button(
+                    "X",
+                    m_dangerButtonStyle,
+                    GUILayout.Width(34f),
+                    GUILayout.Height(24f)))
+            {
+                m_instrumentDraftSources.RemoveAt(index);
+                if (m_instrumentDraftSources.Count == 1)
+                {
+                    m_instrumentDraftAggregation =
+                        InstrumentAggregationMode.Single;
+                }
+                GUILayout.EndHorizontal();
+                break;
+            }
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndVertical();
+    }
+
+    private void AddOpenEntityAsInstrumentSource(
+        MetricDescriptor selectedMetric)
+    {
+        var entity = m_inspectorsManager.GetFirstActiveEntityOrNull();
+        if (entity == null)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.open_additional_building",
+                "Open the additional building in the game first."));
+            return;
+        }
+        var entityId = entity.Id.Value;
+        if (m_instrumentDraftSources.Any(source =>
+                source.EntityId == entityId))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.source_already_added",
+                "This building has already been added as a source."));
+            return;
+        }
+        if (!EntityMetricCatalog.TryRead(
+                entity,
+                selectedMetric.Path,
+                out _))
+        {
+            SetStatus(UnmaText.Format(
+                "ui.instrument.status.metric_not_available",
+                "The open building does not provide the metric '{0}'.",
+                selectedMetric.Label));
+            return;
+        }
+
+        m_instrumentDraftSources.Add(new InstrumentSourceDefinition
+        {
+            EntityId = entityId,
+            EntityTitle = EntityMetricCatalog.GetEntityTitle(entity),
+            EntityPrototypeId = entity.Prototype.Id.Value,
+        });
+        if (m_instrumentDraftAggregation == InstrumentAggregationMode.Single)
+        {
+            m_instrumentDraftAggregation = InstrumentAggregationMode.Sum;
+        }
+        SetStatus(UnmaText.Format(
+            "ui.instrument.status.source_added",
+            "Calculated source added: {0}",
+            EntityMetricCatalog.GetEntityTitle(entity)));
+    }
+
+    private static string InstrumentAggregationLabel(
+        InstrumentAggregationMode mode)
+    {
+        return mode switch
+        {
+            InstrumentAggregationMode.Sum => UnmaText.Get(
+                "ui.instrument.aggregation.sum",
+                "SUM"),
+            InstrumentAggregationMode.Average => UnmaText.Get(
+                "ui.instrument.aggregation.average",
+                "AVERAGE"),
+            InstrumentAggregationMode.Minimum => UnmaText.Get(
+                "ui.instrument.aggregation.minimum",
+                "MIN"),
+            InstrumentAggregationMode.Maximum => UnmaText.Get(
+                "ui.instrument.aggregation.maximum",
+                "MAX"),
+            _ => UnmaText.Get(
+                "ui.instrument.aggregation.single",
+                "SINGLE"),
+        };
+    }
+
+    private void CaptureInstrumentEntity()
+    {
+        var entity = m_inspectorsManager.GetFirstActiveEntityOrNull();
+        if (entity == null)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.open_building",
+                "Open a building in the game first."));
+            return;
+        }
+        var metrics = EntityMetricCatalog.Discover(entity);
+        if (metrics.Count == 0)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.no_metrics",
+                "No metrics were found for this building."));
+            return;
+        }
+        m_instrumentDraftEntity = new EntityInspectionSnapshot(
+            entity.Id.Value,
+            EntityMetricCatalog.GetEntityTitle(entity),
+            entity.GetType().FullName,
+            entity.Prototype.Id.Value,
+            EntityMetricCatalog.TryGetStoredProductId(entity),
+            metrics);
+        m_instrumentDraftMetrics = metrics;
+        m_instrumentDraftMetricIndex = 0;
+        m_instrumentDraftSources.Clear();
+        m_instrumentDraftSources.Add(new InstrumentSourceDefinition
+        {
+            EntityId = m_instrumentDraftEntity.EntityId,
+            EntityTitle = m_instrumentDraftEntity.Title,
+            EntityPrototypeId = m_instrumentDraftEntity.PrototypeId,
+        });
+        m_instrumentDraftAggregation = InstrumentAggregationMode.Single;
+        m_metricPickerOpen = false;
+        SelectInstrumentMetric(FindPreferredInstrumentMetric(metrics));
+        SetStatus(UnmaText.Format(
+            "ui.instrument.status.source_taken",
+            "Measurement source selected: {0}",
+            m_instrumentDraftEntity.Title));
+    }
+
+    private static int FindPreferredInstrumentMetric(
+        IReadOnlyList<MetricDescriptor> metrics)
+    {
+        for (var index = 0; index < metrics.Count; index++)
+        {
+            if (string.Equals(
+                    metrics[index].Path,
+                    "$stored.percent",
+                    StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+        return 0;
+    }
+
+    private void SelectInstrumentMetric(int index)
+    {
+        if (m_instrumentDraftMetrics.Count == 0)
+        {
+            return;
+        }
+        m_instrumentDraftMetricIndex = Math.Max(
+            0,
+            Math.Min(index, m_instrumentDraftMetrics.Count - 1));
+        var metric = m_instrumentDraftMetrics[m_instrumentDraftMetricIndex];
+        m_instrumentDraftTitle = metric.Label.ToUpperInvariant();
+        m_instrumentDraftMinimum = "0";
+        var suggestedMaximum = string.Equals(metric.Unit, "%", StringComparison.Ordinal)
+            ? 100d
+            : Math.Max(1d, Math.Ceiling(metric.CurrentValue * 1.25d));
+        m_instrumentDraftMaximum = suggestedMaximum.ToString(
+            "0.###",
+            CultureInfo.CurrentCulture);
+    }
+
+    private void AddInstrument()
+    {
+        if (m_instrumentDraftEntity == null ||
+            m_instrumentDraftMetrics.Count == 0 ||
+            !TryParseDouble(m_instrumentDraftMinimum, out var minimum) ||
+            !TryParseDouble(m_instrumentDraftMaximum, out var maximum) ||
+            maximum <= minimum)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.invalid_range",
+                "Invalid measurement range: TO must be greater than FROM."));
+            return;
+        }
+        var metric = m_instrumentDraftMetrics[m_instrumentDraftMetricIndex];
+        if (m_instrumentDraftSources.Count == 0)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.source_required",
+                "At least one measurement source is required."));
+            return;
+        }
+        foreach (var source in m_instrumentDraftSources)
+        {
+            if (!m_runtime.TryGetLiveEntity(source.EntityId, out var entity) ||
+                !EntityMetricCatalog.TryRead(entity, metric.Path, out _))
+            {
+                SetStatus(UnmaText.Format(
+                    "ui.instrument.status.source_unavailable",
+                    "Source unavailable or metric missing: {0}",
+                    source.EntityTitle));
+                return;
+            }
+        }
+        var panel = CurrentInstrumentPanel;
+        if (panel == null)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.no_target_panel",
+                "No instrument panel is available as a target."));
+            return;
+        }
+        var primarySource = m_instrumentDraftSources[0];
+        var instrument = new InstrumentDefinition
+        {
+            Title = string.IsNullOrWhiteSpace(m_instrumentDraftTitle)
+                ? metric.Label.ToUpperInvariant()
+                : m_instrumentDraftTitle.Trim().ToUpperInvariant(),
+            DisplayType = m_instrumentDraftType,
+            EntityId = primarySource.EntityId,
+            EntityTitle = m_instrumentDraftSources.Count > 1
+                ? UnmaText.Format(
+                    "ui.instrument.calculated_source_title",
+                    "{0} SOURCES · {1}",
+                    m_instrumentDraftSources.Count,
+                    InstrumentAggregationLabel(m_instrumentDraftAggregation))
+                : primarySource.EntityTitle,
+            EntityPrototypeId = primarySource.EntityPrototypeId,
+            MetricPath = metric.Path,
+            MetricLabel = metric.Label,
+            Unit = metric.Unit,
+            Minimum = minimum,
+            Maximum = maximum,
+            PanelId = panel.Id,
+            Sources = m_instrumentDraftSources.Select(source =>
+                new InstrumentSourceDefinition
+                {
+                    EntityId = source.EntityId,
+                    EntityTitle = source.EntityTitle,
+                    EntityPrototypeId = source.EntityPrototypeId,
+                }).ToList(),
+            Aggregation = m_instrumentDraftAggregation,
+            HistoryDurationSeconds = 21600,
+            HistoryDurationAmount = 100,
+            HistoryDurationUnit = GameTimeUnit.Year,
+        };
+        m_runtime.Configuration.Instruments.Add(instrument);
+        SaveConfiguration(UnmaText.Get(
+            "ui.instrument.status.installed",
+            "Instrument installed."));
+        RefreshInstrumentValues();
+    }
+
+    private void RemoveInstrument(string instrumentId)
+    {
+        var dependentRules = m_runtime.Configuration.Rules.Count(rule =>
+            rule?.Conditions?.Any(condition =>
+                condition != null && string.Equals(
+                    condition.InstrumentId,
+                    instrumentId,
+                    StringComparison.Ordinal)) == true);
+        var draftDependsOnInstrument = m_draftConditions.Any(condition =>
+            condition != null && string.Equals(
+                condition.InstrumentId,
+                instrumentId,
+                StringComparison.Ordinal));
+        if (dependentRules > 0 || draftDependsOnInstrument)
+        {
+            SetStatus(draftDependsOnInstrument
+                ? UnmaText.Get(
+                    "ui.instrument.status.used_by_draft",
+                    "The instrument is used by the open alarm draft. Save or discard the draft first.")
+                : UnmaText.Format(
+                    "ui.instrument.status.used_by_rules",
+                    "The instrument is used by {0} alarm(s). Delete them in the alarm editor first.",
+                    dependentRules));
+            return;
+        }
+
+        m_runtime.Configuration.Instruments.RemoveAll(item => string.Equals(
+            item.Id,
+            instrumentId,
+            StringComparison.Ordinal));
+        m_instrumentSamples.Remove(instrumentId);
+        m_instrumentValues.Remove(instrumentId);
+        m_invalidInstruments.Remove(instrumentId);
+        if (string.Equals(
+                m_recorderFullscreenInstrumentId,
+                instrumentId,
+                StringComparison.Ordinal))
+        {
+            ExitRecorderArchive();
+        }
+        SaveConfiguration(UnmaText.Get(
+            "ui.instrument.status.removed",
+            "Instrument removed."));
+    }
+
+    private void RefreshInstrumentValues()
+    {
+        if (m_runtime?.Configuration?.Instruments == null)
+        {
+            return;
+        }
+        foreach (var instrument in m_runtime.Configuration.Instruments)
+        {
+            if (!m_runtime.TryReadInstrumentValue(
+                    instrument,
+                    out var value,
+                    out _))
+            {
+                m_invalidInstruments.Add(instrument.Id);
+                m_instrumentValues.Remove(instrument.Id);
+                m_instrumentSamples.Remove(instrument.Id);
+                continue;
+            }
+            m_invalidInstruments.Remove(instrument.Id);
+            m_instrumentValues[instrument.Id] = value;
+            if (!m_instrumentSamples.TryGetValue(instrument.Id, out var samples))
+            {
+                samples = new List<float>(240);
+                m_instrumentSamples[instrument.Id] = samples;
+            }
+            samples.Add(Mathf.Clamp01((float)(
+                (value - instrument.Minimum) /
+                (instrument.Maximum - instrument.Minimum))));
+            // Four times the former horizontal resolution keeps the strip
+            // recorder's leftward feed below a pixel per poll on normal card
+            // widths, so the paper advances continuously instead of jumping.
+            if (samples.Count > 240)
+            {
+                samples.RemoveAt(0);
+            }
+        }
+    }
+
+    private void EnterRecorderArchive(InstrumentDefinition instrument)
+    {
+        if (instrument == null ||
+            instrument.DisplayType != InstrumentDisplayType.PaperRecorder)
+        {
+            return;
+        }
+
+        m_recorderFullscreenInstrumentId = instrument.Id;
+        m_recorderArchiveRangeIndex = Math.Max(
+            0,
+            Math.Min(
+                m_recorderArchiveRangeIndex,
+                s_recorderArchiveRanges.Length - 1));
+        if (m_nativeWindowShell != null)
+        {
+            m_recorderPreviousWindowSize =
+                m_nativeWindowShell.MaximizeTemporarily();
+            m_recorderPreviousWindowSizeValid = true;
+        }
+        else
+        {
+            m_recorderPreviousWindowSize = new Vector2(
+                m_windowRect.width,
+                m_windowRect.height);
+            m_recorderPreviousWindowSizeValid = true;
+            m_windowRect.width = Math.Max(700f, LogicalScreenWidth - 16f);
+            m_windowRect.height = Math.Max(520f, LogicalScreenHeight - 16f);
+            m_windowRect = ClampToScreen(m_windowRect);
+        }
+        m_instrumentScroll = Vector2.zero;
+    }
+
+    private void OpenInstrumentAlarmEditor(InstrumentDefinition instrument)
+    {
+        if (instrument == null)
+        {
+            return;
+        }
+        if (HasDraftRuleWork())
+        {
+            OpenRuleEditorWindow();
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.other_draft_open",
+                "Another alarm draft is already open. Save or discard it first."));
+            return;
+        }
+        var targetPanels = GlobalPanels.Where(panel =>
+            panel != null &&
+            !panel.IsDashboard &&
+            !PanelTopologyPolicy.IsEntityPanel(panel)).ToArray();
+        if (targetPanels.Length == 0)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.instrument.status.global_panel_required",
+                "A global annunciator panel is required before creating this alarm."));
+            return;
+        }
+
+        ResetDraftRule();
+        SelectLinkedInstrumentSource(instrument.Id);
+        // Instrument alarms require an explicit destination choice. This
+        // prevents the first global panel (historically SUPPLY) from being
+        // selected silently merely because it happens to be first.
+        m_draftTargetPanelId = "";
+        m_draftPreferredSlotIndex = -1;
+        m_draftRuleName = UnmaText.Format(
+            "ui.instrument.default_alarm_name",
+            "{0} ALARM",
+            instrument.Title);
+        var condition = new ConditionDefinition
+        {
+            EntityId = instrument.EntityId,
+            EntityTitle = instrument.EntityTitle,
+            EntityPrototypeId = instrument.EntityPrototypeId,
+            MetricPath = instrument.MetricPath,
+            MetricLabel = instrument.Title,
+            Comparison = ComparisonOperator.Less,
+            Threshold = instrument.Minimum,
+            InstrumentId = instrument.Id,
+            TrendMode = InstrumentTrendMode.None,
+            WindowSeconds = 60,
+            WindowAmount = 1,
+            WindowUnit = GameTimeUnit.Month,
+            DeltaThreshold = Math.Max(
+                1d,
+                (instrument.Maximum - instrument.Minimum) * 0.05d),
+        };
+        m_draftConditions.Add(condition);
+        m_draftConditionThresholdTexts.Add(
+            condition.Threshold.ToString(
+                "0.###",
+                CultureInfo.CurrentCulture));
+        m_draftTrendWindowTexts[condition] = "1";
+        OpenRuleEditorWindow();
+        SetStatus(UnmaText.Format(
+            "ui.instrument.status.alarm_prepared",
+            "Alarm prepared for calculated metric: {0}",
+            instrument.Title));
+    }
+
+    private void ExitRecorderArchive()
+    {
+        m_recorderFullscreenInstrumentId = "";
+        if (!m_recorderPreviousWindowSizeValid)
+        {
+            return;
+        }
+
+        if (m_nativeWindowShell != null)
+        {
+            m_nativeWindowShell.SetTemporarySize(
+                m_recorderPreviousWindowSize);
+        }
+        else
+        {
+            m_windowRect.width = m_recorderPreviousWindowSize.x;
+            m_windowRect.height = m_recorderPreviousWindowSize.y;
+            m_windowRect = ClampToScreen(m_windowRect);
+        }
+        m_recorderPreviousWindowSizeValid = false;
+    }
+
+    private void DrawRecorderArchiveView()
+    {
+        var instrument = m_runtime.Configuration.Instruments.FirstOrDefault(
+            item => string.Equals(
+                item.Id,
+                m_recorderFullscreenInstrumentId,
+                StringComparison.Ordinal));
+        if (instrument == null ||
+            instrument.DisplayType != InstrumentDisplayType.PaperRecorder)
+        {
+            ExitRecorderArchive();
+            return;
+        }
+
+        GUILayout.Label(
+            UnmaText.Format(
+                "ui.recorder.archive_title",
+                "PAPER RECORDER ARCHIVE · {0}",
+                instrument.Title),
+            m_sectionStyle);
+        GUILayout.Space(6f);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            UnmaText.Get("ui.recorder.time_range", "TIME RANGE"),
+            m_smallLabelStyle,
+            GUILayout.Width(90f),
+            GUILayout.Height(30f));
+        for (var index = 0;
+             index < s_recorderArchiveRanges.Length;
+             index++)
+        {
+            if (GUILayout.Button(
+                    GetRecorderArchiveRangeLabel(index),
+                    index == m_recorderArchiveRangeIndex
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Width(76f),
+                    GUILayout.Height(30f)))
+            {
+                m_recorderArchiveRangeIndex = index;
+            }
+        }
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.recorder.back_to_panel",
+                    "BACK TO INSTRUMENT PANEL"),
+                m_buttonStyle,
+                GUILayout.Width(190f),
+                GUILayout.Height(30f)))
+        {
+            ExitRecorderArchive();
+            GUILayout.EndHorizontal();
+            return;
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Space(6f);
+
+        var hasCurrentValue = m_instrumentValues.TryGetValue(
+            instrument.Id,
+            out var current);
+        var isValid = !m_invalidInstruments.Contains(instrument.Id) &&
+                      hasCurrentValue;
+        var selectedRange = s_recorderArchiveRanges[
+            m_recorderArchiveRangeIndex];
+        var chartRect = GUILayoutUtility.GetRect(
+            520f,
+            Mathf.Max(320f, m_windowRect.height - 180f),
+            GUILayout.ExpandWidth(true),
+            GUILayout.ExpandHeight(true));
+        var windowSeconds = selectedRange;
+        // The paper itself has 24 horizontal pixels fewer than the allocated
+        // archive rect. Capping the bucket count to that physical width keeps
+        // rendering cost proportional to what can actually be seen.
+        var pixelColumns = Mathf.Clamp(
+            Mathf.FloorToInt(chartRect.width - 48f),
+            1,
+            4096);
+        if (isValid)
+        {
+            RefreshRecorderArchiveCache(
+                instrument,
+                windowSeconds,
+                pixelColumns);
+        }
+        else
+        {
+            m_recorderArchiveTrace.Clear();
+            m_recorderArchiveCacheInstrumentId = "";
+        }
+        var observedMin = isValid && m_recorderArchiveTrace.Count > 0
+            ? Math.Min(current, m_recorderArchiveCacheObservedMinimum)
+            : current;
+        var observedMax = isValid && m_recorderArchiveTrace.Count > 0
+            ? Math.Max(current, m_recorderArchiveCacheObservedMaximum)
+            : current;
+        InstrumentPanelRenderer.DrawRecorderArchive(
+            chartRect,
+            instrument,
+            m_recorderArchiveTrace,
+            current,
+            observedMin,
+            observedMax,
+            GetRecorderArchiveRangeLabel(m_recorderArchiveRangeIndex),
+            m_labelStyle,
+            m_smallLabelStyle,
+            isValid);
+    }
+
+    private static string GetRecorderArchiveRangeLabel(int index)
+    {
+        return index switch
+        {
+            0 => UnmaText.Get("ui.recorder.range.one_day", "1 DAY"),
+            1 => UnmaText.Get("ui.recorder.range.one_month", "1 MONTH"),
+            2 => UnmaText.Get("ui.recorder.range.one_year", "1 YEAR"),
+            3 => UnmaText.Get("ui.recorder.range.ten_years", "10 YEARS"),
+            4 => UnmaText.Get(
+                "ui.recorder.range.one_century",
+                "100 YEARS"),
+            _ => UnmaText.Get("ui.recorder.range.maximum", "MAX"),
+        };
+    }
+
+    private void RefreshRecorderArchiveCache(
+        InstrumentDefinition instrument,
+        int windowSeconds,
+        int pixelColumns)
+    {
+        var hasHistory = m_runtime.TryGetInstrumentHistoryState(
+            instrument.Id,
+            out var historyState);
+        m_instrumentSamples.TryGetValue(
+            instrument.Id,
+            out var fallbackSamples);
+        var fallbackCount = fallbackSamples?.Count ?? 0;
+        var fallbackFirst = fallbackCount > 0 ? fallbackSamples[0] : 0f;
+        var fallbackLast = fallbackCount > 0
+            ? fallbackSamples[fallbackCount - 1]
+            : 0f;
+
+        var cacheMatches = string.Equals(
+                               m_recorderArchiveCacheInstrumentId,
+                               instrument.Id,
+                               StringComparison.Ordinal) &&
+                           m_recorderArchiveCacheWindowSeconds ==
+                           windowSeconds &&
+                           m_recorderArchiveCachePixelColumns ==
+                           pixelColumns &&
+                           m_recorderArchiveCacheHasHistory == hasHistory &&
+                           m_recorderArchiveCacheScaleMinimum.Equals(
+                               instrument.Minimum) &&
+                           m_recorderArchiveCacheScaleMaximum.Equals(
+                               instrument.Maximum);
+        if (cacheMatches && hasHistory)
+        {
+            cacheMatches = RecorderHistoryStateEquals(
+                m_recorderArchiveCacheHistoryState,
+                historyState);
+        }
+        else if (cacheMatches)
+        {
+            cacheMatches = m_recorderArchiveCacheFallbackCount ==
+                           fallbackCount &&
+                           m_recorderArchiveCacheFallbackFirst.Equals(
+                               fallbackFirst) &&
+                           m_recorderArchiveCacheFallbackLast.Equals(
+                               fallbackLast);
+        }
+        if (cacheMatches)
+        {
+            return;
+        }
+
+        m_recorderArchiveTrace.Clear();
+        m_recorderArchiveCacheInstrumentId = instrument.Id;
+        m_recorderArchiveCacheWindowSeconds = windowSeconds;
+        m_recorderArchiveCachePixelColumns = pixelColumns;
+        m_recorderArchiveCacheHasHistory = hasHistory;
+        m_recorderArchiveCacheHistoryState = historyState;
+        m_recorderArchiveCacheFallbackCount = fallbackCount;
+        m_recorderArchiveCacheFallbackFirst = fallbackFirst;
+        m_recorderArchiveCacheFallbackLast = fallbackLast;
+        m_recorderArchiveCacheScaleMinimum = instrument.Minimum;
+        m_recorderArchiveCacheScaleMaximum = instrument.Maximum;
+        m_recorderArchiveCacheObservedMinimum = 0d;
+        m_recorderArchiveCacheObservedMaximum = 0d;
+
+        if (hasHistory && m_runtime.CopyDecimatedInstrumentHistory(
+                instrument.Id,
+                windowSeconds,
+                pixelColumns,
+                m_recorderArchiveBucketScratch,
+                out historyState,
+                out var observedMinimum,
+                out var observedMaximum))
+        {
+            m_recorderArchiveCacheHistoryState = historyState;
+            m_recorderArchiveCacheObservedMinimum = observedMinimum;
+            m_recorderArchiveCacheObservedMaximum = observedMaximum;
+            foreach (var bucket in m_recorderArchiveBucketScratch)
+            {
+                m_recorderArchiveTrace.Add(
+                    NormalizeRecorderArchiveValue(instrument, bucket.FirstValue),
+                    NormalizeRecorderArchiveValue(instrument, bucket.MinimumValue),
+                    NormalizeRecorderArchiveValue(instrument, bucket.MaximumValue),
+                    NormalizeRecorderArchiveValue(instrument, bucket.LastValue));
+            }
+            return;
+        }
+
+        if (fallbackCount == 0)
+        {
+            return;
+        }
+
+        m_recorderArchiveCacheObservedMinimum = instrument.Minimum +
+            fallbackSamples.Min() * (instrument.Maximum - instrument.Minimum);
+        m_recorderArchiveCacheObservedMaximum = instrument.Minimum +
+            fallbackSamples.Max() * (instrument.Maximum - instrument.Minimum);
+        var columnCount = Math.Min(pixelColumns, fallbackCount);
+        for (var column = 0; column < columnCount; column++)
+        {
+            var bucketStart = (int)((long)column * fallbackCount /
+                                    columnCount);
+            var bucketEnd = (int)((long)(column + 1) * fallbackCount /
+                                  columnCount);
+            bucketEnd = Math.Max(bucketStart + 1, bucketEnd);
+            var first = fallbackSamples[bucketStart];
+            var last = fallbackSamples[bucketEnd - 1];
+            var minimum = first;
+            var maximum = first;
+            for (var index = bucketStart + 1;
+                 index < bucketEnd;
+                 index++)
+            {
+                minimum = Math.Min(minimum, fallbackSamples[index]);
+                maximum = Math.Max(maximum, fallbackSamples[index]);
+            }
+            m_recorderArchiveTrace.Add(first, minimum, maximum, last);
+        }
+    }
+
+    private static bool RecorderHistoryStateEquals(
+        InstrumentHistoryState left,
+        InstrumentHistoryState right) =>
+        left.SampleCount == right.SampleCount &&
+        left.FirstTimestampSeconds.Equals(right.FirstTimestampSeconds) &&
+        left.LastTimestampSeconds.Equals(right.LastTimestampSeconds) &&
+        left.FirstValue.Equals(right.FirstValue) &&
+        left.LastValue.Equals(right.LastValue);
+
+    private static float NormalizeRecorderArchiveValue(
+        InstrumentDefinition instrument,
+        double value)
+    {
+        var span = instrument.Maximum - instrument.Minimum;
+        return span > 0d
+            ? Mathf.Clamp01((float)((value - instrument.Minimum) / span))
+            : 0f;
+    }
+
+    private static string InstrumentTypeLabel(InstrumentDisplayType type)
+    {
+        return type switch
+        {
+            InstrumentDisplayType.EdgewiseVertical => UnmaText.Get(
+                "ui.instrument.type.edgewise_vertical",
+                "EDGEWISE · VERTICAL"),
+            InstrumentDisplayType.EdgewiseHorizontal => UnmaText.Get(
+                "ui.instrument.type.edgewise_horizontal",
+                "EDGEWISE · HORIZONTAL"),
+            InstrumentDisplayType.RoundGauge => UnmaText.Get(
+                "ui.instrument.type.round_gauge",
+                "ROUND GAUGE"),
+            InstrumentDisplayType.SevenSegmentRed => UnmaText.Get(
+                "ui.instrument.type.seven_segment_red",
+                "7-SEGMENT · RED"),
+            InstrumentDisplayType.SevenSegmentGreen => UnmaText.Get(
+                "ui.instrument.type.seven_segment_green",
+                "7-SEGMENT · GREEN"),
+            InstrumentDisplayType.NixieTube => UnmaText.Get(
+                "ui.instrument.type.nixie",
+                "NIXIE TUBE"),
+            InstrumentDisplayType.CrtAmber => UnmaText.Get(
+                "ui.instrument.type.crt_amber",
+                "CRT · AMBER"),
+            InstrumentDisplayType.CrtGreen => UnmaText.Get(
+                "ui.instrument.type.crt_green",
+                "CRT · GREEN"),
+            _ => UnmaText.Get(
+                "ui.instrument.type.paper_recorder",
+                "PAPER RECORDER"),
+        };
+    }
+
     private void DrawEntityAssignmentBanner(PanelDefinition panel)
     {
         if (!m_entityAssignmentPending)
@@ -899,7 +3088,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             30f,
             GUILayout.ExpandWidth(true),
             GUILayout.Height(30f));
-        DrawPanelRect(rect, new Color(0.16f, 0.18f, 0.18f, 1f));
+        DrawPanelRect(rect, CoiUiPalette.SurfaceRaised);
         var actionWidth = 98f;
         var stateWidth = 92f;
         GUI.Label(
@@ -908,7 +3097,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 rect.y,
                 rect.width - actionWidth - stateWidth - 20f,
                 rect.height),
-            "MELDETEXT",
+            UnmaText.Get("ui.history.message", "MESSAGE"),
             m_historyHeaderStyle);
         GUI.Label(
             new Rect(
@@ -916,7 +3105,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 rect.y,
                 stateWidth,
                 rect.height),
-            "ZUSTAND",
+            UnmaText.Get("ui.history.state", "STATE"),
             m_historyHeaderStyle);
         GUI.Label(
             new Rect(
@@ -924,7 +3113,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 rect.y,
                 actionWidth,
                 rect.height),
-            "AKTION",
+            UnmaText.Get("ui.history.action", "ACTION"),
             m_historyHeaderStyle);
     }
 
@@ -982,7 +3171,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             background = blinkOn
                 ? Color.white
-                : new Color(0.66f, 0.67f, 0.64f, 1f);
+                : CoiUiPalette.TextMuted;
         }
 
         DrawPanelRect(rect, Color.black);
@@ -1103,7 +3292,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.Space(6f);
             GUILayout.Label(UnmaText.Get("auto.d03a4752df6c"), m_sectionStyle);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Name", m_labelStyle, GUILayout.Width(90f));
+            GUILayout.Label(
+                UnmaText.Get("ui.common.name", "Name"),
+                m_labelStyle,
+                GUILayout.Width(90f));
             panel.Name = GUILayout.TextField(
                 panel.Name,
                 40,
@@ -1161,7 +3353,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 GUILayout.BeginHorizontal();
                 GUILayout.Label(
-                    "Auto-Filter",
+                    UnmaText.Get("ui.panel.auto_filter", "Auto-filter"),
                     m_labelStyle,
                     GUILayout.Width(90f));
                 panel.NotificationFilter = GUILayout.TextField(
@@ -1236,7 +3428,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_smallLabelStyle,
                 GUILayout.Width(28f));
             GUILayout.Label(
-                (slot.DisplayName ?? "MELDUNG") + "   ·   " +
+                (slot.DisplayName ?? UnmaText.Get(
+                    "ui.common.alarm",
+                    "ALARM")) + "   ·   " +
                 SlotSourceLabel(slot.Source),
                 m_labelStyle);
             GUI.enabled = index > 0;
@@ -1265,7 +3459,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal);
             GUI.enabled = !isCustom;
             if (GUILayout.Button(
-                    isCustom ? UnmaText.Get("auto.063bd868b890") : "ENTFERNEN",
+                    isCustom
+                        ? UnmaText.Get("auto.063bd868b890")
+                        : UnmaText.Get("ui.common.remove", "REMOVE"),
                     m_buttonStyle,
                     GUILayout.Width(105f)))
             {
@@ -1326,7 +3522,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label(
-                (slot.DisplayName ?? "MELDUNG") + "   ·   " +
+                (slot.DisplayName ?? UnmaText.Get(
+                    "ui.common.alarm",
+                    "ALARM")) + "   ·   " +
                 SlotSourceLabel(slot.Source),
                 m_smallLabelStyle);
             if (GUILayout.Button(
@@ -1370,10 +3568,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         return source switch
         {
-            "vanilla" => "VANILLA",
-            "system" => "SYSTEM",
+            "vanilla" => UnmaText.Get("ui.alarm.source.vanilla", "VANILLA"),
+            "system" => UnmaText.Get("ui.alarm.source.system", "SYSTEM"),
             "custom" => UnmaText.Get("auto.5aa074c71bd3"),
-            _ => "MELDUNG",
+            _ => UnmaText.Get("ui.common.alarm", "ALARM"),
         };
     }
 
@@ -1414,7 +3612,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(
-                    rule.Enabled ? "AN" : "AUS",
+                    rule.Enabled
+                        ? UnmaText.Get("ui.common.on", "ON")
+                        : UnmaText.Get("ui.common.off", "OFF"),
                     rule.Enabled ? m_primaryButtonStyle : m_buttonStyle,
                     GUILayout.Width(52f)))
             {
@@ -1432,13 +3632,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.Label(
                 rule.Name + " · " + SeverityLabel(rule.Severity) +
                 " · " + rule.Conditions.Count + UnmaText.Get("auto.05534195bbe5") +
-                (rule.Logic == AlarmLogic.All ? "UND" : "ODER") + " · " +
+                (rule.Logic == AlarmLogic.All
+                    ? UnmaText.Get("ui.common.and", "AND")
+                    : UnmaText.Get("ui.common.or", "OR")) + " · " +
                 (rule.AutoAcknowledgeOnClear
                     ? UnmaText.Get("auto.367f30137868")
                     : UnmaText.Get("auto.c9097d398192")),
                 m_labelStyle);
             if (GUILayout.Button(
-                    "BEARBEITEN",
+                    UnmaText.Get("ui.common.edit", "EDIT"),
                     m_buttonStyle,
                     GUILayout.Width(105f)))
             {
@@ -1483,17 +3685,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawEntityAlarmWindow(int _)
     {
         HandleEditorResizeInput();
-        var targetPanel = GetDraftTargetPanel();
-        var title = m_editorWindowMode switch
-        {
-            EditorWindowMode.PanelCreation =>
-                UnmaText.Get("auto.5e9e7c9addd9"),
-            EditorWindowMode.PanelSettings =>
-                UnmaText.Get("auto.0e8b76140a09"),
-            _ => UnmaText.Get("auto.b9ccafdfaef7") +
-                 (targetPanel == null ? "" : " · " + targetPanel.Name),
-        };
-        DrawWindowHeader(title, m_entityAlarmWindowRect.width);
+        DrawWindowHeader(
+            GetEditorWindowTitle(),
+            m_entityAlarmWindowRect.width);
 
         if (GUI.Button(
                 new Rect(m_entityAlarmWindowRect.width - 52f, 8f, 40f, 28f),
@@ -1509,6 +3703,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_entityAlarmWindowRect.width - 24f,
             m_entityAlarmWindowRect.height - 42f -
             MainWindowContentBottomInset));
+        DrawEditorBodyContent();
+        GUILayout.EndArea();
+
+        DrawEditorResizeHandle();
+        GUI.DragWindow(new Rect(
+            0f,
+            0f,
+            m_entityAlarmWindowRect.width - 58f,
+            38f));
+    }
+
+    private void DrawEditorBodyContent()
+    {
         DrawStatusMessage();
         DrawDraftConflictBanner();
         m_entityAlarmScroll = GUILayout.BeginScrollView(m_entityAlarmScroll);
@@ -1529,14 +3736,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
             DrawAlarmRuleEditor(true);
         }
         GUILayout.EndScrollView();
-        GUILayout.EndArea();
+    }
 
-        DrawEditorResizeHandle();
-        GUI.DragWindow(new Rect(
-            0f,
-            0f,
-            m_entityAlarmWindowRect.width - 58f,
-            38f));
+    private string GetEditorWindowTitle()
+    {
+        var targetPanel = GetDraftTargetPanel();
+        return m_editorWindowMode switch
+        {
+            EditorWindowMode.PanelCreation =>
+                UnmaText.Get("auto.5e9e7c9addd9"),
+            EditorWindowMode.PanelSettings =>
+                UnmaText.Get("auto.0e8b76140a09"),
+            _ => UnmaText.Get("auto.b9ccafdfaef7") +
+                 (targetPanel == null ? "" : " · " + targetPanel.Name),
+        };
     }
 
     private void RequestEditorClose()
@@ -1545,7 +3758,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             HasDraftRuleWork())
         {
             m_editorClosePromptOpen = true;
-            GUI.FocusControl(null);
+            m_clearGuiFocusPending = true;
             return;
         }
         CloseEditorWindow();
@@ -1555,19 +3768,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         GUILayout.Space(24f);
         GUILayout.Label(
-            "MELDUNGSEDITOR SCHLIESSEN?",
+            UnmaText.Get(
+                "ui.editor.close_draft_title",
+                "CLOSE ALARM EDITOR?"),
             m_warningBannerStyle,
             GUILayout.Height(58f));
         GUILayout.Label(
-            "Der aktuelle Entwurf ist noch geöffnet. Du kannst ihn jetzt " +
-            "speichern, minimieren und später fortsetzen oder verwerfen.",
+            UnmaText.Get(
+                "ui.editor.close_draft_description",
+                "The current draft is still open. You can save it, minimize it and continue later, or discard it."),
             m_labelStyle);
         GUILayout.Space(18f);
         GUILayout.BeginHorizontal();
         GUI.enabled = m_draftConditions.Count > 0 &&
                       GetDraftTargetPanel() != null;
         if (GUILayout.Button(
-                "SPEICHERN & SCHLIESSEN",
+                UnmaText.Get(
+                    "ui.editor.save_and_close",
+                    "SAVE & CLOSE"),
                 m_primaryButtonStyle,
                 GUILayout.Height(42f)))
         {
@@ -1578,25 +3796,29 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         GUI.enabled = true;
         if (GUILayout.Button(
-                "MINIMIEREN",
+                UnmaText.Get("ui.common.minimize", "MINIMIZE"),
                 m_buttonStyle,
                 GUILayout.Height(42f)))
         {
             CloseEditorWindow();
         }
         if (GUILayout.Button(
-                "VERWERFEN",
+                UnmaText.Get("ui.common.discard", "DISCARD"),
                 m_dangerButtonStyle,
                 GUILayout.Height(42f)))
         {
             ResetDraftRule();
             CloseEditorWindow();
-            SetStatus("Entwurf verworfen.");
+            SetStatus(UnmaText.Get(
+                "ui.editor.status.draft_discarded",
+                "Draft discarded."));
         }
         GUILayout.EndHorizontal();
         GUILayout.Space(12f);
         if (GUILayout.Button(
-                "ZURÜCK ZUM EDITOR",
+                UnmaText.Get(
+                    "ui.editor.back_to_editor",
+                    "BACK TO EDITOR"),
                 m_buttonStyle,
                 GUILayout.Width(230f),
                 GUILayout.Height(34f)))
@@ -1611,7 +3833,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_entityAlarmWindowOpen = false;
         m_openEntityAlarmAfterInspection = false;
         CancelEditorResizeCapture();
-        GUI.FocusControl(null);
+        m_clearGuiFocusPending = true;
     }
 
     private void DrawNewPanelWindowContent()
@@ -1623,7 +3845,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_smallLabelStyle);
         GUILayout.Space(8f);
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Name", m_labelStyle, GUILayout.Width(120f));
+        GUILayout.Label(
+            UnmaText.Get("ui.common.name", "Name"),
+            m_labelStyle,
+            GUILayout.Width(120f));
         m_newPanelName = GUILayout.TextField(
             m_newPanelName,
             40,
@@ -1637,7 +3862,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             if (AddPanel())
             {
-                m_entityAlarmWindowOpen = false;
+                CloseEditorWindow();
             }
         }
         GUILayout.EndHorizontal();
@@ -1660,7 +3885,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         GUILayout.Label(UnmaText.Get("auto.63a4d85953f8"), m_sectionStyle);
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Name", m_labelStyle, GUILayout.Width(90f));
+        GUILayout.Label(
+            UnmaText.Get("ui.common.name", "Name"),
+            m_labelStyle,
+            GUILayout.Width(90f));
         m_panelSettingsName = GUILayout.TextField(
             m_panelSettingsName,
             40,
@@ -1683,7 +3911,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_panelSettingsColumns + 1);
         }
         if (GUILayout.Button(
-                "SPEICHERN",
+                UnmaText.Get("ui.common.save", "SAVE"),
                 m_primaryButtonStyle,
                 GUILayout.Width(150f)))
         {
@@ -1709,7 +3937,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_panelSettingsIncludeSystem,
             UnmaText.Get("auto.e71a0cea7772"),
             GUILayout.Width(170f));
-        GUILayout.Label("Auto-Filter", m_labelStyle, GUILayout.Width(90f));
+        GUILayout.Label(
+            UnmaText.Get("ui.panel.auto_filter", "Auto-filter"),
+            m_labelStyle,
+            GUILayout.Width(90f));
         m_panelSettingsFilter = GUILayout.TextField(
             m_panelSettingsFilter,
             240,
@@ -1745,8 +3976,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
             else if (m_runtime.RemovePanel(panel.Id))
             {
-                m_detachedPanels.RemoveAll(item => item.PanelId == panel.Id);
-                m_entityAlarmWindowOpen = false;
+                CloseDetachedPanelsForPanel(panel.Id);
+                CloseEditorWindow();
                 m_pendingPanelDeleteId = "";
                 m_currentPanelIndex = Math.Max(
                     0,
@@ -1791,7 +4022,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawTargetPanelSelector(inEntityWindow);
         GUILayout.Space(6f);
         DrawEntitySourceSelector(inEntityWindow);
-        if (m_selectedEntity != null && m_selectedMetrics.Count > 0)
+        if (TryGetLinkedInstrumentSource(out _))
+        {
+            GUILayout.Space(6f);
+            DrawLinkedInstrumentConditionForm();
+        }
+        else if (m_selectedEntity != null && m_selectedMetrics.Count > 0)
         {
             GUILayout.Space(6f);
             DrawNewConditionForm();
@@ -1805,7 +4041,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawTargetPanelSelector(bool allowCreate)
     {
-        GUILayout.Label("ZIEL-MELDETAFEL", m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.target_panel", "TARGET ANNUNCIATOR PANEL"),
+            m_sectionStyle);
+        if (TryGetLinkedInstrumentSource(out _))
+        {
+            DrawInstrumentTargetPanelSelector();
+            return;
+        }
         var panel = GetDraftTargetPanel();
         if (panel == null)
         {
@@ -1833,6 +4076,157 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             DrawGlobalPanelLinks();
         }
+    }
+
+    private void DrawInstrumentTargetPanelSelector()
+    {
+        var targets = GlobalPanels
+            .Where(panel =>
+                panel != null &&
+                !panel.IsDashboard &&
+                !PanelTopologyPolicy.IsEntityPanel(panel))
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            GUILayout.Label(
+                UnmaText.Get(
+                    "ui.editor.target_panel_required",
+                    "At least one annunciator panel is required."),
+                m_warningBannerStyle);
+            return;
+        }
+
+        if (GetSelectedDraftTargetPanelIds().Count == 0)
+        {
+            GUILayout.Label(
+                UnmaText.Get(
+                    "ui.editor.target_panel_choose_required",
+                    "Choose at least one target panel before saving."),
+                m_warningBannerStyle);
+        }
+
+        GUILayout.Label(
+            UnmaText.Get(
+                "ui.editor.instrument_target_hint",
+                "Select every panel on which this instrument alarm should appear. At least one panel must remain selected."),
+            m_smallLabelStyle);
+        const int columns = 4;
+        for (var start = 0; start < targets.Length; start += columns)
+        {
+            GUILayout.BeginHorizontal();
+            for (var offset = 0;
+                 offset < columns && start + offset < targets.Length;
+                 offset++)
+            {
+                var target = targets[start + offset];
+                var selected = IsDraftTargetPanelSelected(target.Id);
+                if (GUILayout.Button(
+                        (selected ? "✓ " : "+ ") + target.Name,
+                        selected ? m_primaryButtonStyle : m_buttonStyle,
+                        GUILayout.Width(220f),
+                        GUILayout.Height(30f)))
+                {
+                    SetDraftTargetPanelSelected(target, !selected);
+                }
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+        }
+    }
+
+    private bool IsDraftTargetPanelSelected(string panelId)
+    {
+        return string.Equals(
+                   m_draftTargetPanelId,
+                   panelId,
+                   StringComparison.Ordinal) ||
+               m_draftLinkedPanelIds.Contains(panelId);
+    }
+
+    private void SetDraftTargetPanelSelected(
+        PanelDefinition panel,
+        bool selected)
+    {
+        if (panel == null || panel.IsDashboard ||
+            PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return;
+        }
+
+        if (selected)
+        {
+            if (GetDraftTargetPanel() == null)
+            {
+                m_draftTargetPanelId = panel.Id;
+                m_draftPreferredSlotIndex = panel.Slots?.Count ?? 0;
+            }
+            else if (!string.Equals(
+                         m_draftTargetPanelId,
+                         panel.Id,
+                         StringComparison.Ordinal))
+            {
+                m_draftLinkedPanelIds.Add(panel.Id);
+            }
+            return;
+        }
+
+        var selectedIds = GetSelectedDraftTargetPanelIds();
+        if (selectedIds.Count <= 1)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.editor.status.target_panel_required",
+                "At least one target panel must remain selected."));
+            return;
+        }
+
+        if (!string.Equals(
+                m_draftTargetPanelId,
+                panel.Id,
+                StringComparison.Ordinal))
+        {
+            m_draftLinkedPanelIds.Remove(panel.Id);
+            return;
+        }
+
+        var promotedId = m_draftLinkedPanelIds.FirstOrDefault(id =>
+            !string.Equals(id, panel.Id, StringComparison.Ordinal) &&
+            m_runtime.Configuration.Panels.Any(candidate =>
+                candidate != null &&
+                !candidate.IsDashboard &&
+                !PanelTopologyPolicy.IsEntityPanel(candidate) &&
+                string.Equals(candidate.Id, id, StringComparison.Ordinal)));
+        if (string.IsNullOrWhiteSpace(promotedId))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.editor.status.target_panel_required",
+                "At least one target panel must remain selected."));
+            return;
+        }
+        m_draftLinkedPanelIds.Remove(promotedId);
+        m_draftLinkedPanelIds.Remove(panel.Id);
+        m_draftTargetPanelId = promotedId;
+        var promoted = GetDraftTargetPanel();
+        m_draftPreferredSlotIndex = promoted?.Slots?.Count ?? 0;
+    }
+
+    private List<string> GetSelectedDraftTargetPanelIds()
+    {
+        var result = new List<string>();
+        var primary = GetDraftTargetPanel();
+        if (primary != null &&
+            !primary.IsDashboard &&
+            !PanelTopologyPolicy.IsEntityPanel(primary))
+        {
+            result.Add(m_draftTargetPanelId);
+        }
+        result.AddRange(m_draftLinkedPanelIds.Where(id =>
+            !result.Contains(id, StringComparer.Ordinal) &&
+            m_runtime.Configuration.Panels.Any(panel =>
+                panel != null &&
+                !panel.IsDashboard &&
+                !PanelTopologyPolicy.IsEntityPanel(panel) &&
+                string.Equals(panel.Id, id, StringComparison.Ordinal))));
+        return result;
     }
 
     private void DrawGlobalPanelLinks()
@@ -1915,10 +4309,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawEntitySourceSelector(bool inEntityWindow)
     {
-        GUILayout.Label("QUELLE", m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.source", "SOURCE"),
+            m_sectionStyle);
         GUILayout.BeginHorizontal();
         if (GUILayout.Button(
                 UnmaText.Get("auto.7edb47ed7ea9"),
+                string.IsNullOrWhiteSpace(m_linkedInstrumentSourceId) &&
                 m_selectedEntity != null && m_selectedEntity.EntityId >= 0
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
@@ -1928,7 +4325,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             CaptureSelectedEntity(inEntityWindow);
         }
         if (GUILayout.Button(
-                "GLOBALE VARIABLEN",
+                UnmaText.Get(
+                    "ui.editor.global_variables",
+                    "GLOBAL VARIABLES"),
+                string.IsNullOrWhiteSpace(m_linkedInstrumentSourceId) &&
                 m_selectedEntity?.EntityId < 0
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
@@ -1937,8 +4337,42 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             SelectGlobalMetricSource(false);
         }
+        var hasLinkedSource = TryGetLinkedInstrumentSource(
+            out var linkedSource);
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.editor.instrument_source",
+                    "INSTRUMENT"),
+                hasLinkedSource
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(200f),
+                GUILayout.Height(30f)))
+        {
+            if (hasLinkedSource)
+            {
+                m_linkedInstrumentPickerOpen = !m_linkedInstrumentPickerOpen;
+            }
+            else
+            {
+                var firstInstrument = m_runtime.Configuration.Instruments
+                    .FirstOrDefault(item => item != null);
+                if (firstInstrument == null ||
+                    !SelectLinkedInstrumentSource(firstInstrument.Id))
+                {
+                    SetStatus(UnmaText.Get(
+                        "ui.editor.status.no_instruments",
+                        "No instruments are available as a source."));
+                }
+            }
+        }
         GUILayout.Label(
-            m_selectedEntity == null
+            linkedSource != null
+                ? UnmaText.Format(
+                    "ui.editor.linked_values_source",
+                    "LINKED VALUES: {0}",
+                    linkedSource.Title)
+                : m_selectedEntity == null
                 ? UnmaText.Get("auto.51f6d86aa271") +
                   UnmaText.Get("auto.3ebeb0f6f700") +
                   UnmaText.Get("ui.entity.take_selection")
@@ -1948,6 +4382,106 @@ public sealed class UnmaOverlayController : MonoBehaviour
                   " · " + m_selectedMetrics.Count + UnmaText.Get("auto.c8b47a039c3f"),
             m_labelStyle);
         GUILayout.EndHorizontal();
+    }
+
+    private void DrawLinkedInstrumentConditionForm()
+    {
+        var instruments = GetLinkedInstruments();
+        if (instruments.Count == 0)
+        {
+            GUILayout.Label(
+                UnmaText.Get(
+                    "ui.editor.linked_values_unavailable",
+                    "No linked values are available."),
+                m_smallLabelStyle);
+            return;
+        }
+
+        m_selectedLinkedInstrumentIndex = Math.Max(
+            0,
+            Math.Min(m_selectedLinkedInstrumentIndex, instruments.Count - 1));
+        var instrument = instruments[m_selectedLinkedInstrumentIndex];
+        var hasValue = m_runtime.TryGetInstrumentCurrentValue(
+            instrument.Id,
+            out var currentValue);
+
+        GUILayout.Label(UnmaText.Get("auto.d7ee9125f8f1"), m_sectionStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            UnmaText.Get("auto.6bb4e33de37c"),
+            m_labelStyle,
+            GUILayout.Width(150f));
+        var valueText = hasValue
+            ? currentValue.ToString(
+                "0.###",
+                CultureInfo.CurrentCulture) +
+              (string.IsNullOrWhiteSpace(instrument.Unit)
+                  ? ""
+                  : " " + instrument.Unit)
+            : UnmaText.Get(
+                "ui.instrument.value_unavailable",
+                "NOT AVAILABLE");
+        if (GUILayout.Button(
+                instrument.Title + "  [" + valueText + "]",
+                m_linkedInstrumentPickerOpen
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Height(30f)))
+        {
+            m_linkedInstrumentPickerOpen = !m_linkedInstrumentPickerOpen;
+        }
+        GUILayout.EndHorizontal();
+
+        if (m_linkedInstrumentPickerOpen)
+        {
+            foreach (var candidate in instruments)
+            {
+                var selected = string.Equals(
+                    candidate.Id,
+                    instrument.Id,
+                    StringComparison.Ordinal);
+                if (!GUILayout.Button(
+                        candidate.Title,
+                        selected ? m_primaryButtonStyle : m_buttonStyle,
+                        GUILayout.Height(28f)))
+                {
+                    continue;
+                }
+                m_selectedLinkedInstrumentIndex = instruments.IndexOf(candidate);
+                m_linkedInstrumentPickerOpen = false;
+            }
+        }
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            UnmaText.Get("editor.comparison"),
+            m_labelStyle,
+            GUILayout.Width(150f));
+        DrawComparisonSelector(ref m_draftComparison);
+        GUILayout.Space(12f);
+        GUILayout.Label(
+            UnmaText.Get("editor.target_value"),
+            m_labelStyle,
+            GUILayout.Width(105f));
+        m_draftThreshold = GUILayout.TextField(
+            m_draftThreshold,
+            24,
+            m_textFieldStyle,
+            GUILayout.Width(105f));
+        if (GUILayout.Button(
+                UnmaText.Get("auto.3cb2b0054d58"),
+                m_primaryButtonStyle,
+                GUILayout.Width(190f),
+                GUILayout.Height(30f)))
+        {
+            AddLinkedInstrumentCondition(instrument);
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Label(
+            UnmaText.Get(
+                "ui.editor.linked_values_hint",
+                "After adding the row, value, change and duration modes can be configured below."),
+            m_smallLabelStyle);
     }
 
     private void DrawNewConditionForm()
@@ -1977,9 +4511,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Berechnung", m_labelStyle, GUILayout.Width(150f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.calculation", "Calculation"),
+            m_labelStyle,
+            GUILayout.Width(150f));
         if (GUILayout.Button(
-                "ABSOLUT",
+                UnmaText.Get("ui.editor.absolute", "ABSOLUTE"),
                 m_draftValueMode == ConditionValueMode.Absolute
                     ? m_primaryButtonStyle
                     : m_buttonStyle,
@@ -2077,7 +4614,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             : m_metricPickerFilter;
         GUILayout.BeginHorizontal();
         GUILayout.Space(150f);
-        GUILayout.Label("Suchen", m_smallLabelStyle, GUILayout.Width(60f));
+        GUILayout.Label(
+            UnmaText.Get("ui.common.search", "Search"),
+            m_smallLabelStyle,
+            GUILayout.Width(60f));
         filter = GUILayout.TextField(
             filter,
             60,
@@ -2177,11 +4717,26 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         GUILayout.Label(UnmaText.Get("auto.6dc84400fbd4"), m_sectionStyle);
         GUILayout.BeginHorizontal();
-        GUILayout.Label("IST-WERT", m_smallLabelStyle, GUILayout.Width(135f));
-        GUILayout.Label("KENNUNG", m_smallLabelStyle, GUILayout.Width(330f));
-        GUILayout.Label("STEUERZEICHEN", m_smallLabelStyle, GUILayout.Width(265f));
-        GUILayout.Label("SOLL-WERT", m_smallLabelStyle, GUILayout.Width(115f));
-        GUILayout.Label("BEDINGUNG", m_smallLabelStyle, GUILayout.Width(90f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.actual_value", "ACTUAL VALUE"),
+            m_smallLabelStyle,
+            GUILayout.Width(135f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.identifier", "IDENTIFIER"),
+            m_smallLabelStyle,
+            GUILayout.Width(330f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.operator", "OPERATOR"),
+            m_smallLabelStyle,
+            GUILayout.Width(265f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.target_value", "TARGET VALUE"),
+            m_smallLabelStyle,
+            GUILayout.Width(115f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.condition", "CONDITION"),
+            m_smallLabelStyle,
+            GUILayout.Width(90f));
         GUILayout.EndHorizontal();
 
         if (m_draftConditions.Count == 0)
@@ -2198,9 +4753,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
             while (m_draftConditionThresholdTexts.Count <= index)
             {
                 m_draftConditionThresholdTexts.Add(
-                    condition.Threshold.ToString(
+                    (UsesComparisonThreshold(condition.TrendMode)
+                        ? condition.Threshold
+                        : condition.DeltaThreshold).ToString(
                         "0.###",
                         CultureInfo.CurrentCulture));
+            }
+
+            if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
+            {
+                if (DrawInstrumentConditionRow(index, condition))
+                {
+                    index--;
+                }
+                continue;
             }
 
             GUILayout.BeginHorizontal();
@@ -2217,7 +4783,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(
                     condition.ValueMode == ConditionValueMode.Absolute
-                        ? "ABSOLUT"
+                        ? UnmaText.Get("ui.editor.absolute", "ABSOLUTE")
                         : UnmaText.Get("auto.9424124c3537"),
                     m_buttonStyle,
                     GUILayout.Width(85f)))
@@ -2266,9 +4832,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Width(105f),
                 GUILayout.Height(30f));
             GUILayout.Label(
-                index == 0
-                    ? "START"
-                    : m_draftLogic == AlarmLogic.All ? "UND" : "ODER",
+                    index == 0
+                    ? UnmaText.Get("ui.editor.start", "START")
+                    : m_draftLogic == AlarmLogic.All
+                        ? UnmaText.Get("ui.common.and", "AND")
+                        : UnmaText.Get("ui.common.or", "OR"),
                 m_headerStyle,
                 GUILayout.Width(70f),
                 GUILayout.Height(30f));
@@ -2277,8 +4845,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_dangerButtonStyle,
                     GUILayout.Width(38f),
                     GUILayout.Height(30f)))
-            {
-                m_draftConditions.RemoveAt(index);
+                {
+                    m_draftTrendWindowTexts.Remove(condition);
+                    m_draftConditions.RemoveAt(index);
                 m_draftConditionThresholdTexts.RemoveAt(index);
                 if (m_conditionReferencePickerIndex == index)
                 {
@@ -2322,6 +4891,375 @@ public sealed class UnmaOverlayController : MonoBehaviour
             UnmaText.Get("auto.9a99ea646292"),
             m_smallLabelStyle);
         GUILayout.EndHorizontal();
+    }
+
+    private bool DrawInstrumentConditionRow(
+        int index,
+        ConditionDefinition condition)
+    {
+        var instrument = m_runtime.Configuration.Instruments.FirstOrDefault(
+            item => string.Equals(
+                item.Id,
+                condition.InstrumentId,
+                StringComparison.Ordinal));
+        var currentText = m_runtime.TryGetInstrumentCurrentValue(
+            condition.InstrumentId,
+            out var currentValue)
+            ? currentValue.ToString("0.###", CultureInfo.CurrentCulture)
+            : "—";
+
+        GUILayout.BeginVertical(m_panelStyle);
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(
+            currentText,
+            m_headerStyle,
+            GUILayout.Width(78f),
+            GUILayout.Height(30f));
+        GUILayout.BeginVertical(GUILayout.MinWidth(150f));
+        GUILayout.Label(
+            UnmaText.Format(
+                "ui.instrument.condition_title",
+                "{0} · CALCULATED METRIC",
+                instrument?.Title ?? condition.MetricLabel),
+            m_labelStyle);
+        GUILayout.Label(
+            instrument == null
+                ? UnmaText.Get(
+                    "ui.instrument.condition_missing",
+                    "Instrument no longer exists")
+                : UnmaText.Format(
+                    "ui.instrument.condition_sources",
+                    "{0} · {1} SOURCE(S)",
+                    InstrumentAggregationLabel(instrument.Aggregation),
+                    instrument.Sources.Count),
+            m_smallLabelStyle);
+        GUILayout.EndVertical();
+
+        if (GUILayout.Button(
+                UnmaText.Get("ui.instrument.condition.value", "VALUE"),
+                condition.TrendMode == InstrumentTrendMode.None
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(68f),
+                GUILayout.Height(30f)))
+        {
+            SetInstrumentTrendMode(
+                index,
+                condition,
+                InstrumentTrendMode.None);
+        }
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.instrument.condition.decrease",
+                    "DECREASE"),
+                IsDecreaseMode(condition.TrendMode)
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(88f),
+                GUILayout.Height(30f)))
+        {
+            SetInstrumentTrendMode(
+                index,
+                condition,
+                InstrumentTrendMode.DecreaseAbsolute);
+        }
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.instrument.condition.increase",
+                    "INCREASE"),
+                IsIncreaseMode(condition.TrendMode)
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(82f),
+                GUILayout.Height(30f)))
+        {
+            SetInstrumentTrendMode(
+                index,
+                condition,
+                InstrumentTrendMode.IncreaseAbsolute);
+        }
+        if (GUILayout.Button(
+                UnmaText.Get(
+                    "ui.instrument.condition.sustain",
+                    "SUSTAIN"),
+                condition.TrendMode ==
+                InstrumentTrendMode.SustainComparison
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(78f),
+                GUILayout.Height(30f)))
+        {
+            SetInstrumentTrendMode(
+                index,
+                condition,
+                InstrumentTrendMode.SustainComparison);
+        }
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button(
+                "X",
+                m_dangerButtonStyle,
+                GUILayout.Width(34f),
+                GUILayout.Height(30f)))
+        {
+            m_draftConditions.RemoveAt(index);
+            m_draftConditionThresholdTexts.RemoveAt(index);
+            m_draftTrendWindowTexts.Remove(condition);
+            GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
+            return true;
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Space(78f);
+        if (UsesComparisonThreshold(condition.TrendMode))
+        {
+            GUILayout.Label(
+                UnmaText.Get("ui.instrument.condition.compare", "COMPARE"),
+                m_smallLabelStyle,
+                GUILayout.Width(82f));
+            var comparison = condition.Comparison;
+            DrawComparisonSelector(ref comparison);
+            condition.Comparison = comparison;
+            GUILayout.Label(
+                UnmaText.Get(
+                    "ui.instrument.condition.target_value",
+                    "TARGET VALUE"),
+                m_smallLabelStyle,
+                GUILayout.Width(76f));
+            m_draftConditionThresholdTexts[index] = GUILayout.TextField(
+                m_draftConditionThresholdTexts[index],
+                24,
+                m_textFieldStyle,
+                GUILayout.Width(110f),
+                GUILayout.Height(28f));
+        }
+        else
+        {
+            GUILayout.Label(
+                IsPercentChangeMode(condition.TrendMode)
+                    ? UnmaText.Get(
+                        "ui.instrument.condition.minimum_percent",
+                        "AT LEAST %")
+                    : UnmaText.Get(
+                        "ui.instrument.condition.minimum_amount",
+                        "AT LEAST AMOUNT"),
+                m_smallLabelStyle,
+                GUILayout.Width(125f));
+            m_draftConditionThresholdTexts[index] = GUILayout.TextField(
+                m_draftConditionThresholdTexts[index],
+                24,
+                m_textFieldStyle,
+                GUILayout.Width(110f),
+                GUILayout.Height(28f));
+            if (GUILayout.Button(
+                    UnmaText.Get(
+                        "ui.instrument.condition.amount",
+                        "AMOUNT"),
+                    !IsPercentChangeMode(condition.TrendMode)
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Width(82f),
+                    GUILayout.Height(28f)))
+            {
+                SetInstrumentTrendMode(
+                    index,
+                    condition,
+                    IsDecreaseMode(condition.TrendMode)
+                        ? InstrumentTrendMode.DecreaseAbsolute
+                        : InstrumentTrendMode.IncreaseAbsolute);
+            }
+            if (GUILayout.Button(
+                    UnmaText.Get(
+                        "ui.instrument.condition.percent",
+                        "PERCENT"),
+                    IsPercentChangeMode(condition.TrendMode)
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    GUILayout.Width(86f),
+                    GUILayout.Height(28f)))
+            {
+                SetInstrumentTrendMode(
+                    index,
+                    condition,
+                    IsDecreaseMode(condition.TrendMode)
+                        ? InstrumentTrendMode.DecreasePercent
+                        : InstrumentTrendMode.IncreasePercent);
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        if (condition.TrendMode != InstrumentTrendMode.None)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(78f);
+            GUILayout.Label(
+                UnmaText.Get(
+                    condition.TrendMode ==
+                    InstrumentTrendMode.SustainComparison
+                        ? "ui.instrument.condition.for_time"
+                        : "ui.instrument.condition.within_time",
+                    condition.TrendMode ==
+                    InstrumentTrendMode.SustainComparison
+                        ? "FOR"
+                        : "WITHIN"),
+                m_smallLabelStyle,
+                GUILayout.Width(80f));
+            if (!m_draftTrendWindowTexts.TryGetValue(
+                    condition,
+                    out var windowText))
+            {
+                windowText = condition.WindowAmount.ToString(
+                    CultureInfo.CurrentCulture);
+            }
+            windowText = GUILayout.TextField(
+                windowText,
+                8,
+                m_textFieldStyle,
+                GUILayout.Width(72f),
+                GUILayout.Height(28f));
+            m_draftTrendWindowTexts[condition] = windowText;
+            DrawGameTimeUnitSelector(condition);
+            GUILayout.Label(
+                UnmaText.Get(
+                    condition.TrendMode ==
+                    InstrumentTrendMode.SustainComparison
+                        ? "ui.instrument.condition.sustain_hint"
+                        : "ui.instrument.condition.window_hint",
+                    condition.TrendMode ==
+                    InstrumentTrendMode.SustainComparison
+                        ? "The comparison must remain true for the complete game-time window."
+                        : "Compared with the value at the start of the game-time window."),
+                m_smallLabelStyle);
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndVertical();
+        return false;
+    }
+
+    private void SetInstrumentTrendMode(
+        int index,
+        ConditionDefinition condition,
+        InstrumentTrendMode mode)
+    {
+        if (condition.TrendMode == mode)
+        {
+            return;
+        }
+
+        // Preserve the unfinished text of the mode being left. Otherwise a
+        // Mode round-trips must not silently restore the last saved
+        // model values and discards what the player just typed.
+        if (index >= 0 && index < m_draftConditionThresholdTexts.Count &&
+            TryParseDouble(
+                m_draftConditionThresholdTexts[index],
+                out var currentThreshold))
+        {
+            if (UsesComparisonThreshold(condition.TrendMode))
+            {
+                condition.Threshold = currentThreshold;
+            }
+            else
+            {
+                condition.DeltaThreshold = currentThreshold;
+            }
+        }
+        if (condition.TrendMode != InstrumentTrendMode.None &&
+            m_draftTrendWindowTexts.TryGetValue(
+                condition,
+                out var currentWindowText) &&
+            int.TryParse(
+                currentWindowText,
+                NumberStyles.Integer,
+                CultureInfo.CurrentCulture,
+                out var currentWindowAmount) &&
+            currentWindowAmount > 0)
+        {
+            condition.WindowAmount = GameTimeWindowPolicy.ClampAmount(
+                currentWindowAmount,
+                condition.WindowUnit);
+        }
+
+        condition.TrendMode = mode;
+        m_draftConditionThresholdTexts[index] =
+            (UsesComparisonThreshold(mode)
+                ? condition.Threshold
+                : condition.DeltaThreshold).ToString(
+                "0.###",
+                CultureInfo.CurrentCulture);
+        m_draftTrendWindowTexts[condition] =
+            condition.WindowAmount.ToString(CultureInfo.CurrentCulture);
+    }
+
+    private void DrawGameTimeUnitSelector(ConditionDefinition condition)
+    {
+        DrawGameTimeUnitButton(
+            condition,
+            GameTimeUnit.Day,
+            UnmaText.Get("ui.time.day", "DAY"));
+        DrawGameTimeUnitButton(
+            condition,
+            GameTimeUnit.Month,
+            UnmaText.Get("ui.time.month", "MONTH"));
+        DrawGameTimeUnitButton(
+            condition,
+            GameTimeUnit.Year,
+            UnmaText.Get("ui.time.year", "YEAR"));
+        DrawGameTimeUnitButton(
+            condition,
+            GameTimeUnit.Decade,
+            UnmaText.Get("ui.time.decade", "10 YEARS"));
+        DrawGameTimeUnitButton(
+            condition,
+            GameTimeUnit.Century,
+            UnmaText.Get("ui.time.century", "100 YEARS"));
+    }
+
+    private void DrawGameTimeUnitButton(
+        ConditionDefinition condition,
+        GameTimeUnit unit,
+        string label)
+    {
+        if (GUILayout.Button(
+                label,
+                condition.WindowUnit == unit
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                GUILayout.Width(unit >= GameTimeUnit.Decade ? 90f : 76f),
+                GUILayout.Height(28f)))
+        {
+            condition.WindowUnit = unit;
+            condition.WindowAmount = GameTimeWindowPolicy.ClampAmount(
+                condition.WindowAmount,
+                unit);
+            m_draftTrendWindowTexts[condition] =
+                condition.WindowAmount.ToString(
+                    CultureInfo.CurrentCulture);
+        }
+    }
+
+    private static bool UsesComparisonThreshold(InstrumentTrendMode mode)
+    {
+        return mode == InstrumentTrendMode.None ||
+               mode == InstrumentTrendMode.SustainComparison;
+    }
+
+    private static bool IsDecreaseMode(InstrumentTrendMode mode)
+    {
+        return mode == InstrumentTrendMode.DecreaseAbsolute ||
+               mode == InstrumentTrendMode.DecreasePercent;
+    }
+
+    private static bool IsIncreaseMode(InstrumentTrendMode mode)
+    {
+        return mode == InstrumentTrendMode.IncreaseAbsolute ||
+               mode == InstrumentTrendMode.IncreasePercent;
+    }
+
+    private static bool IsPercentChangeMode(InstrumentTrendMode mode)
+    {
+        return mode == InstrumentTrendMode.DecreasePercent ||
+               mode == InstrumentTrendMode.IncreasePercent;
     }
 
     private void DrawConditionReferencePicker(ConditionDefinition condition)
@@ -2398,9 +5336,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawAlarmProperties()
     {
-        GUILayout.Label("MELDUNG", m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get("ui.common.alarm", "ALARM"),
+            m_sectionStyle);
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Meldetext", m_labelStyle, GUILayout.Width(105f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.alarm_text", "Alarm text"),
+            m_labelStyle,
+            GUILayout.Width(105f));
         m_draftRuleName = GUILayout.TextField(
             m_draftRuleName,
             80,
@@ -2408,7 +5351,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Stufe", m_labelStyle, GUILayout.Width(105f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.severity", "Severity"),
+            m_labelStyle,
+            GUILayout.Width(105f));
         foreach (AlarmSeverity severity in Enum.GetValues(typeof(AlarmSeverity)))
         {
             if (GUILayout.Button(
@@ -2422,7 +5368,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_draftColor = DefaultColorFor(severity);
             }
         }
-        GUILayout.Label("Aktivfarbe", m_labelStyle, GUILayout.Width(85f));
+        GUILayout.Label(
+            UnmaText.Get("ui.editor.active_color", "Active color"),
+            m_labelStyle,
+            GUILayout.Width(85f));
         m_draftColor = GUILayout.TextField(
             m_draftColor,
             9,
@@ -2437,7 +5386,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 0,
                 Math.Min(m_draftSoundIndex, sounds.Count - 1));
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Ton", m_labelStyle, GUILayout.Width(105f));
+            GUILayout.Label(
+                UnmaText.Get("ui.editor.sound", "Sound"),
+                m_labelStyle,
+                GUILayout.Width(105f));
             if (GUILayout.Button("<", m_buttonStyle, GUILayout.Width(38f)))
             {
                 m_draftSoundIndex = Wrap(m_draftSoundIndex - 1, sounds.Count);
@@ -2523,8 +5475,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 Time.realtimeSinceStartup <= m_pendingRuleDeleteUntil;
             if (GUILayout.Button(
                     confirmingDelete
-                        ? "ERNEUT: MELDUNG LÖSCHEN"
-                        : "MELDUNG LÖSCHEN",
+                        ? UnmaText.Get(
+                            "ui.editor.delete_alarm_confirm",
+                            "AGAIN: DELETE ALARM")
+                        : UnmaText.Get(
+                            "ui.editor.delete_alarm",
+                            "DELETE ALARM"),
                     m_dangerButtonStyle,
                     GUILayout.Width(230f),
                     GUILayout.Height(34f)))
@@ -2561,7 +5517,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                         : UnmaText.Get("auto.c9097d398192")),
                     m_labelStyle);
                 if (GUILayout.Button(
-                        alarm.Enabled ? "AN" : "AUS",
+                        alarm.Enabled
+                            ? UnmaText.Get("ui.common.on", "ON")
+                            : UnmaText.Get("ui.common.off", "OFF"),
                         alarm.Enabled
                             ? m_primaryButtonStyle
                             : m_buttonStyle,
@@ -2580,7 +5538,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     }
                 }
                 if (GUILayout.Button(
-                        "BEARBEITEN",
+                        UnmaText.Get("ui.common.edit", "EDIT"),
                         m_buttonStyle,
                         GUILayout.Width(115f)))
                 {
@@ -2592,7 +5550,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                             alarm.Id,
                             StringComparison.Ordinal)
                             ? UnmaText.Get("auto.91d331fc1397")
-                            : "WERKSVORGABE",
+                            : UnmaText.Get(
+                                "ui.system.factory_default",
+                                "FACTORY DEFAULT"),
                         string.Equals(
                             m_pendingSystemResetId,
                             alarm.Id,
@@ -2651,7 +5611,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             draft.Enabled,
             UnmaText.Get("auto.9bb40c22f772"),
             GUILayout.Width(170f));
-        GUILayout.Label("Name", m_labelStyle, GUILayout.Width(45f));
+        GUILayout.Label(
+            UnmaText.Get("ui.common.name", "Name"),
+            m_labelStyle,
+            GUILayout.Width(45f));
         draft.DisplayName = GUILayout.TextField(
             draft.DisplayName ?? "",
             60,
@@ -2672,13 +5635,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                      .OrderBy(stage => stage.Priority)
                      .ToArray())
         {
-            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginVertical(m_panelStyle);
             GUILayout.BeginHorizontal();
             stage.Enabled = GUILayout.Toggle(
                 stage.Enabled,
                 UnmaText.Get("auto.6477bc93951f"),
                 GUILayout.Width(105f));
-            GUILayout.Label("Text", m_labelStyle, GUILayout.Width(38f));
+            GUILayout.Label(
+                UnmaText.Get("ui.common.text", "Text"),
+                m_labelStyle,
+                GUILayout.Width(38f));
             stage.Message = GUILayout.TextField(
                 stage.Message ?? "",
                 100,
@@ -2704,7 +5670,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     ? AlarmLogic.Any
                     : AlarmLogic.All;
             }
-            GUILayout.Label("Farbe", m_labelStyle, GUILayout.Width(48f));
+            GUILayout.Label(
+                UnmaText.Get("ui.common.color", "Color"),
+                m_labelStyle,
+                GUILayout.Width(48f));
             stage.ActiveColor = GUILayout.TextField(
                 stage.ActiveColor ?? "auto",
                 9,
@@ -2735,7 +5704,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     stage.SoundId = sounds[soundIndex].Id;
                 }
                 if (GUILayout.Button(
-                        "TEST",
+                        UnmaText.Get("ui.common.test", "TEST"),
                         m_buttonStyle,
                         GUILayout.Width(55f)))
                 {
@@ -2805,7 +5774,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     GUILayout.Width(90f));
                 m_systemThresholdTexts[thresholdKey] = thresholdText;
                 if (GUILayout.Button(
-                        "ENTFERNEN",
+                        UnmaText.Get("ui.common.remove", "REMOVE"),
                         m_dangerButtonStyle,
                         GUILayout.Width(95f)))
                 {
@@ -2844,7 +5813,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             SaveSystemAlarmDraft();
         }
         if (GUILayout.Button(
-                "ABBRECHEN",
+                UnmaText.Get("ui.common.cancel", "CANCEL"),
                 m_buttonStyle,
                 GUILayout.Width(115f),
                 GUILayout.Height(30f)))
@@ -3401,7 +6370,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.Space(10f);
-        GUILayout.Label("AUDIO", m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get("ui.options.audio", "AUDIO"),
+            m_sectionStyle);
         GUILayout.Label(
             UnmaText.Get("auto.f98a9c516625"),
             m_labelStyle);
@@ -3422,7 +6393,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         GUILayout.Space(10f);
-        GUILayout.Label("SYSTEMALARME", m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get("ui.options.system_alarms", "SYSTEM ALARMS"),
+            m_sectionStyle);
         GUILayout.Label(
             UnmaText.Get("auto.5ca97b0efd51"),
             m_labelStyle);
@@ -3434,7 +6407,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_labelStyle);
 
         GUILayout.Space(10f);
-        GUILayout.Label("ZUSTANDSMODELL", m_sectionStyle);
+        GUILayout.Label(
+            UnmaText.Get("ui.options.state_model", "STATE MODEL"),
+            m_sectionStyle);
         GUILayout.Label(
             UnmaText.Get("auto.fdea5764a7c1"),
             m_labelStyle);
@@ -3473,6 +6448,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Width(260f)))
         {
             var clean = m_runtime.ReloadExternalDefinitions();
+            m_audio.RefreshSoundOptions();
             SetStatus(clean
                 ? UnmaText.Get(
                     "options.integration.reload_ok",
@@ -3488,10 +6464,71 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             GUILayout.Label(
                 diagnostic.ProviderId + " · " + diagnostic.Code + " · " +
-                diagnostic.Message,
+                LocalizeExternalDiagnosticMessage(diagnostic.Code),
                 m_smallLabelStyle);
         }
         DrawStatusMessage();
+    }
+
+    private static string LocalizeExternalDiagnosticMessage(string code)
+    {
+        return code switch
+        {
+            "provider.null" => UnmaText.Get(
+                "options.integration.diagnostic.provider.null",
+                "Null provider descriptor was ignored."),
+            "provider.invalid_id" => UnmaText.Get(
+                "options.integration.diagnostic.provider.invalid_id",
+                "Provider ID is invalid."),
+            "provider.invalid_root" => UnmaText.Get(
+                "options.integration.diagnostic.provider.invalid_root",
+                "Provider root directory is invalid or unavailable."),
+            "provider.duplicate" => UnmaText.Get(
+                "options.integration.diagnostic.provider.duplicate",
+                "Duplicate provider descriptor was ignored."),
+            "provider.scan_failed" => UnmaText.Get(
+                "options.integration.diagnostic.provider.scan_failed",
+                "JSON files could not be enumerated."),
+            "provider.file_limit" => UnmaText.Get(
+                "options.integration.diagnostic.provider.file_limit",
+                "Provider contains too many JSON files; excess files were ignored."),
+            "provider.alarm_limit" => UnmaText.Get(
+                "options.integration.diagnostic.provider.alarm_limit",
+                "Provider declares too many alarms; excess declarations were ignored."),
+            "alarm.invalid" => UnmaText.Get(
+                "options.integration.diagnostic.alarm.invalid",
+                "Alarm definition is invalid."),
+            "alarm.duplicate" => UnmaText.Get(
+                "options.integration.diagnostic.alarm.duplicate",
+                "Duplicate alarm ID was ignored."),
+            "alarm.localization_namespace_conflict" => UnmaText.Get(
+                "options.integration.diagnostic.alarm.localization_namespace_conflict",
+                "Localization namespace is already owned by another provider."),
+            "file.too_large" => UnmaText.Get(
+                "options.integration.diagnostic.file.too_large",
+                "Definition file exceeds the size limit."),
+            "file.invalid_json" => UnmaText.Get(
+                "options.integration.diagnostic.file.invalid_json",
+                "Definition file is invalid JSON or could not be read."),
+            "file.empty" => UnmaText.Get(
+                "options.integration.diagnostic.file.empty",
+                "Definition file does not contain a JSON object."),
+            "file.unsupported_schema" => UnmaText.Get(
+                "options.integration.diagnostic.file.unsupported_schema",
+                "Definition file uses an unsupported schema version."),
+            "file.provider_mismatch" => UnmaText.Get(
+                "options.integration.diagnostic.file.provider_mismatch",
+                "mod_id does not match the provider mod ID."),
+            "file.alarms_required" => UnmaText.Get(
+                "options.integration.diagnostic.file.alarms_required",
+                "alarms must be a JSON array."),
+            "file.alarm_limit" => UnmaText.Get(
+                "options.integration.diagnostic.file.alarm_limit",
+                "Definition file contains too many alarms."),
+            _ => UnmaText.Get(
+                "options.integration.diagnostic.unknown",
+                "See the game log for diagnostic details."),
+        };
     }
 
     private void DrawDetachedWindow(DetachedPanel detached)
@@ -3504,6 +6541,66 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        DrawWindowHeader(
+            GetDetachedPanelTitle(panel),
+            detached.Rect.width);
+        GUILayout.BeginArea(new Rect(
+            10f,
+            40f,
+            detached.Rect.width - 20f,
+            detached.Rect.height - 50f));
+        DrawDetachedPanelContent(detached, panel, true);
+        GUILayout.EndArea();
+        GUI.DragWindow(new Rect(0f, 0f, detached.Rect.width - 38f, 36f));
+    }
+
+    private void DrawNativeDetachedPanelBody(DetachedPanel detached)
+    {
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(
+            item => item.Id == detached.PanelId);
+        if (panel == null ||
+            detached.NativeShell == null ||
+            !detached.NativeShell.TryGetBodyScreenRect(
+                out var bodyScreenRect))
+        {
+            return;
+        }
+
+        var contentScale = UiScale;
+        var contentWidth = Mathf.Max(
+            1f,
+            bodyScreenRect.width / contentScale - 12f);
+        var contentHeight = Mathf.Max(
+            1f,
+            bodyScreenRect.height / contentScale - 12f);
+        DrawNativeBodyBackdrop(bodyScreenRect, contentScale);
+        var previousRect = detached.Rect;
+        detached.Rect.width = contentWidth + 20f;
+        detached.Rect.height = contentHeight + 50f;
+
+        GUILayout.BeginArea(new Rect(
+            bodyScreenRect.x / contentScale + 6f,
+            bodyScreenRect.y / contentScale + 6f,
+            contentWidth,
+            contentHeight));
+        try
+        {
+            DrawDetachedPanelContent(detached, panel, false);
+        }
+        finally
+        {
+            GUILayout.EndArea();
+            detached.Rect = previousRect;
+        }
+
+        UpdateKeyboardInputCapture();
+    }
+
+    private void DrawDetachedPanelContent(
+        DetachedPanel detached,
+        PanelDefinition panel,
+        bool showLegacyWindowControls)
+    {
         var alarms = GetPanelViews(panel);
         var activeCount = panel.IsDashboard
             ? alarms.Count
@@ -3511,12 +6608,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var unacknowledgedCount = panel.IsDashboard
             ? alarms.Count(alarm => !alarm.IsAcknowledged)
             : m_runtime.UnacknowledgedCount;
-        DrawWindowHeader(UnmaText.Get("auto.528ebd6136c2") + panel.Name, detached.Rect.width);
-        GUILayout.BeginArea(new Rect(
-            10f,
-            40f,
-            detached.Rect.width - 20f,
-            detached.Rect.height - 50f));
         GUILayout.BeginHorizontal();
         GUILayout.Label(
             UnmaText.Get("auto.397544fe1d24") + activeCount +
@@ -3537,13 +6628,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             OpenNewRuleEditor(panel);
         }
-        if (GUILayout.Button("−", m_buttonStyle, GUILayout.Width(30f)))
+        if (showLegacyWindowControls && GUILayout.Button(
+                "−",
+                m_buttonStyle,
+                GUILayout.Width(30f)))
         {
             detached.PendingSize = new Vector2(
                 Mathf.Max(360f, detached.Rect.width - 120f),
                 Mathf.Max(300f, detached.Rect.height - 80f));
         }
-        if (GUILayout.Button("+", m_buttonStyle, GUILayout.Width(30f)))
+        if (showLegacyWindowControls && GUILayout.Button(
+                "+",
+                m_buttonStyle,
+                GUILayout.Width(30f)))
         {
             detached.PendingSize = new Vector2(
                 Mathf.Min(
@@ -3553,7 +6650,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     LogicalScreenHeight - 20f,
                     detached.Rect.height + 80f));
         }
-        if (GUILayout.Button("X", m_dangerButtonStyle, GUILayout.Width(30f)))
+        if (showLegacyWindowControls && GUILayout.Button(
+                "X",
+                m_dangerButtonStyle,
+                GUILayout.Width(30f)))
         {
             detached.IsOpen = false;
         }
@@ -3574,8 +6674,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 : UnmaText.Get("auto.e8bad0a4452b"),
             !panel.IsDashboard);
         GUILayout.EndScrollView();
-        GUILayout.EndArea();
-        GUI.DragWindow(new Rect(0f, 0f, detached.Rect.width - 38f, 36f));
+    }
+
+    private static string GetDetachedPanelTitle(PanelDefinition panel)
+    {
+        return UnmaText.Get("auto.528ebd6136c2") + panel.Name;
     }
 
     private void DrawAlarmGrid(
@@ -3822,7 +6925,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         AlarmView alarm,
         PanelDefinition displayPanel)
     {
-        var background = new Color(0.83f, 0.84f, 0.82f, 1f);
+        var background = CoiUiPalette.Text;
         if (alarm.IsActive || alarm.IsGoneUnacknowledged)
         {
             var active = ParseColor(alarm.ActiveColor, Color.yellow);
@@ -3831,7 +6934,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                           2 == 0;
             background = blinkOn
                 ? active
-                : new Color(0.20f, 0.20f, 0.19f, 1f);
+                : CoiUiPalette.Surface;
         }
         else if (alarm.IsMissingSource)
         {
@@ -3849,8 +6952,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var badge = alarm.IsGoneUnacknowledged
             ? UnmaText.Get("auto.3f6e1a7c5590")
             : alarm.IsActive
-                ? alarm.IsAcknowledged ? "STEHT" : "KOMMT"
-                : alarm.IsMissingSource ? UnmaText.Get("auto.6a49896902cb") : "NORMAL";
+                ? alarm.IsAcknowledged
+                    ? UnmaText.Get("ui.alarm.state.active_acknowledged", "ACTIVE")
+                    : UnmaText.Get("ui.alarm.state.incoming", "INCOMING")
+                : alarm.IsMissingSource
+                    ? UnmaText.Get("auto.6a49896902cb")
+                    : UnmaText.Get("ui.alarm.state.normal", "NORMAL");
         if ((alarm.IsActive || alarm.IsGoneUnacknowledged) &&
             alarm.IsMissingSource)
         {
@@ -3862,7 +6969,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_tileDetailStyle);
         GUI.Label(
             new Rect(inner.x + 7f, inner.y + 24f, inner.width - 14f, 48f),
-            (alarm.Name ?? "MELDUNG").ToUpperInvariant(),
+            (alarm.Name ?? UnmaText.Get(
+                "ui.common.alarm",
+                "ALARM")).ToUpperInvariant(),
             m_tileTitleStyle);
         GUI.Label(
             new Rect(
@@ -4073,7 +7182,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 rect.y + 4f,
                 rect.width - 8f,
                 rect.height - 8f),
-            new Color(0.83f, 0.84f, 0.82f, 1f));
+            CoiUiPalette.Text);
     }
 
     private void DrawExistingAssignmentTarget(
@@ -4092,8 +7201,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawPanelRect(
             actionRect,
             canLink
-                ? new Color(0.08f, 0.39f, 0.41f, 1f)
-                : new Color(0.28f, 0.29f, 0.28f, 1f));
+                ? CoiUiPalette.Blue
+                : CoiUiPalette.Control);
         GUI.Label(
             actionRect,
             canLink
@@ -4117,7 +7226,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             rect.y + 4f,
             rect.width - 8f,
             rect.height - 8f);
-        DrawPanelRect(inner, new Color(0.78f, 0.86f, 0.84f, 1f));
+        DrawPanelRect(inner, CoiUiPalette.Symbol);
         GUI.Label(
             new Rect(inner.x + 7f, inner.y + 17f, inner.width - 14f, 52f),
             UnmaText.Get("auto.1cc8d34d4b3e"),
@@ -4339,6 +7448,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        ClearLinkedInstrumentSource();
         RequestEntityInspection(entity.Id.Value, openEntityAlarmWindow);
     }
 
@@ -4346,6 +7456,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
         ConditionDefinition condition,
         bool openEntityAlarmWindow)
     {
+        if (condition != null &&
+            !string.IsNullOrWhiteSpace(condition.InstrumentId) &&
+            SelectLinkedInstrumentSource(condition.InstrumentId))
+        {
+            if (openEntityAlarmWindow)
+            {
+                OpenRuleEditorWindow();
+            }
+            return;
+        }
         if (condition != null && SystemMetricCatalog.TryParseRulePath(
                 condition.MetricPath,
                 out _))
@@ -4367,6 +7487,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void SelectGlobalMetricSource(bool preserveSelection)
     {
+        if (!preserveSelection)
+        {
+            ClearLinkedInstrumentSource();
+        }
         var selectedPath = preserveSelection &&
                            m_selectedMetricIndex >= 0 &&
                            m_selectedMetricIndex < m_selectedMetrics.Count
@@ -4379,7 +7503,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ? m_selectedMetrics[m_selectedReferenceMetricIndex].Path
             : "";
         var values = m_runtime.GetSystemMetricValues();
-        var metrics = SystemMetricCatalog.All
+        var metrics = m_runtime.GetAvailableSystemMetrics()
             .Select(metric => new MetricDescriptor(
                 SystemMetricCatalog.ToRulePath(metric.Id),
                 metric.Label,
@@ -4388,8 +7512,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             .ToArray();
         m_selectedEntity = new EntityInspectionSnapshot(
             -1,
-            "GLOBALE VARIABLEN",
-            "GLOBAL",
+            UnmaText.Get(
+                "ui.editor.global_variables",
+                "GLOBAL VARIABLES"),
+            UnmaText.Get("ui.editor.global_scope", "GLOBAL"),
             "",
             "",
             metrics);
@@ -4404,7 +7530,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_metricPickerOpen = false;
             m_referenceMetricPickerOpen = false;
-            SetStatus("Globale Variablen als Quelle ausgewählt.");
+            SetStatus(UnmaText.Get(
+                "ui.editor.status.global_source_selected",
+                "Global variables selected as source."));
         }
     }
 
@@ -4419,6 +7547,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         if (!preserveCurrentSelection)
         {
+            ClearLinkedInstrumentSource();
             m_selectedEntity = null;
             m_selectedMetrics = Array.Empty<MetricDescriptor>();
             m_selectedMetricIndex = 0;
@@ -4611,6 +7740,130 @@ public sealed class UnmaOverlayController : MonoBehaviour
         SetStatus(UnmaText.Get("auto.af3edd1b9f09"));
     }
 
+    private void AddLinkedInstrumentCondition(InstrumentDefinition instrument)
+    {
+        if (instrument == null ||
+            !TryParseDouble(m_draftThreshold, out var threshold))
+        {
+            SetStatus(UnmaText.Get("auto.019d3710d0ee"));
+            return;
+        }
+
+        var condition = new ConditionDefinition
+        {
+            EntityId = instrument.EntityId,
+            EntityTitle = instrument.EntityTitle,
+            EntityPrototypeId = instrument.EntityPrototypeId,
+            MetricPath = instrument.MetricPath,
+            MetricLabel = instrument.Title,
+            Comparison = m_draftComparison,
+            Threshold = threshold,
+            InstrumentId = instrument.Id,
+            TrendMode = InstrumentTrendMode.None,
+            WindowSeconds = 60,
+            WindowAmount = 1,
+            WindowUnit = GameTimeUnit.Month,
+            DeltaThreshold = Math.Max(
+                1d,
+                (instrument.Maximum - instrument.Minimum) * 0.05d),
+        };
+        m_draftConditions.Add(condition);
+        m_draftConditionThresholdTexts.Add(
+            threshold.ToString("0.###", CultureInfo.CurrentCulture));
+        m_draftTrendWindowTexts[condition] = "1";
+        SetStatus(UnmaText.Format(
+            "ui.editor.status.linked_value_added",
+            "Linked value added: {0}",
+            instrument.Title));
+    }
+
+    private bool SelectLinkedInstrumentSource(string instrumentId)
+    {
+        var instrument = m_runtime?.Configuration?.Instruments?.FirstOrDefault(
+            item => item != null && string.Equals(
+                item.Id,
+                instrumentId,
+                StringComparison.Ordinal));
+        if (instrument == null)
+        {
+            return false;
+        }
+
+        m_linkedInstrumentSourceId = instrument.Id;
+        var currentTarget = GetDraftTargetPanel();
+        if (PanelTopologyPolicy.IsEntityPanel(currentTarget))
+        {
+            var promotedId = m_draftLinkedPanelIds.FirstOrDefault(id =>
+                m_runtime.Configuration.Panels.Any(panel =>
+                    panel != null &&
+                    !panel.IsDashboard &&
+                    !PanelTopologyPolicy.IsEntityPanel(panel) &&
+                    string.Equals(panel.Id, id, StringComparison.Ordinal)));
+            m_draftTargetPanelId = promotedId ?? "";
+            if (!string.IsNullOrWhiteSpace(promotedId))
+            {
+                m_draftLinkedPanelIds.Remove(promotedId);
+            }
+            m_draftPreferredSlotIndex = GetDraftTargetPanel()?.Slots?.Count ?? -1;
+        }
+        m_draftLinkedPanelIds.RemoveWhere(id =>
+            !m_runtime.Configuration.Panels.Any(panel =>
+                panel != null &&
+                !panel.IsDashboard &&
+                !PanelTopologyPolicy.IsEntityPanel(panel) &&
+                string.Equals(panel.Id, id, StringComparison.Ordinal)));
+        var instruments = GetLinkedInstruments();
+        m_selectedLinkedInstrumentIndex = Math.Max(
+            0,
+            instruments.FindIndex(item => string.Equals(
+                item.Id,
+                instrument.Id,
+                StringComparison.Ordinal)));
+        m_linkedInstrumentPickerOpen = false;
+        m_metricPickerOpen = false;
+        m_referenceMetricPickerOpen = false;
+        return true;
+    }
+
+    private bool TryGetLinkedInstrumentSource(
+        out InstrumentDefinition instrument)
+    {
+        instrument = m_runtime?.Configuration?.Instruments?.FirstOrDefault(
+            item => item != null && string.Equals(
+                item.Id,
+                m_linkedInstrumentSourceId,
+                StringComparison.Ordinal));
+        if (instrument != null)
+        {
+            return true;
+        }
+        m_linkedInstrumentSourceId = "";
+        return false;
+    }
+
+    private List<InstrumentDefinition> GetLinkedInstruments()
+    {
+        if (!TryGetLinkedInstrumentSource(out var source))
+        {
+            return new List<InstrumentDefinition>();
+        }
+        return m_runtime.Configuration.Instruments
+            .Where(item => item != null && string.Equals(
+                item.PanelId,
+                source.PanelId,
+                StringComparison.Ordinal))
+            .OrderBy(item => item.Title, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private void ClearLinkedInstrumentSource()
+    {
+        m_linkedInstrumentSourceId = "";
+        m_selectedLinkedInstrumentIndex = 0;
+        m_linkedInstrumentPickerOpen = false;
+    }
+
     private bool SaveDraftRule(IReadOnlyList<SoundOption> sounds)
     {
         var panel = GetDraftTargetPanel();
@@ -4621,6 +7874,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         for (var index = 0; index < m_draftConditions.Count; index++)
         {
+            var condition = m_draftConditions[index];
             if (index >= m_draftConditionThresholdTexts.Count ||
                 !TryParseDouble(
                     m_draftConditionThresholdTexts[index],
@@ -4631,22 +7885,71 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     UnmaText.Get("auto.ddb8c3cdbc29"));
                 return false;
             }
-            m_draftConditions[index].Threshold = threshold;
-            if (m_draftConditions[index].ValueMode ==
+            if (!string.IsNullOrWhiteSpace(condition.InstrumentId))
+            {
+                if (!m_runtime.Configuration.Instruments.Any(instrument =>
+                        instrument != null && string.Equals(
+                            instrument.Id,
+                            condition.InstrumentId,
+                            StringComparison.Ordinal)))
+                {
+                    SetStatus(UnmaText.Format(
+                        "ui.instrument.status.condition_missing",
+                        "Condition {0}: The associated instrument no longer exists.",
+                        index + 1));
+                    return false;
+                }
+                if (UsesComparisonThreshold(condition.TrendMode))
+                {
+                    condition.Threshold = threshold;
+                }
+                else
+                {
+                    condition.DeltaThreshold = threshold;
+                }
+                if (condition.TrendMode != InstrumentTrendMode.None)
+                {
+                    if (!UsesComparisonThreshold(condition.TrendMode) &&
+                        threshold < 0d ||
+                        !m_draftTrendWindowTexts.TryGetValue(
+                            condition,
+                            out var windowText) ||
+                        !int.TryParse(
+                            windowText,
+                            NumberStyles.Integer,
+                            CultureInfo.CurrentCulture,
+                            out var windowAmount) ||
+                        windowAmount < 1)
+                    {
+                        SetStatus(UnmaText.Format(
+                            "ui.instrument.status.invalid_time_condition",
+                            "Time condition {0}: Enter a valid amount and game-time range.",
+                            index + 1));
+                        return false;
+                    }
+                    condition.WindowAmount =
+                        GameTimeWindowPolicy.ClampAmount(
+                            windowAmount,
+                            condition.WindowUnit);
+                }
+                continue;
+            }
+            condition.Threshold = threshold;
+            if (condition.ValueMode ==
                     ConditionValueMode.PercentOfReference &&
                 string.IsNullOrWhiteSpace(
-                    m_draftConditions[index].ReferenceMetricPath))
+                    condition.ReferenceMetricPath))
             {
                 SetStatus(
                     UnmaText.Get("auto.21ca7079c12b") + (index + 1) +
                     UnmaText.Get("auto.115b04808134"));
                 return false;
             }
-            if (m_draftConditions[index].ValueMode ==
+            if (condition.ValueMode ==
                     ConditionValueMode.PercentOfReference &&
                 string.Equals(
-                    m_draftConditions[index].MetricPath,
-                    m_draftConditions[index].ReferenceMetricPath,
+                    condition.MetricPath,
+                    condition.ReferenceMetricPath,
                     StringComparison.Ordinal))
             {
                 SetStatus(
@@ -4684,7 +7987,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             Id = existingRule?.Id ?? Guid.NewGuid().ToString("N"),
             PanelId = panel.Id,
             Name = string.IsNullOrWhiteSpace(m_draftRuleName)
-                ? "MELDUNG"
+                ? UnmaText.Get("ui.common.alarm", "ALARM")
                 : m_draftRuleName.Trim(),
             Severity = m_draftSeverity,
             Logic = m_draftLogic,
@@ -4738,13 +8041,31 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
-        m_draftConditions.AddRange(
-            rule.Conditions.Select(CloneCondition));
-        m_draftConditionThresholdTexts.AddRange(
-            rule.Conditions.Select(condition =>
-                condition.Threshold.ToString(
+        m_draftTrendWindowTexts.Clear();
+        foreach (var sourceCondition in rule.Conditions)
+        {
+            var condition = CloneCondition(sourceCondition);
+            m_draftConditions.Add(condition);
+            m_draftConditionThresholdTexts.Add(
+                (UsesComparisonThreshold(condition.TrendMode)
+                    ? condition.Threshold
+                    : condition.DeltaThreshold).ToString(
                     "0.###",
-                    CultureInfo.CurrentCulture)));
+                    CultureInfo.CurrentCulture));
+            m_draftTrendWindowTexts[condition] =
+                condition.WindowAmount.ToString(
+                    CultureInfo.CurrentCulture);
+        }
+        var linkedCondition = m_draftConditions.FirstOrDefault(condition =>
+            !string.IsNullOrWhiteSpace(condition.InstrumentId));
+        if (linkedCondition != null)
+        {
+            SelectLinkedInstrumentSource(linkedCondition.InstrumentId);
+        }
+        else
+        {
+            ClearLinkedInstrumentSource();
+        }
         m_editorScroll = Vector2.zero;
         SetStatus(UnmaText.Get("auto.bc7894226481"));
     }
@@ -4758,6 +8079,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_editingRuleId = "";
         m_draftConditions.Clear();
         m_draftConditionThresholdTexts.Clear();
+        m_draftTrendWindowTexts.Clear();
         m_draftRuleName = UnmaText.Get("auto.fe04a9d0e58c");
         m_draftSeverity = AlarmSeverity.Warning;
         m_draftLogic = AlarmLogic.All;
@@ -4773,6 +8095,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_metricPickerOpen = false;
         m_referenceMetricPickerOpen = false;
         m_conditionReferencePickerIndex = -1;
+        ClearLinkedInstrumentSource();
         var targetPanel = CurrentPanel != null && !CurrentPanel.IsDashboard
             ? CurrentPanel
             : m_runtime.Configuration.Panels.FirstOrDefault(panel =>
@@ -4962,14 +8285,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_draftTargetPanelId = CurrentPanel?.Id ?? "";
             m_draftPreferredSlotIndex = -1;
         }
-        m_detachedPanels.RemoveAll(item => item.PanelId == panelId);
+        CloseDetachedPanelsForPanel(panelId);
         SetStatus(UnmaText.Get("auto.d57565ce0bc8"));
     }
 
     private void DetachPanel(string panelId)
     {
         var offset = m_detachedPanels.Count * 28f;
-        m_detachedPanels.Add(new DetachedPanel
+        var detached = new DetachedPanel
         {
             WindowId = m_nextDetachedWindowId++,
             PanelId = panelId,
@@ -4978,7 +8301,62 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 60f + offset,
                 620f,
                 460f),
-        });
+        };
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(
+            item => item.Id == panelId);
+        if (m_uiRoot != null && panel != null)
+        {
+            try
+            {
+                detached.NativeShell = new UnmaNativeDetachedPanelShell(
+                    m_uiRoot,
+                    detached.Rect.width,
+                    detached.Rect.height,
+                    offset,
+                    offset,
+                    GetDetachedPanelTitle(panel),
+                    () => detached.IsOpen = false,
+                    (width, height) =>
+                    {
+                        detached.Rect.width = width;
+                        detached.Rect.height = height;
+                    },
+                    isImGuiBodyPoint =>
+                        QueueDetachedNativeSurfaceActivation(
+                            detached,
+                            isImGuiBodyPoint));
+                ActivateDetachedNativeSurface(detached);
+            }
+            catch (Exception exception)
+            {
+                detached.NativeShell?.Dispose();
+                detached.NativeShell = null;
+                Log.Warning(
+                    "UNMA: native detached panel could not be created; " +
+                    "using IMGUI fallback. " + exception.GetType().Name +
+                    ": " + exception.Message);
+            }
+        }
+        m_detachedPanels.Add(detached);
+    }
+
+    private void CloseDetachedPanelsForPanel(string panelId)
+    {
+        for (var index = m_detachedPanels.Count - 1; index >= 0; index--)
+        {
+            var detached = m_detachedPanels[index];
+            if (!string.Equals(
+                    detached.PanelId,
+                    panelId,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            detached.NativeShell?.Dispose();
+            detached.NativeShell = null;
+            m_detachedPanels.RemoveAt(index);
+        }
     }
 
     private void TestSound(string soundId, AlarmSeverity severity)
@@ -5215,13 +8593,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 GUILayout.Width(width),
                 GUILayout.Height(30f)))
         {
-            m_tab = tab;
-            GUI.FocusControl(null);
+            SelectMainTab(tab);
         }
     }
 
     private void DrawWindowHeader(string title, float windowWidth)
     {
+        DrawPanelRect(
+            new Rect(8f, 38f, Math.Max(120f, windowWidth - 16f), 1f),
+            CoiUiPalette.Border);
+        DrawPanelRect(
+            new Rect(8f, 39f, 96f, 2f),
+            CoiUiPalette.Yellow);
         GUI.Label(
             new Rect(12f, 8f, Math.Max(120f, windowWidth - 76f), 28f),
             title,
@@ -5267,7 +8650,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_pendingRuleDeleteId = ruleId;
             m_pendingRuleDeleteUntil = Time.realtimeSinceStartup + 6f;
-            SetStatus("Zum Löschen der Meldung erneut drücken.");
+            SetStatus(UnmaText.Get(
+                "ui.editor.status.confirm_delete_alarm",
+                "Press again to delete the alarm."));
             return;
         }
         if (!m_runtime.RemoveRule(ruleId))
@@ -5598,18 +8983,33 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         var windowBackground = SolidTexture(
             "window",
-            new Color(0.075f, 0.085f, 0.085f, 0.98f));
+            CoiUiPalette.WithAlpha(CoiUiPalette.Window, 0.985f));
         m_windowStyle = new GUIStyle(GUI.skin.window)
         {
             padding = new RectOffset(8, 8, 8, 8),
         };
         SetBackgroundForAllStates(m_windowStyle, windowBackground);
+        m_panelStyle = new GUIStyle(GUI.skin.box)
+        {
+            padding = new RectOffset(8, 8, 7, 7),
+            margin = new RectOffset(3, 3, 3, 3),
+            normal =
+            {
+                textColor = CoiUiPalette.Text,
+                background = SolidTexture(
+                    "panel",
+                    CoiUiPalette.SurfaceDark),
+            },
+        };
+        SetBackgroundForAllStates(
+            m_panelStyle,
+            m_panelStyle.normal.background);
         m_headerStyle = new GUIStyle(GUI.skin.label)
         {
             fontSize = 17,
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleLeft,
-            normal = { textColor = new Color(0.90f, 0.91f, 0.88f) },
+            normal = { textColor = CoiUiPalette.TextBright },
         };
         m_sectionStyle = new GUIStyle(GUI.skin.box)
         {
@@ -5622,7 +9022,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 textColor = Color.white,
                 background = SolidTexture(
                     "section",
-                    new Color(0.16f, 0.18f, 0.18f, 1f)),
+                    CoiUiPalette.SurfaceRaised),
             },
         };
         m_labelStyle = new GUIStyle(GUI.skin.label)
@@ -5630,12 +9030,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             fontSize = 13,
             wordWrap = true,
             alignment = TextAnchor.MiddleLeft,
-            normal = { textColor = new Color(0.91f, 0.92f, 0.89f) },
+            normal = { textColor = CoiUiPalette.TextBright },
         };
         m_smallLabelStyle = new GUIStyle(m_labelStyle)
         {
             fontSize = 11,
-            normal = { textColor = new Color(0.70f, 0.73f, 0.70f) },
+            normal = { textColor = CoiUiPalette.Text },
         };
         m_tileTitleStyle = new GUIStyle(GUI.skin.label)
         {
@@ -5662,16 +9062,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
         };
         m_buttonStyle = MakeButtonStyle(
             "button",
-            new Color(0.21f, 0.23f, 0.23f),
-            new Color(0.30f, 0.33f, 0.32f));
+            CoiUiPalette.Control,
+            CoiUiPalette.BorderLight,
+            CoiUiPalette.TextBright);
         m_primaryButtonStyle = MakeButtonStyle(
             "primary",
-            new Color(0.10f, 0.35f, 0.36f),
-            new Color(0.13f, 0.48f, 0.48f));
+            CoiUiPalette.Border,
+            CoiUiPalette.Yellow,
+            CoiUiPalette.Yellow);
         m_dangerButtonStyle = MakeButtonStyle(
             "danger",
-            new Color(0.55f, 0.09f, 0.08f),
-            new Color(0.75f, 0.13f, 0.10f));
+            CoiUiPalette.ScaleRgb(CoiUiPalette.Orange, 0.62f),
+            CoiUiPalette.Orange,
+            CoiUiPalette.TextBright);
         m_warningBannerStyle = new GUIStyle(m_sectionStyle)
         {
             fontSize = 16,
@@ -5683,7 +9086,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 textColor = Color.white,
                 background = SolidTexture(
                     "draft-warning",
-                    new Color(0.72f, 0.24f, 0.04f, 1f)),
+                    CoiUiPalette.ScaleRgb(CoiUiPalette.Orange, 0.72f)),
             },
         };
         m_resizeHandleStyle = new GUIStyle(m_buttonStyle)
@@ -5697,17 +9100,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
             fontSize = 13,
             normal =
             {
-                textColor = Color.black,
+                textColor = CoiUiPalette.TextBright,
                 background = SolidTexture(
                     "field",
-                    new Color(0.84f, 0.85f, 0.82f)),
+                    CoiUiPalette.SurfaceRaised),
             },
             focused =
             {
-                textColor = Color.black,
+                textColor = CoiUiPalette.TextBright,
                 background = SolidTexture(
                     "field-focus",
-                    new Color(0.96f, 0.88f, 0.55f)),
+                    CoiUiPalette.Border),
             },
         };
         m_historyHeaderStyle = new GUIStyle(m_labelStyle)
@@ -5743,30 +9146,100 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private GUIStyle MakeButtonStyle(
         string key,
         Color normal,
-        Color hover)
+        Color accent,
+        Color textColor)
     {
-        return new GUIStyle(GUI.skin.button)
+        var hover = CoiUiPalette.ScaleRgb(normal, 1.14f);
+        var active = CoiUiPalette.ScaleRgb(normal, 0.82f);
+        var style = new GUIStyle(GUI.skin.button)
         {
             fontSize = 12,
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter,
             padding = new RectOffset(8, 8, 4, 4),
+            border = new RectOffset(3, 3, 3, 3),
             normal =
             {
-                textColor = Color.white,
-                background = SolidTexture(key, normal),
+                textColor = textColor,
+                background = CoiButtonTexture(key, normal, accent),
             },
             hover =
             {
-                textColor = Color.white,
-                background = SolidTexture(key + "-hover", hover),
+                textColor = textColor,
+                background = CoiButtonTexture(
+                    key + "-hover",
+                    hover,
+                    CoiUiPalette.ScaleRgb(accent, 1.10f)),
             },
             active =
             {
-                textColor = Color.white,
-                background = SolidTexture(key + "-active", hover * 0.85f),
+                textColor = textColor,
+                background = CoiButtonTexture(
+                    key + "-active",
+                    active,
+                    accent,
+                    true),
             },
         };
+        style.focused.textColor = textColor;
+        style.focused.background = style.hover.background;
+        style.onNormal.textColor = textColor;
+        style.onNormal.background = style.normal.background;
+        style.onHover.textColor = textColor;
+        style.onHover.background = style.hover.background;
+        style.onActive.textColor = textColor;
+        style.onActive.background = style.active.background;
+        style.onFocused.textColor = textColor;
+        style.onFocused.background = style.hover.background;
+        return style;
+    }
+
+    private Texture2D CoiButtonTexture(
+        string key,
+        Color fill,
+        Color accent,
+        bool pressed = false)
+    {
+        const int width = 24;
+        const int height = 16;
+        var cacheKey = "coi-button-" + key;
+        if (m_colorTextures.TryGetValue(cacheKey, out var texture))
+        {
+            return texture;
+        }
+
+        texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            name = "UNMA " + cacheKey,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear,
+        };
+        var pixels = new Color[width * height];
+        for (var y = 0; y < height; y++)
+        {
+            var vertical = y / (height - 1f);
+            var shade = pressed
+                ? Mathf.Lerp(0.76f, 1.02f, vertical)
+                : Mathf.Lerp(1.12f, 0.78f, vertical);
+            for (var x = 0; x < width; x++)
+            {
+                var edge = x == 0 || x == width - 1 ||
+                           y == 0 || y == height - 1;
+                var insetEdge = x == 1 || x == width - 2 ||
+                                y == 1 || y == height - 2;
+                var color = edge
+                    ? CoiUiPalette.Window
+                    : insetEdge
+                        ? accent
+                        : CoiUiPalette.ScaleRgb(fill, shade);
+                pixels[y * width + x] = color;
+            }
+        }
+        texture.SetPixels(pixels);
+        texture.Apply(false, true);
+        m_colorTextures[cacheKey] = texture;
+        return texture;
     }
 
     private static void SetBackgroundForAllStates(
@@ -5832,6 +9305,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
     }
 
+    private InstrumentPanelDefinition CurrentInstrumentPanel
+    {
+        get
+        {
+            var panels = m_runtime.Configuration.InstrumentPanels;
+            if (panels == null || panels.Count == 0)
+            {
+                return null;
+            }
+            m_currentInstrumentPanelIndex = Math.Max(
+                0,
+                Math.Min(m_currentInstrumentPanelIndex, panels.Count - 1));
+            return panels[m_currentInstrumentPanelIndex];
+        }
+    }
+
     private List<PanelDefinition> GlobalPanels =>
         m_runtime.Configuration.Panels
             .Where(panel => !PanelTopologyPolicy.IsEntityPanel(panel))
@@ -5854,6 +9343,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ValueMode = source.ValueMode,
             ReferenceMetricPath = source.ReferenceMetricPath,
             ReferenceMetricLabel = source.ReferenceMetricLabel,
+            InstrumentId = source.InstrumentId,
+            TrendMode = source.TrendMode,
+            WindowSeconds = source.WindowSeconds,
+            DeltaThreshold = source.DeltaThreshold,
+            WindowAmount = source.WindowAmount,
+            WindowUnit = source.WindowUnit,
         };
     }
 
@@ -5913,10 +9408,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
     {
         return severity switch
         {
-            AlarmSeverity.Emergency => "NOTFALL",
-            AlarmSeverity.Critical => "KRITISCH",
-            AlarmSeverity.Warning => "WARNUNG",
-            _ => "HINWEIS",
+            AlarmSeverity.Emergency => UnmaText.Get(
+                "ui.severity.emergency",
+                "EMERGENCY"),
+            AlarmSeverity.Critical => UnmaText.Get(
+                "ui.severity.critical",
+                "CRITICAL"),
+            AlarmSeverity.Warning => UnmaText.Get(
+                "ui.severity.warning",
+                "WARNING"),
+            _ => UnmaText.Get(
+                "ui.severity.notice",
+                "NOTICE"),
         };
     }
 
@@ -5979,6 +9482,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 s_gameplayStateFailureLogged = true;
                 Log.Warning(UnmaText.Format(
                     "log.menu_state_unreadable",
+                    "UNMA: Menu state could not be read; annunciator remains " +
+                    "available: {0}",
                     exception.Message));
             }
             return true;
@@ -6012,15 +9517,28 @@ public sealed class UnmaOverlayController : MonoBehaviour
         var logicalMouse = new Vector2(
             physicalMouse.x / UiScale,
             (Screen.height - physicalMouse.y) / UiScale);
-        if (m_isOpen && m_windowRect.Contains(logicalMouse) ||
-            m_entityAlarmWindowOpen &&
-            m_entityAlarmWindowRect.Contains(logicalMouse) ||
+        var pointerTopLeft = new Vector2(
+            physicalMouse.x,
+            Screen.height - physicalMouse.y);
+        var pointerOverMain = m_isOpen &&
+            (m_nativeWindowShell != null
+                ? m_nativeWindowShell.ContainsPointer(pointerTopLeft)
+                : m_windowRect.Contains(logicalMouse));
+        var pointerOverEditor = m_entityAlarmWindowOpen &&
+            (m_nativeEditorShell != null
+                ? m_nativeEditorShell.ContainsPointer(pointerTopLeft)
+                : m_entityAlarmWindowRect.Contains(logicalMouse));
+        if (pointerOverMain ||
+            pointerOverEditor ||
             !m_isOpen && m_launcherRect.Contains(logicalMouse))
         {
             return true;
         }
         return m_detachedPanels.Any(panel =>
-            panel.IsOpen && panel.Rect.Contains(logicalMouse));
+            panel.IsOpen &&
+            (panel.NativeShell != null
+                ? panel.NativeShell.ContainsPointer(pointerTopLeft)
+                : panel.Rect.Contains(logicalMouse)));
     }
 
     private void UpdatePointerRaycastShield(bool enabled)
@@ -6035,21 +9553,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             if (m_isOpen)
             {
-                m_inputShieldRects.Add(m_windowRect);
+                if (m_nativeWindowShell == null)
+                {
+                    m_inputShieldRects.Add(m_windowRect);
+                }
             }
             else
             {
                 m_inputShieldRects.Add(m_launcherRect);
             }
 
-            if (m_entityAlarmWindowOpen)
+            if (m_entityAlarmWindowOpen && m_nativeEditorShell == null)
             {
                 m_inputShieldRects.Add(m_entityAlarmWindowRect);
             }
 
             foreach (var detached in m_detachedPanels)
             {
-                if (detached.IsOpen)
+                if (detached.IsOpen && detached.NativeShell == null)
                 {
                     m_inputShieldRects.Add(detached.Rect);
                 }
@@ -6124,14 +9645,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void OnDestroy()
     {
-        m_inspectorAlarmButtons?.Dispose();
-        m_inputBlocker?.Dispose();
-        m_pointerRaycastShield?.Dispose();
+        DisposeUi();
         m_runtime?.SetGameplayActive(false);
-        if (m_audio != null)
-        {
-            m_audio.StopAlarm();
-        }
         foreach (var texture in m_colorTextures.Values)
         {
             if (texture != null)

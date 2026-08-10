@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 
@@ -18,6 +19,35 @@ public static class UnmaText
     {
         return s_catalog.TryGetValue(textId, out var text) ? text : textId;
     }
+
+    public static string Get(string textId, string fallback)
+    {
+        return s_catalog.TryGetValue(textId, out var text)
+            ? text
+            : fallback ?? textId;
+    }
+
+    public static string Format(
+        string textId,
+        string fallback,
+        params object[] arguments)
+    {
+        var template = Get(textId, fallback);
+        try
+        {
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                template,
+                arguments ?? Array.Empty<object>());
+        }
+        catch (FormatException)
+        {
+            return template;
+        }
+    }
+
+    public static string Format(string textId, params object[] arguments) =>
+        Format(textId, textId, arguments);
 
     private static IReadOnlyDictionary<string, string> LoadCatalog()
     {

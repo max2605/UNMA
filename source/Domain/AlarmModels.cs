@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.Serialization;
 using UNMA.Localization;
@@ -51,6 +52,82 @@ public enum VanillaNotificationScope
     Entity = 2,
 }
 
+public enum InstrumentDisplayType
+{
+    EdgewiseVertical = 0,
+    EdgewiseHorizontal = 1,
+    RoundGauge = 2,
+    SevenSegmentRed = 3,
+    SevenSegmentGreen = 4,
+    NixieTube = 5,
+    CrtAmber = 6,
+    CrtGreen = 7,
+    PaperRecorder = 8,
+}
+
+public enum InstrumentAggregationMode
+{
+    Single = 0,
+    Sum = 1,
+    Average = 2,
+    Minimum = 3,
+    Maximum = 4,
+}
+
+public enum InstrumentTrendMode
+{
+    None = 0,
+    DecreaseAbsolute = 1,
+    DecreasePercent = 2,
+    IncreaseAbsolute = 3,
+    IncreasePercent = 4,
+    SustainComparison = 5,
+}
+
+[DataContract]
+public sealed class InstrumentSourceDefinition
+{
+    [DataMember(Order = 1)] public int EntityId = -1;
+    [DataMember(Order = 2)] public string EntityTitle = "";
+    [DataMember(Order = 3)] public string EntityPrototypeId = "";
+}
+
+[DataContract]
+public sealed class InstrumentPanelDefinition
+{
+    [DataMember(Order = 1)] public string Id = Guid.NewGuid().ToString("N");
+    [DataMember(Order = 2)] public string Name = UnmaText.Get(
+        "default.instrument_panel",
+        "INSTRUMENT PANEL");
+}
+
+[DataContract]
+public sealed class InstrumentDefinition
+{
+    [DataMember(Order = 1)] public string Id = Guid.NewGuid().ToString("N");
+    [DataMember(Order = 2)] public string Title = UnmaText.Get(
+        "default.measurement",
+        "MEASUREMENT");
+    [DataMember(Order = 3)] public InstrumentDisplayType DisplayType =
+        InstrumentDisplayType.RoundGauge;
+    [DataMember(Order = 4)] public int EntityId = -1;
+    [DataMember(Order = 5)] public string EntityTitle = "";
+    [DataMember(Order = 6)] public string EntityPrototypeId = "";
+    [DataMember(Order = 7)] public string MetricPath = "";
+    [DataMember(Order = 8)] public string MetricLabel = "";
+    [DataMember(Order = 9)] public string Unit = "";
+    [DataMember(Order = 10)] public double Minimum;
+    [DataMember(Order = 11)] public double Maximum = 100d;
+    [DataMember(Order = 12)] public string PanelId = "instruments-main";
+    [DataMember(Order = 13)] public List<InstrumentSourceDefinition> Sources =
+        new();
+    [DataMember(Order = 14)] public InstrumentAggregationMode Aggregation;
+    [DataMember(Order = 15)] public int HistoryDurationSeconds = 3600;
+    [DataMember(Order = 16)] public int HistoryDurationAmount = 100;
+    [DataMember(Order = 17)] public GameTimeUnit HistoryDurationUnit =
+        GameTimeUnit.Year;
+}
+
 [DataContract]
 public sealed class ConditionDefinition
 {
@@ -66,6 +143,13 @@ public sealed class ConditionDefinition
     [DataMember(Order = 10)] public ConditionValueMode ValueMode;
     [DataMember(Order = 11)] public string ReferenceMetricPath = "";
     [DataMember(Order = 12)] public string ReferenceMetricLabel = "";
+    [DataMember(Order = 13)] public string InstrumentId = "";
+    [DataMember(Order = 14)] public InstrumentTrendMode TrendMode;
+    [DataMember(Order = 15)] public int WindowSeconds = 60;
+    [DataMember(Order = 16)] public double DeltaThreshold = 1d;
+    [DataMember(Order = 17)] public int WindowAmount = 1;
+    [DataMember(Order = 18)] public GameTimeUnit WindowUnit =
+        GameTimeUnit.Month;
 }
 
 [DataContract]
@@ -82,7 +166,9 @@ public sealed class SystemAlarmStageDefinition
     [DataMember(Order = 1)] public string Id = "";
     [DataMember(Order = 2)] public int Priority;
     [DataMember(Order = 3)] public bool Enabled = true;
-    [DataMember(Order = 4)] public string Message = "MELDUNG";
+    [DataMember(Order = 4)] public string Message = UnmaText.Get(
+        "default.notification",
+        "NOTIFICATION");
     [DataMember(Order = 5)] public AlarmSeverity Severity = AlarmSeverity.Warning;
     [DataMember(Order = 6)] public AlarmLogic Logic = AlarmLogic.All;
     [DataMember(Order = 7)] public List<SystemConditionDefinition> Conditions =
@@ -95,7 +181,9 @@ public sealed class SystemAlarmStageDefinition
 public sealed class SystemAlarmDefinition
 {
     [DataMember(Order = 1)] public string Id = "";
-    [DataMember(Order = 2)] public string DisplayName = "SYSTEMMELDUNG";
+    [DataMember(Order = 2)] public string DisplayName = UnmaText.Get(
+        "default.system_notification",
+        "SYSTEM NOTIFICATION");
     [DataMember(Order = 3)] public bool Enabled = true;
     [DataMember(Order = 4)] public List<SystemAlarmStageDefinition> Stages =
         new();
@@ -122,7 +210,9 @@ public sealed class AlarmRuleDefinition
 public sealed class PanelSlotDefinition
 {
     [DataMember(Order = 1)] public string AlarmId = "";
-    [DataMember(Order = 2)] public string DisplayName = "MELDUNG";
+    [DataMember(Order = 2)] public string DisplayName = UnmaText.Get(
+        "default.notification",
+        "NOTIFICATION");
     [DataMember(Order = 3)] public string Detail = "";
     [DataMember(Order = 4)] public string Source = "";
     [DataMember(Order = 5)] public AlarmSeverity Severity =
@@ -134,7 +224,9 @@ public sealed class PanelSlotDefinition
 public sealed class PanelDefinition
 {
     [DataMember(Order = 1)] public string Id = Guid.NewGuid().ToString("N");
-    [DataMember(Order = 2)] public string Name = "MELDETAFEL";
+    [DataMember(Order = 2)] public string Name = UnmaText.Get(
+        "default.panel",
+        "PANEL");
     [DataMember(Order = 3)] public int Columns = 3;
     [DataMember(Order = 4)] public bool IncludeVanilla = true;
     [DataMember(Order = 5)] public bool IncludeSystem = true;
@@ -227,7 +319,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 13;
+    [DataMember(Order = 1)] public int SchemaVersion = 17;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -256,10 +348,21 @@ public sealed class UnmaConfiguration
     [DataMember(Order = 22)] public float EditorWindowHeight = 720f;
     [DataMember(Order = 23)]
     public List<VanillaNotificationRule> VanillaNotificationRules = new();
+    [DataMember(Order = 24)]
+    public List<InstrumentDefinition> Instruments = new();
+    [DataMember(Order = 25)]
+    public List<InstrumentPanelDefinition> InstrumentPanels = new();
 
     public static UnmaConfiguration CreateDefault()
     {
         var config = new UnmaConfiguration();
+        config.InstrumentPanels.Add(new InstrumentPanelDefinition
+        {
+            Id = "instruments-main",
+            Name = UnmaText.Get(
+                "default.main_instrument_panel",
+                "MAIN INSTRUMENT PANEL"),
+        });
         config.Panels.Add(new PanelDefinition
         {
             Id = "main",
@@ -272,7 +375,7 @@ public sealed class UnmaConfiguration
         config.Panels.Add(new PanelDefinition
         {
             Id = "supply",
-            Name = "VERSORGUNG",
+            Name = UnmaText.Get("default.supply_panel", "SUPPLY"),
             Columns = 3,
             IncludeVanilla = true,
             IncludeSystem = true,
@@ -290,7 +393,9 @@ public sealed class UnmaConfiguration
             new()
             {
                 Id = "system:health",
-                DisplayName = "GESUNDHEIT",
+                DisplayName = UnmaText.Get(
+                    "default.health_alarm",
+                    "HEALTH"),
                 Enabled = true,
                 Stages = new List<SystemAlarmStageDefinition>
                 {
@@ -352,7 +457,9 @@ public sealed class UnmaConfiguration
             new()
             {
                 Id = "system:food",
-                DisplayName = "NAHRUNGSVERSORGUNG",
+                DisplayName = UnmaText.Get(
+                    "default.food_supply_alarm",
+                    "FOOD SUPPLY"),
                 Enabled = true,
                 Stages = new List<SystemAlarmStageDefinition>
                 {
@@ -388,7 +495,9 @@ public sealed class UnmaConfiguration
             new()
             {
                 Id = "system:workers",
-                DisplayName = "ARBEITERRESERVE",
+                DisplayName = UnmaText.Get(
+                    "default.worker_reserve_alarm",
+                    "WORKER RESERVE"),
                 Enabled = true,
                 Stages = new List<SystemAlarmStageDefinition>
                 {
@@ -449,6 +558,8 @@ public sealed class UnmaConfiguration
         AlarmMemories ??= new List<AlarmMemoryDefinition>();
         AlarmHistory ??= new List<AlarmHistoryDefinition>();
         VanillaNotificationRules ??= new List<VanillaNotificationRule>();
+        Instruments ??= new List<InstrumentDefinition>();
+        InstrumentPanels ??= new List<InstrumentPanelDefinition>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -460,7 +571,7 @@ public sealed class UnmaConfiguration
                 ? Guid.NewGuid().ToString("N")
                 : panel.Id.Trim();
             panel.Name = string.IsNullOrWhiteSpace(panel.Name)
-                ? "MELDETAFEL"
+                ? UnmaText.Get("default.panel", "PANEL")
                 : panel.Name.Trim();
             panel.Columns = Math.Max(1, Math.Min(8, panel.Columns));
             panel.NotificationFilter ??= "";
@@ -501,24 +612,52 @@ public sealed class UnmaConfiguration
         {
             panel.IsDashboard = ReferenceEquals(panel, dashboardPanel);
         }
+        if (!Panels.Any(panel => panel != null && !panel.IsDashboard))
+        {
+            var fallbackId = Panels.Any(panel => string.Equals(
+                panel?.Id,
+                "supply",
+                StringComparison.Ordinal))
+                ? Guid.NewGuid().ToString("N")
+                : "supply";
+            Panels.Add(new PanelDefinition
+            {
+                Id = fallbackId,
+                Name = UnmaText.Get("default.supply_panel", "SUPPLY"),
+                Columns = 3,
+                IncludeVanilla = true,
+                IncludeSystem = true,
+                IsDashboard = false,
+            });
+        }
         // Keep legacy dashboard slots serialized for lossless downgrade and
         // recovery. Dashboard projection and editing deliberately ignore them.
 
+        var fallbackRulePanelId = Panels.First(panel =>
+            panel != null && !panel.IsDashboard).Id;
         foreach (var rule in Rules)
         {
             rule.Id = string.IsNullOrWhiteSpace(rule.Id)
                 ? Guid.NewGuid().ToString("N")
                 : rule.Id.Trim();
-            rule.PanelId = string.IsNullOrWhiteSpace(rule.PanelId)
-                ? Panels[0].Id
-                : rule.PanelId.Trim();
+            rule.PanelId = rule.PanelId?.Trim() ?? "";
+            if (!Panels.Any(panel =>
+                    panel != null &&
+                    !panel.IsDashboard &&
+                    string.Equals(
+                        panel.Id,
+                        rule.PanelId,
+                        StringComparison.Ordinal)))
+            {
+                rule.PanelId = fallbackRulePanelId;
+            }
             rule.LinkedPanelIds =
                 PanelTopologyPolicy.NormalizeLinkedPanelIds(
                     rule.PanelId,
                     rule.LinkedPanelIds,
                     Panels);
             rule.Name = string.IsNullOrWhiteSpace(rule.Name)
-                ? "MELDUNG"
+                ? UnmaText.Get("default.notification", "NOTIFICATION")
                 : rule.Name.Trim();
             rule.Conditions ??= new List<ConditionDefinition>();
             rule.Conditions.RemoveAll(condition => condition == null);
@@ -539,6 +678,40 @@ public sealed class UnmaConfiguration
                 condition.ReferenceMetricPath =
                     condition.ReferenceMetricPath?.Trim() ?? "";
                 condition.ReferenceMetricLabel ??= "";
+                condition.InstrumentId = condition.InstrumentId?.Trim() ?? "";
+                if (!Enum.IsDefined(
+                        typeof(InstrumentTrendMode),
+                        condition.TrendMode))
+                {
+                    condition.TrendMode = InstrumentTrendMode.None;
+                }
+                condition.WindowSeconds = Math.Max(
+                    1,
+                    Math.Min(86400, condition.WindowSeconds <= 0
+                        ? 60
+                        : condition.WindowSeconds));
+                if (loadedSchemaVersion < 17)
+                {
+                    GameTimeWindowPolicy.FromLegacyRealSeconds(
+                        condition.WindowSeconds,
+                        out condition.WindowAmount,
+                        out condition.WindowUnit);
+                }
+                if (!Enum.IsDefined(
+                        typeof(GameTimeUnit),
+                        condition.WindowUnit))
+                {
+                    condition.WindowUnit = GameTimeUnit.Month;
+                }
+                condition.WindowAmount = GameTimeWindowPolicy.ClampAmount(
+                    condition.WindowAmount,
+                    condition.WindowUnit);
+                if (double.IsNaN(condition.DeltaThreshold) ||
+                    double.IsInfinity(condition.DeltaThreshold) ||
+                    condition.DeltaThreshold < 0d)
+                {
+                    condition.DeltaThreshold = 1d;
+                }
             }
             rule.ActiveColor ??= "#F0C541";
             rule.SoundId ??= "auto";
@@ -577,6 +750,169 @@ public sealed class UnmaConfiguration
             .GroupBy(
                 VanillaNotificationSuppressionPolicy.RuleIdentity,
                 StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .ToList();
+
+        InstrumentPanels.RemoveAll(item => item == null);
+        foreach (var panel in InstrumentPanels)
+        {
+            panel.Id = string.IsNullOrWhiteSpace(panel.Id)
+                ? Guid.NewGuid().ToString("N")
+                : panel.Id.Trim();
+            panel.Name = string.IsNullOrWhiteSpace(panel.Name)
+                ? UnmaText.Get(
+                    "default.instrument_panel",
+                    "INSTRUMENT PANEL")
+                : panel.Name.Trim();
+        }
+        InstrumentPanels = InstrumentPanels
+            .GroupBy(item => item.Id, StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .ToList();
+        if (InstrumentPanels.Count == 0)
+        {
+            InstrumentPanels.Add(new InstrumentPanelDefinition
+            {
+                Id = "instruments-main",
+                Name = UnmaText.Get(
+                    "default.main_instrument_panel",
+                    "MAIN INSTRUMENT PANEL"),
+            });
+        }
+        var defaultInstrumentPanelId = InstrumentPanels[0].Id;
+
+        Instruments.RemoveAll(item =>
+            item == null || string.IsNullOrWhiteSpace(item.MetricPath));
+        foreach (var instrument in Instruments)
+        {
+            instrument.Id = string.IsNullOrWhiteSpace(instrument.Id)
+                ? Guid.NewGuid().ToString("N")
+                : instrument.Id.Trim();
+            instrument.Title = string.IsNullOrWhiteSpace(instrument.Title)
+                ? UnmaText.Get("default.measurement", "MEASUREMENT")
+                : instrument.Title.Trim();
+            instrument.EntityTitle = instrument.EntityTitle?.Trim() ?? "";
+            instrument.EntityPrototypeId =
+                instrument.EntityPrototypeId?.Trim() ?? "";
+            instrument.MetricPath = instrument.MetricPath.Trim();
+            instrument.MetricLabel = instrument.MetricLabel?.Trim() ?? "";
+            instrument.Unit = instrument.Unit?.Trim() ?? "";
+            instrument.PanelId = instrument.PanelId?.Trim() ?? "";
+            instrument.Sources ??= new List<InstrumentSourceDefinition>();
+            var matchingLegacySource = instrument.Sources.FirstOrDefault(
+                source => source != null &&
+                          source.EntityId == instrument.EntityId);
+            if (loadedSchemaVersion < 16 &&
+                instrument.Sources.Count == 0 &&
+                instrument.EntityId > 0)
+            {
+                instrument.Sources.Insert(0, new InstrumentSourceDefinition
+                {
+                    EntityId = instrument.EntityId,
+                    EntityTitle = instrument.EntityTitle,
+                    EntityPrototypeId = instrument.EntityPrototypeId,
+                });
+            }
+            else if (matchingLegacySource != null)
+            {
+                if (string.IsNullOrWhiteSpace(matchingLegacySource.EntityTitle))
+                {
+                    matchingLegacySource.EntityTitle = instrument.EntityTitle;
+                }
+                if (string.IsNullOrWhiteSpace(
+                        matchingLegacySource.EntityPrototypeId))
+                {
+                    matchingLegacySource.EntityPrototypeId =
+                        instrument.EntityPrototypeId;
+                }
+            }
+            instrument.Sources.RemoveAll(source =>
+                source == null || source.EntityId <= 0);
+            foreach (var source in instrument.Sources)
+            {
+                source.EntityTitle = source.EntityTitle?.Trim() ?? "";
+                source.EntityPrototypeId =
+                    source.EntityPrototypeId?.Trim() ?? "";
+            }
+            instrument.Sources = instrument.Sources
+                .GroupBy(source => source.EntityId)
+                .Select(group => group.First())
+                .ToList();
+            if (instrument.Sources.Count > 0)
+            {
+                var primarySource = instrument.Sources[0];
+                instrument.EntityId = primarySource.EntityId;
+                instrument.EntityPrototypeId =
+                    primarySource.EntityPrototypeId;
+                if (instrument.Sources.Count == 1)
+                {
+                    instrument.EntityTitle = primarySource.EntityTitle;
+                }
+                else if (string.IsNullOrWhiteSpace(instrument.EntityTitle))
+                {
+                    instrument.EntityTitle =
+                        UnmaText.Format(
+                            "default.source_count",
+                            "{0} SOURCES",
+                            instrument.Sources.Count);
+                }
+            }
+            if (!Enum.IsDefined(
+                    typeof(InstrumentAggregationMode),
+                    instrument.Aggregation))
+            {
+                instrument.Aggregation = InstrumentAggregationMode.Single;
+            }
+            instrument.HistoryDurationSeconds = Math.Max(
+                60,
+                Math.Min(86400, instrument.HistoryDurationSeconds <= 0
+                    ? 3600
+                    : instrument.HistoryDurationSeconds));
+            if (loadedSchemaVersion < 17)
+            {
+                GameTimeWindowPolicy.FromLegacyRealSeconds(
+                    instrument.HistoryDurationSeconds,
+                    out instrument.HistoryDurationAmount,
+                    out instrument.HistoryDurationUnit);
+            }
+            if (!Enum.IsDefined(
+                    typeof(GameTimeUnit),
+                    instrument.HistoryDurationUnit))
+            {
+                instrument.HistoryDurationUnit = GameTimeUnit.Year;
+            }
+            // Recorder archives are deliberately retained for the complete
+            // century range offered by the archive UI.
+            instrument.HistoryDurationAmount = 100;
+            instrument.HistoryDurationUnit = GameTimeUnit.Year;
+            if (!InstrumentPanels.Any(panel => string.Equals(
+                    panel.Id,
+                    instrument.PanelId,
+                    StringComparison.Ordinal)))
+            {
+                instrument.PanelId = defaultInstrumentPanelId;
+            }
+            if (!Enum.IsDefined(
+                    typeof(InstrumentDisplayType),
+                    instrument.DisplayType))
+            {
+                instrument.DisplayType = InstrumentDisplayType.RoundGauge;
+            }
+            if (double.IsNaN(instrument.Minimum) ||
+                double.IsInfinity(instrument.Minimum))
+            {
+                instrument.Minimum = 0d;
+            }
+            if (double.IsNaN(instrument.Maximum) ||
+                double.IsInfinity(instrument.Maximum) ||
+                instrument.Maximum <= instrument.Minimum)
+            {
+                instrument.Maximum = instrument.Minimum + 100d;
+            }
+        }
+        Instruments.RemoveAll(item => item.Sources.Count == 0);
+        Instruments = Instruments
+            .GroupBy(item => item.Id, StringComparer.Ordinal)
             .Select(group => group.Last())
             .ToList();
 
@@ -682,7 +1018,7 @@ public sealed class UnmaConfiguration
                 legacyOverride.IsGloballyDisabled = false;
             }
         }
-        SchemaVersion = Math.Max(SchemaVersion, 13);
+        SchemaVersion = Math.Max(SchemaVersion, 17);
     }
 
     private static float NormalizeFinite(float value, float fallback)
@@ -759,7 +1095,7 @@ public sealed class UnmaConfiguration
         {
             slot.AlarmId = slot.AlarmId.Trim();
             slot.DisplayName = string.IsNullOrWhiteSpace(slot.DisplayName)
-                ? "MELDUNG"
+                ? UnmaText.Get("default.notification", "NOTIFICATION")
                 : slot.DisplayName.Trim();
             slot.Detail ??= "";
             slot.Source ??= "";
@@ -1067,7 +1403,9 @@ public sealed class UnmaConfiguration
         {
             AlarmId = alarm.Id,
             DisplayName = alarm.DisplayName,
-            Detail = "Systemmeldung",
+            Detail = UnmaText.Get(
+                "alarm.detail.system_notification",
+                "System notification"),
             Source = "system",
             Severity = stage?.Severity ?? AlarmSeverity.Warning,
             ActiveColor = stage?.ActiveColor ?? "auto",

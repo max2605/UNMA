@@ -28,18 +28,18 @@ public sealed class UnmaAudioController : MonoBehaviour
 {
     private const int SampleRate = 44100;
 
-    private static readonly SoundOption[] s_builtinOptions =
+    private static readonly BuiltInSoundOptionDefinition[] s_builtinOptions =
     {
-        new("auto", UnmaText.Get("auto.d5a4cc78ecf9")),
-        new("none", UnmaText.Get("auto.767bc310bb61")),
-        new("bell", "Klingel"),
-        new("horn", "Industriehorn"),
-        new("siren", UnmaText.Get("auto.93380f165444")),
-        new("sine", UnmaText.Get("auto.9a71304036e6")),
-        new("square", UnmaText.Get("auto.5b658f11c96e")),
-        new("saw", UnmaText.Get("auto.2d9aead140a0")),
-        new("triangle", UnmaText.Get("auto.70934afb18eb")),
-        new("pulse", UnmaText.Get("auto.fc3524d5baee")),
+        new("auto", "sounds.builtin.auto", "Automatic by severity"),
+        new("none", "sounds.builtin.none", "No sound"),
+        new("bell", "sounds.builtin.bell", "Mechanical bell"),
+        new("horn", "sounds.builtin.horn", "Industrial horn"),
+        new("siren", "sounds.builtin.siren", "E57 motor siren · 2 s up / 2 s down"),
+        new("sine", "sounds.builtin.oscillator.sine", "Oscillator · Sine"),
+        new("square", "sounds.builtin.oscillator.square", "Oscillator · Square"),
+        new("saw", "sounds.builtin.oscillator.sawtooth", "Oscillator · Sawtooth"),
+        new("triangle", "sounds.builtin.oscillator.triangle", "Oscillator · Triangle"),
+        new("pulse", "sounds.builtin.oscillator.pulse", "Oscillator · Pulse"),
     };
 
     private readonly Dictionary<string, AudioClip> m_clips =
@@ -114,7 +114,12 @@ public sealed class UnmaAudioController : MonoBehaviour
         }
 
         m_soundOptions.Clear();
-        m_soundOptions.AddRange(s_builtinOptions);
+        foreach (var option in s_builtinOptions)
+        {
+            m_soundOptions.Add(new SoundOption(
+                option.Id,
+                UnmaText.Get(option.LabelKey, option.LabelFallback)));
+        }
         m_failedCustomSounds.Clear();
         if (!Directory.Exists(m_soundsDirectory))
         {
@@ -599,5 +604,22 @@ public sealed class UnmaAudioController : MonoBehaviour
         Saw,
         Triangle,
         Pulse,
+    }
+
+    private sealed class BuiltInSoundOptionDefinition
+    {
+        public string Id { get; }
+        public string LabelKey { get; }
+        public string LabelFallback { get; }
+
+        public BuiltInSoundOptionDefinition(
+            string id,
+            string labelKey,
+            string labelFallback)
+        {
+            Id = id;
+            LabelKey = labelKey;
+            LabelFallback = labelFallback;
+        }
     }
 }

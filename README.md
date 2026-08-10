@@ -1,6 +1,7 @@
 # UNMA – Universelle Nachrichten-Meldeanlage
 
-**English documentation:** [UNMA User Guide](USER_GUIDE_EN.md)
+**Benutzeranleitung:** [Deutsch](USER_GUIDE_DE.md) ·
+[English](USER_GUIDE_EN.md)
 
 UNMA ergänzt Captain of Industry um eine frei konfigurierbare industrielle
 Schlitzmelder-Tafel. Das Vorbild ist die klassische Meldeanlage: im Ruhezustand
@@ -84,6 +85,11 @@ Zielversion: Captain of Industry **0.8.6c**.
 - MultiLangLib-Grundanbindung für die UNMA-Fensterhülle und alle Providertexte. In Definitionen
   bleiben stabile Übersetzungsschlüssel gespeichert; ein verpflichtender
   Fallback verhindert sichtbare Schlüssel bei fehlenden Sprachdateien.
+- Hauptfenster, Meldungseditor und abgekoppelte Tafeln nutzen CoIs öffentliche
+  native UI-Bibliothek für Metallrahmen, Titelleiste, Verschieben, Pinning,
+  Schließen und Größenänderung per Ziehgriff. Das Hauptfenster ergänzt native
+  Tabs und **MINIMIEREN**. Die umfangreichen UNMA-Instrumente bleiben bei einer
+  inkompatiblen Spielversion über einen automatischen Fallback erreichbar.
 - Typisierte Produktmengen für Lager, Förderbänder/Rohre sowie Frachten von
   Trucks, Baggern, Tree Plantern, Tree Harvestern und Güterwaggons.
 - Mehrere Bedingungen pro Sammelmeldung mit UND- oder ODER-Verknüpfung.
@@ -102,8 +108,9 @@ Zielversion: Captain of Industry **0.8.6c**.
   Suchfiltern. Neu entdeckte passende Meldungsarten werden einmalig hinten
   angehängt und verschieben vorhandene Plätze nicht.
 - Persistente UI-Skalierung von 75 bis 200 Prozent für 1080p- und 4K-Monitore.
-  Klicks, Drags und Mausradbewegungen innerhalb sämtlicher UNMA-Fenster werden
-  nicht an Welt-Auswahl oder Kamera im Hintergrund weitergereicht.
+  Klicks, Drags und Mausradbewegungen werden nur innerhalb der sichtbaren
+  UNMA-Rahmen abgefangen. Außerhalb bleiben Gebäudeauswahl, Kartenbewegung und
+  Zoom auch bei geöffnetem UNMA-Fenster verfügbar.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
@@ -180,6 +187,32 @@ vergleichbaren Wert als `Istwert / Bezugswert × 100`. Ein fehlender, null oder
 negativer Bezugswert erfüllt die Bedingung bewusst nicht und wird als nicht
 berechenbar angezeigt; Werte über 100 % werden nicht künstlich begrenzt.
 
+## Messpult im Kraftwerksstil der 1970er
+
+Die Registerkarte **MESSPULT** zeigt frei zusammengestellte Live-Messwerte
+unabhängig von den Alarmregeln. Öffne zuerst den Inspector eines Gebäudes,
+übernimm es als Quelle und wähle anschließend Messwert, Skalenbereich und
+Instrumenttyp. Mehrere Kohlelager lassen sich entweder als eigene Instrumente
+dicht nebeneinander anordnen oder als berechnete Summe, Mittelwert, Minimum
+beziehungsweise Maximum in einem gemeinsamen Instrument überwachen.
+
+Mit **+ PANEL** lassen sich mehrere benannte Messpulte anlegen. Die
+Instrumenttyp-Auswahl öffnet eine scrollbare Galerie mit Live-Vorschau.
+Schreiber und CRTs führen eine kontinuierlich verbundene Kurve.
+
+Zur Verfügung stehen vertikale und horizontale Profilanzeigen,
+Rundinstrumente, rote und grüne Siebensegmentanzeigen, Nixie-Röhren,
+bernsteinfarbene und grüne CRT-Anzeigen sowie ein Papierschreiber. Sein
+**ARCHIV** öffnet eine große Historienansicht mit mehreren Zeitfenstern;
+**MELD.** öffnet direkte und berechnete Messwerte als Quelle
+**VERKNÜPFTE WERTE: Schildname**. Weitere Werte desselben Messpults lassen sich
+als Bedingungen ergänzen. Der dritte Quellenbutton **INSTRUMENT** und eine
+verpflichtende Mehrfachauswahl legen pro Instrumentmeldung fest, auf welchen
+Panels sie erscheint. Zeitbedingungen erkennen Rückgang oder Zunahme als Betrag/Prozent
+und können einen Vergleich über Spieltage bis Jahrhunderte halten. Alle
+Instrumente werden weltbezogen gespeichert; der Pfeil am Instrument springt
+zur ersten überwachten Quelle.
+
 ## API für andere Mods
 
 UNMA lädt ausschließlich Definitionen tatsächlich aktiver Mods aus
@@ -222,7 +255,7 @@ oder Dateien mit einer Lizenz, die Weitergabe und Nutzung erlaubt.
 - Vanilla- und Systemmeldungen besitzen eigene feste Auswertungsmodelle und
   nehmen deshalb keine Entity-Bedingungen direkt auf. Zum Verknüpfen wird eine
   eigene Meldung beziehungsweise das freie Plus-Karree verwendet.
-- Abgekoppelte Panels bleiben innerhalb des Hauptfensters. Die offizielle
+- Abgekoppelte Panels bleiben innerhalb der Spieloberfläche. Die offizielle
   Mod-API stellt keine beliebig verschiebbaren nativen Betriebssystemfenster
   für Monitor 2, 3 usw. bereit. Das wäre ein separates Companion-Projekt mit
   IPC und eigener Sicherheits-/Kompatibilitätsprüfung.

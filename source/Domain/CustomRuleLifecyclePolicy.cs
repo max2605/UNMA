@@ -52,6 +52,7 @@ public static class CustomRuleLifecyclePolicy
                 (rule.Conditions ?? new List<ConditionDefinition>()).Any(
                     condition =>
                         condition != null &&
+                        string.IsNullOrWhiteSpace(condition.InstrumentId) &&
                         removedEntityIds.Contains(condition.EntityId)))
             .Select(rule => rule.Id)
             .Distinct(StringComparer.Ordinal)

@@ -131,6 +131,22 @@ public static class VanillaNotificationSuppressionPolicy
         return best?.Behavior ?? VanillaNotificationBehavior.Normal;
     }
 
+    public static bool IsHiddenFromPanel(
+        VanillaNotificationBehavior behavior,
+        bool isEntityPanel,
+        bool belongsToEntityPanel)
+    {
+        if (behavior == VanillaNotificationBehavior.Ignored)
+        {
+            return true;
+        }
+        if (behavior != VanillaNotificationBehavior.Hidden)
+        {
+            return false;
+        }
+        return !isEntityPanel || !belongsToEntityPanel;
+    }
+
     public static string RuleIdentity(VanillaNotificationRule rule)
     {
         if (rule == null)

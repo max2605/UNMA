@@ -8,43 +8,79 @@ namespace UNMA.Runtime;
 public sealed class SystemMetricDescriptor
 {
     public string Id { get; }
-    public string Label { get; }
-    public string Unit { get; }
+    public string LabelKey { get; }
+    public string LabelFallback { get; }
+    public string UnitKey { get; }
+    public string UnitFallback { get; }
+
+    public string Label => string.IsNullOrWhiteSpace(LabelKey)
+        ? LabelFallback
+        : UnmaText.Get(LabelKey, LabelFallback);
+
+    public string Unit => string.IsNullOrWhiteSpace(UnitKey)
+        ? UnitFallback
+        : UnmaText.Get(UnitKey, UnitFallback);
 
     public SystemMetricDescriptor(string id, string label, string unit)
     {
         Id = id;
-        Label = label;
-        Unit = unit;
+        LabelKey = "";
+        LabelFallback = label ?? "";
+        UnitKey = "";
+        UnitFallback = unit ?? "";
+    }
+
+    public SystemMetricDescriptor(
+        string id,
+        string labelKey,
+        string labelFallback,
+        string unitKey,
+        string unitFallback)
+    {
+        Id = id;
+        LabelKey = labelKey;
+        LabelFallback = labelFallback ?? "";
+        UnitKey = unitKey;
+        UnitFallback = unitFallback ?? "";
     }
 }
 
 public static class SystemMetricCatalog
 {
     public const string RulePathPrefix = "$global:";
+    public const string ProductStoredPrefix = "product.stored.";
+    public const string ProductCapacityPrefix = "product.capacity.";
+    public const string ProductFillPrefix = "product.fill.";
+    public const string MaintenanceQuantityPrefix = "maintenance.quantity.";
+    public const string MaintenanceCapacityPrefix = "maintenance.capacity.";
+    public const string MaintenanceFillPrefix = "maintenance.fill.";
+    public const string MaintenanceDeltaPrefix = "maintenance.delta_month.";
+    public const string MaintenanceNeededPrefix = "maintenance.needed_month.";
+    public const string MaintenanceNeededMaxPrefix =
+        "maintenance.needed_month_max.";
 
     private static readonly SystemMetricDescriptor[] s_metrics =
     {
-        new("health.value", UnmaText.Get("auto.52dcc85d63dc"), "Punkte"),
-        new("health.disease_penalty", "Krankheitsbeitrag", "Punkte"),
-        new("health.disease_mortality", UnmaText.Get("auto.791877a44fa5"), "%/Monat"),
-        new("health.pollution_penalty", "Pollution/Müll-Beitrag", "Punkte"),
-        new("health.structural_value", UnmaText.Get("auto.560f43bd0469"), "Punkte"),
-        new("health.expected_loss", UnmaText.Get("auto.9a26434dac89"), "Pops/Monat"),
-        new("health.lost_last_month", UnmaText.Get("auto.d52de2e797c1"), "Pops/Monat"),
-        new("health.disease_active", UnmaText.Get("auto.763c03e8c35e"), "0/1"),
-        new("health.disease_months_left", "Krankheits-Restdauer", "Monate"),
-        new("health.worker_buffer_months", UnmaText.Get("auto.8475ec6651d6"), "Monate"),
-        new("health.worker_spiral_margin", UnmaText.Get("auto.27ded4bdf9b8"), "Monate"),
-        new("workers.reserve_percent", "Arbeitsreserve", UnmaText.Get("auto.ad2e3884096f")),
-        new("workers.free_or_missing", UnmaText.Get("auto.ffd0f617865d"), "Arbeiter"),
-        new("workers.missing", UnmaText.Get("auto.c00320b60ba7"), "Arbeiter"),
-        new("food.months", "Nahrungsvorrat", "Monate"),
-        new("food.starving", UnmaText.Get("auto.68c2093510ec"), "0/1"),
-        new("food.starved_last_month", "Verhungert", "Pops/Monat"),
-        new("food.spiral", UnmaText.Get("auto.1d29292a2ba9"), "0/1"),
-        new("population.net_change_percent", UnmaText.Get("auto.2004ff123977"), "%/Monat"),
-        new("population.total", UnmaText.Get("auto.51189f33cea8"), "Pops"),
+        Metric("health.value", "system_metric.health.value.label", "Health last month", "unit.points", "points"),
+        Metric("health.disease_penalty", "system_metric.health.disease_penalty.label", "Disease contribution", "unit.points", "points"),
+        Metric("health.disease_mortality", "system_metric.health.disease_mortality.label", "Effective disease mortality", "unit.percent_per_month", "%/month"),
+        Metric("health.pollution_penalty", "system_metric.health.pollution_penalty.label", "Pollution / waste contribution", "unit.points", "points"),
+        Metric("health.structural_value", "system_metric.health.structural_value.label", "Health without disease", "unit.points", "points"),
+        Metric("health.expected_loss", "system_metric.health.expected_loss.label", "Expected net population loss", "unit.population_per_month", "population/month"),
+        Metric("health.lost_last_month", "system_metric.health.lost_last_month.label", "Lost population", "unit.population_per_month", "population/month"),
+        Metric("health.disease_active", "system_metric.health.disease_active.label", "Disease active", "unit.boolean", "0/1"),
+        Metric("health.disease_months_left", "system_metric.health.disease_months_left.label", "Remaining disease duration", "unit.months", "months"),
+        Metric("health.worker_buffer_months", "system_metric.health.worker_buffer_months.label", "Worker reserve until failure", "unit.months", "months"),
+        Metric("health.worker_spiral_margin", "system_metric.health.worker_spiral_margin.label", "Buffer above disease horizon", "unit.months", "months"),
+        Metric("workers.reserve_percent", "system_metric.workers.reserve_percent.label", "Worker reserve", "unit.percent_of_population", "% of population"),
+        Metric("workers.free_or_missing", "system_metric.workers.free_or_missing.label", "Free / missing workers", "unit.workers", "workers"),
+        Metric("workers.missing", "system_metric.workers.missing.label", "Missing workers", "unit.workers", "workers"),
+        Metric("food.months", "system_metric.food.months.label", "Food supply", "unit.months", "months"),
+        Metric("food.starving", "system_metric.food.starving.label", "Population is starving", "unit.boolean", "0/1"),
+        Metric("food.starved_last_month", "system_metric.food.starved_last_month.label", "Starved population", "unit.population_per_month", "population/month"),
+        Metric("food.spiral", "system_metric.food.spiral.label", "Active starvation death spiral", "unit.boolean", "0/1"),
+        Metric("population.net_change_percent", "system_metric.population.net_change_percent.label", "Net population change without starvation", "unit.percent_per_month", "%/month"),
+        Metric("population.total", "system_metric.population.total.label", "Population", "unit.population", "population"),
     };
 
     public static IReadOnlyList<SystemMetricDescriptor> All => s_metrics;
@@ -79,6 +115,42 @@ public static class SystemMetricCatalog
         }
         metricId = path.Substring(RulePathPrefix.Length).Trim();
         return metricId.Length > 0;
+    }
+
+    public static string ProductStoredId(string productId) =>
+        DynamicId(ProductStoredPrefix, productId);
+
+    public static string ProductCapacityId(string productId) =>
+        DynamicId(ProductCapacityPrefix, productId);
+
+    public static string ProductFillId(string productId) =>
+        DynamicId(ProductFillPrefix, productId);
+
+    public static string MaintenanceQuantityId(string productId) =>
+        DynamicId(MaintenanceQuantityPrefix, productId);
+
+    public static string MaintenanceCapacityId(string productId) =>
+        DynamicId(MaintenanceCapacityPrefix, productId);
+
+    public static string MaintenanceFillId(string productId) =>
+        DynamicId(MaintenanceFillPrefix, productId);
+
+    public static string MaintenanceDeltaId(string productId) =>
+        DynamicId(MaintenanceDeltaPrefix, productId);
+
+    public static string MaintenanceNeededId(string productId) =>
+        DynamicId(MaintenanceNeededPrefix, productId);
+
+    public static string MaintenanceNeededMaxId(string productId) =>
+        DynamicId(MaintenanceNeededMaxPrefix, productId);
+
+    public static double CalculateFillPercent(
+        double quantity,
+        double capacity)
+    {
+        return capacity <= 0d
+            ? 0d
+            : Math.Max(0d, Math.Min(100d, 100d * quantity / capacity));
     }
 
     public static double CalculateWorkerReservePercent(
@@ -160,5 +232,25 @@ public static class SystemMetricCatalog
         return metric == null
             ? metricId ?? UnmaText.Get("auto.2dac0d52e948")
             : metric.Label + " [" + metric.Unit + "]";
+    }
+
+    private static SystemMetricDescriptor Metric(
+        string id,
+        string labelKey,
+        string labelFallback,
+        string unitKey,
+        string unitFallback)
+    {
+        return new SystemMetricDescriptor(
+            id,
+            labelKey,
+            labelFallback,
+            unitKey,
+            unitFallback);
+    }
+
+    private static string DynamicId(string prefix, string productId)
+    {
+        return prefix + (productId ?? "").Trim();
     }
 }
