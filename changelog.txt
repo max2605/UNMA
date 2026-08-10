@@ -1,3 +1,12 @@
+v0.9.23 | 2026-08-10
+Escalation and operator attention
+* Added one-shot, game-time custom-alarm escalation to a strictly higher severity with an optional inherited or explicit sound.
+* Started a new alarm occurrence on escalation so acknowledgement and occurrence-bound audio snooze reset correctly.
+* Added safe operator actions to custom escalation and system-stage transitions.
+* Limited actions to opening and scrolling the matching UNMA panel, with an option to end only the temporary five-minute mute.
+* Added a bounded, deterministic attention queue with exact occurrence pruning and no camera, machine, global-audio, or per-slot-snooze mutation.
+* Migrated schema 19 with disabled defaults while preserving all schema-18 timing memories.
+
 v0.9.22 | 2026-08-10
 Alarm timing
 * Added per-rule and per-system-stage activation delay, reset delay, and minimum active time on the COI game calendar.

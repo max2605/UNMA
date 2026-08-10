@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.22** und
+Diese Anleitung gilt für **UNMA 0.9.23** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -303,6 +303,26 @@ Timer und Hystereselatches werden je Welt gespeichert und nach dem Laden
 fortgesetzt. Trendbedingungen für Zunahme oder Abnahme verwenden bewusst keine
 Hysterese.
 
+### Eskalation und Operator-Aufmerksamkeit
+
+**ESKALATION** wird für eine eigene Regel aktiviert, wenn eine weiterhin aktive
+Meldung nach einer gewählten Spielzeit auf eine strikt höhere Alarmstufe
+angehoben werden soll. Dafür kann ein eigener Ton gewählt oder mit
+**GRUNDTON ÜBERNEHMEN** der bisherige Ton beibehalten werden. Die Eskalation
+beginnt eine neue Meldungsfolge: Sie verlangt erneut eine Quittierung und
+übernimmt keine folgengebundene Tonpause des vorherigen Zustands.
+
+Die optionale Operatoraktion öffnet das passende UNMA-Panel und scrollt zur
+Meldung. Eine zweite Variante beendet zusätzlich ausschließlich die
+vorübergehende Fünf-Minuten-Stummschaltung von UNMA. Sie bewegt nie die Kamera,
+öffnet keinen Objektinspektor, ändert weder globale Audioeinstellung noch
+Schlitz-Tonpause, quittiert nichts und steuert keine Maschine.
+
+Systemalarmstufen bieten dieselben Aktionen. Sie werden nur ausgeführt, wenn
+ein bereits aktiver Systemalarm in eine neue Stufe wechselt, nicht bei seiner
+Erstaktivierung. Für eine gestufte Eskalation wird eine niedrige Sofortstufe
+mit einer höheren, auslöseverzögerten Stufe kombiniert.
+
 ### Regeln mit mehreren Bedingungen oder Objekten
 
 Nach dem Hinzufügen der ersten Zeile kann außerhalb des Editors ein anderes
@@ -373,10 +393,10 @@ Der Tab **SYSTEM** enthält die eingebaute Überwachung für Gesundheit, Nahrung
 und Arbeiter. Jede Systemmeldung kann aktiviert, vollständig bearbeitet oder
 auf ihre Werkvorgabe zurückgesetzt werden. Die Stufen enthalten Messwert,
 Operator, Schwelle, Hysterese, Auslöse- und Rücksetzverzögerung,
-Mindestaktivzeit, Alarmstufe, Farbe und Ton. Jede Stufe wird unabhängig
-zeitlich ausgewertet; anschließend zeigt UNMA die höchste passende Alarmstufe
-und Priorität. Das Zurücksetzen auf Werkvorgabe muss durch einen zweiten Druck
-bestätigt werden.
+Mindestaktivzeit, Alarmstufe, Farbe, Ton und eine optionale Operatoraktion.
+Jede Stufe wird unabhängig zeitlich ausgewertet; anschließend zeigt UNMA die
+höchste passende Alarmstufe und Priorität. Das Zurücksetzen auf Werkvorgabe muss
+durch einen zweiten Druck bestätigt werden.
 
 Der Gesundheitswert des Spiels ist keine klassische 0–100-Prozent-Skala. `10`
 ist der neutrale Basiswert; ein gesundheitsbedingter Bevölkerungsverlust beginnt

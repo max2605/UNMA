@@ -24,7 +24,10 @@ internal static class Program
         TestBooleanLogic();
         TestAlarmLatch();
         TestAlarmTimingPolicy();
+        TestAlarmEscalationPolicy();
+        TestAlarmAttentionQueuePolicy();
         TestAlarmTimingModelNormalization();
+        TestAlarmEscalationModelNormalization();
         TestAlarmTimingMemoryPolicy();
         TestAlarmAudioSnoozePolicy();
         TestSustainedVanillaAlarmPolicy();
@@ -706,6 +709,498 @@ internal static class Program
         IsTrue(clampedTick.IsActive);
     }
 
+    private static void TestAlarmEscalationPolicy()
+    {
+        var defaults = new AlarmEscalationDefinition();
+        IsFalse(defaults.Enabled);
+        AreEqual(0, defaults.AfterTicks);
+        AreEqual(AlarmSeverity.Critical, defaults.Severity);
+        AreEqual("", defaults.SoundId);
+        AreEqual(AlarmOperatorAction.None, defaults.OperatorAction);
+
+        var legacyOne = AlarmEscalationPolicy.LegacyMigrationDefaults;
+        var legacyTwo = AlarmEscalationPolicy.LegacyMigrationDefaults;
+        IsFalse(ReferenceEquals(legacyOne, legacyTwo));
+        IsFalse(legacyOne.Enabled);
+
+        var definition = new AlarmEscalationDefinition
+        {
+            Enabled = true,
+            AfterTicks = 10,
+            Severity = AlarmSeverity.Critical,
+            SoundId = "",
+            OperatorAction = AlarmOperatorAction.OpenPanel,
+        };
+        var clone = AlarmEscalationPolicy.Clone(definition);
+        IsFalse(ReferenceEquals(definition, clone));
+        AreEqual(definition.Enabled, clone.Enabled);
+        AreEqual(definition.AfterTicks, clone.AfterTicks);
+        AreEqual(definition.Severity, clone.Severity);
+        AreEqual(definition.SoundId, clone.SoundId);
+        AreEqual(definition.OperatorAction, clone.OperatorAction);
+        IsFalse(AlarmEscalationPolicy.Clone(null).Enabled);
+
+        var normalized = AlarmEscalationPolicy.Normalize(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = int.MaxValue,
+                Severity = AlarmSeverity.Emergency,
+                SoundId = " auto ",
+                OperatorAction =
+                    AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            },
+            AlarmSeverity.Warning);
+        IsTrue(normalized.Enabled);
+        AreEqual(
+            AlarmTimingPolicy.MaximumTimingTicks,
+            normalized.AfterTicks);
+        AreEqual(AlarmSeverity.Emergency, normalized.Severity);
+        AreEqual("auto", normalized.SoundId);
+        AreEqual(
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            normalized.OperatorAction);
+
+        var negativeDelay = AlarmEscalationPolicy.Normalize(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = -1,
+                Severity = AlarmSeverity.Critical,
+            },
+            AlarmSeverity.Warning);
+        IsFalse(negativeDelay.Enabled);
+        AreEqual(0, negativeDelay.AfterTicks);
+
+        var nonIncreasing = AlarmEscalationPolicy.Normalize(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 1,
+                Severity = AlarmSeverity.Warning,
+            },
+            AlarmSeverity.Warning);
+        IsFalse(nonIncreasing.Enabled);
+
+        var malformedTarget = AlarmEscalationPolicy.Normalize(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 1,
+                Severity = (AlarmSeverity)999,
+            },
+            AlarmSeverity.Warning);
+        IsFalse(malformedTarget.Enabled);
+        AreEqual(AlarmSeverity.Critical, malformedTarget.Severity);
+
+        var emergencyBase = AlarmEscalationPolicy.Normalize(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 1,
+                Severity = AlarmSeverity.Emergency,
+            },
+            AlarmSeverity.Emergency);
+        IsFalse(emergencyBase.Enabled);
+
+        var malformedAction = AlarmEscalationPolicy.Normalize(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 1,
+                Severity = AlarmSeverity.Critical,
+                OperatorAction = (AlarmOperatorAction)999,
+            },
+            AlarmSeverity.Warning);
+        IsTrue(malformedAction.Enabled);
+        AreEqual(AlarmOperatorAction.None, malformedAction.OperatorAction);
+        AreEqual(
+            AlarmOperatorAction.None,
+            AlarmEscalationPolicy.NormalizeOperatorAction(
+                (AlarmOperatorAction)(-1)));
+
+        var inactive = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: false,
+            isAlarmActive: false,
+            activeSinceGameTick: 100,
+            currentGameTick: 110);
+        IsFalse(inactive.IsEscalated);
+        IsFalse(inactive.JustEscalated);
+        AreEqual(AlarmSeverity.Warning, inactive.Severity);
+        AreEqual("horn", inactive.SoundId);
+        AreEqual(AlarmOperatorAction.None, inactive.OperatorAction);
+
+        for (var tick = 100L; tick < 110L; tick++)
+        {
+            var pending = AlarmEscalationPolicy.Evaluate(
+                definition,
+                AlarmSeverity.Warning,
+                "horn",
+                wasEscalated: false,
+                isAlarmActive: true,
+                activeSinceGameTick: 100,
+                currentGameTick: tick);
+            IsFalse(pending.IsEscalated);
+            AreEqual(AlarmSeverity.Warning, pending.Severity);
+        }
+
+        var exact = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: false,
+            isAlarmActive: true,
+            activeSinceGameTick: 100,
+            currentGameTick: 110);
+        IsTrue(exact.IsEscalated);
+        IsTrue(exact.JustEscalated);
+        AreEqual(AlarmSeverity.Critical, exact.Severity);
+        AreEqual("horn", exact.SoundId);
+        AreEqual(AlarmOperatorAction.OpenPanel, exact.OperatorAction);
+
+        var repeated = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: exact.IsEscalated,
+            isAlarmActive: true,
+            activeSinceGameTick: 100,
+            currentGameTick: 110);
+        IsTrue(repeated.IsEscalated);
+        IsFalse(repeated.JustEscalated);
+        AreEqual(AlarmOperatorAction.None, repeated.OperatorAction);
+
+        var stickyAcrossRollback = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: true,
+            isAlarmActive: true,
+            activeSinceGameTick: 100,
+            currentGameTick: 50);
+        IsTrue(stickyAcrossRollback.IsEscalated);
+        IsFalse(stickyAcrossRollback.JustEscalated);
+
+        var pendingAcrossRollback = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: false,
+            isAlarmActive: true,
+            activeSinceGameTick: 100,
+            currentGameTick: 50);
+        IsFalse(pendingAcrossRollback.IsEscalated);
+        var missingStart = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: false,
+            isAlarmActive: true,
+            activeSinceGameTick: AlarmTimingState.NoTick,
+            currentGameTick: long.MaxValue);
+        IsFalse(missingStart.IsEscalated);
+
+        var nearMaximum = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "horn",
+            wasEscalated: false,
+            isAlarmActive: true,
+            activeSinceGameTick: long.MaxValue - 10,
+            currentGameTick: long.MaxValue);
+        IsTrue(nearMaximum.IsEscalated);
+
+        var explicitSound = AlarmEscalationPolicy.Evaluate(
+            new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 1,
+                Severity = AlarmSeverity.Emergency,
+                SoundId = " auto ",
+                OperatorAction =
+                    AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            },
+            AlarmSeverity.Critical,
+            "bell",
+            wasEscalated: false,
+            isAlarmActive: true,
+            activeSinceGameTick: 0,
+            currentGameTick: 1);
+        IsTrue(explicitSound.JustEscalated);
+        AreEqual("auto", explicitSound.SoundId);
+        AreEqual(
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            explicitSound.OperatorAction);
+
+        var blankBaseSound = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            " ",
+            wasEscalated: false,
+            isAlarmActive: true,
+            activeSinceGameTick: 0,
+            currentGameTick: 0);
+        AreEqual("auto", blankBaseSound.SoundId);
+
+        var disabledClearsLatch = AlarmEscalationPolicy.Evaluate(
+            new AlarmEscalationDefinition(),
+            AlarmSeverity.Warning,
+            "bell",
+            wasEscalated: true,
+            isAlarmActive: true,
+            activeSinceGameTick: 0,
+            currentGameTick: 100);
+        IsFalse(disabledClearsLatch.IsEscalated);
+        var clearResetsLatch = AlarmEscalationPolicy.Evaluate(
+            definition,
+            AlarmSeverity.Warning,
+            "bell",
+            wasEscalated: true,
+            isAlarmActive: false,
+            activeSinceGameTick: 0,
+            currentGameTick: 100);
+        IsFalse(clearResetsLatch.IsEscalated);
+
+        AreEqual(
+            "rule-7",
+            AlarmEscalationPolicy.GetOccurrenceId(
+                " rule-7 ",
+                isEscalated: false));
+        AreEqual(
+            "rule-7:escalated",
+            AlarmEscalationPolicy.GetOccurrenceId(
+                " rule-7 ",
+                isEscalated: true));
+        IsTrue(AlarmEscalationPolicy.IsEscalatedOccurrenceId(
+            "rule-7",
+            " rule-7:escalated "));
+        IsFalse(AlarmEscalationPolicy.IsEscalatedOccurrenceId(
+            "rule-7",
+            "rule-7"));
+
+        var firstOccurrence = AlarmEvaluation.Transition(
+            wasActive: false,
+            wasAcknowledged: false,
+            wasGoneUnacknowledged: false,
+            previousSeverity: AlarmSeverity.Warning,
+            isActive: true,
+            severity: AlarmSeverity.Warning,
+            autoAcknowledgeOnClear: false);
+        IsTrue(firstOccurrence.IsNewOccurrence);
+        var escalationOccurrence = AlarmEvaluation.Transition(
+            wasActive: true,
+            wasAcknowledged: true,
+            wasGoneUnacknowledged: false,
+            previousSeverity: AlarmSeverity.Warning,
+            isActive: true,
+            severity: exact.Severity,
+            autoAcknowledgeOnClear: false);
+        IsTrue(escalationOccurrence.IsNewOccurrence);
+        IsFalse(escalationOccurrence.IsAcknowledged);
+        var stableEscalation = AlarmEvaluation.Transition(
+            wasActive: true,
+            wasAcknowledged: false,
+            wasGoneUnacknowledged: false,
+            previousSeverity: AlarmSeverity.Critical,
+            isActive: true,
+            severity: AlarmSeverity.Critical,
+            autoAcknowledgeOnClear: false);
+        IsFalse(stableEscalation.IsNewOccurrence);
+    }
+
+    private static void TestAlarmAttentionQueuePolicy()
+    {
+        var requests = new List<AlarmAttentionRequest>();
+        IsFalse(AlarmAttentionQueuePolicy.TryEnqueue(
+            null,
+            default));
+        IsFalse(AlarmAttentionQueuePolicy.TryEnqueue(
+            requests,
+            default));
+        IsFalse(new AlarmAttentionRequest(
+            "alarm",
+            0,
+            "panel",
+            "slot",
+            AlarmSeverity.Warning,
+            AlarmOperatorAction.OpenPanel).IsValid);
+        IsFalse(new AlarmAttentionRequest(
+            "alarm",
+            1,
+            "panel",
+            "slot",
+            AlarmSeverity.Warning,
+            AlarmOperatorAction.None).IsValid);
+        IsFalse(new AlarmAttentionRequest(
+            "alarm",
+            1,
+            "panel",
+            "slot",
+            (AlarmSeverity)999,
+            AlarmOperatorAction.OpenPanel).IsValid);
+
+        var first = new AlarmAttentionRequest(
+            " alarm-a ",
+            5,
+            " panel-a ",
+            " slot-a ",
+            AlarmSeverity.Warning,
+            AlarmOperatorAction.OpenPanel);
+        IsTrue(first.IsValid);
+        AreEqual("alarm-a", first.AlarmKey);
+        AreEqual("panel-a", first.PanelId);
+        AreEqual("slot-a", first.SlotId);
+        IsTrue(AlarmAttentionQueuePolicy.TryEnqueue(requests, first));
+        AreEqual(1, requests.Count);
+        IsFalse(AlarmAttentionQueuePolicy.TryEnqueue(
+            requests,
+            new AlarmAttentionRequest(
+                "alarm-a",
+                4,
+                "panel-a",
+                "slot-a",
+                AlarmSeverity.Emergency,
+                AlarmOperatorAction.OpenPanel)));
+        AreEqual(1, requests.Count);
+        IsTrue(AlarmAttentionQueuePolicy.TryEnqueue(
+            requests,
+            new AlarmAttentionRequest(
+                "alarm-a",
+                5,
+                "panel-a",
+                "slot-a",
+                AlarmSeverity.Critical,
+                AlarmOperatorAction.OpenPanel)));
+        AreEqual(1, requests.Count);
+        AreEqual(AlarmSeverity.Critical, requests[0].Severity);
+        IsTrue(AlarmAttentionQueuePolicy.TryEnqueue(
+            requests,
+            new AlarmAttentionRequest(
+                "alarm-a",
+                6,
+                "panel-a",
+                "slot-a",
+                AlarmSeverity.Emergency,
+                AlarmOperatorAction.OpenPanel)));
+        AreEqual(1, requests.Count);
+        AreEqual(6L, requests[0].Sequence);
+
+        requests.Clear();
+        for (var index = 0;
+             index < AlarmAttentionQueuePolicy.MaximumPendingRequests + 6;
+             index++)
+        {
+            IsTrue(AlarmAttentionQueuePolicy.TryEnqueue(
+                requests,
+                new AlarmAttentionRequest(
+                    "alarm-" + index,
+                    index + 1L,
+                    "panel",
+                    "slot",
+                    AlarmSeverity.Notice,
+                    AlarmOperatorAction.OpenPanel)));
+        }
+        AreEqual(
+            AlarmAttentionQueuePolicy.MaximumPendingRequests,
+            requests.Count);
+        IsFalse(requests.Any(item => item.AlarmKey == "alarm-0"));
+        IsFalse(requests.Any(item => item.AlarmKey == "alarm-5"));
+        IsTrue(requests.Any(item => item.AlarmKey == "alarm-6"));
+        IsTrue(requests.Any(item => item.AlarmKey == "alarm-69"));
+
+        requests = new List<AlarmAttentionRequest>
+        {
+            new(
+                "stale",
+                100,
+                "panel",
+                "slot",
+                AlarmSeverity.Emergency,
+                AlarmOperatorAction.OpenPanelAndCancelTemporaryMute),
+            new(
+                "warning-strong-action",
+                999,
+                "panel",
+                "slot",
+                AlarmSeverity.Warning,
+                AlarmOperatorAction.OpenPanelAndCancelTemporaryMute),
+            new(
+                "emergency",
+                10,
+                "panel",
+                "slot",
+                AlarmSeverity.Emergency,
+                AlarmOperatorAction.OpenPanel),
+            new(
+                "critical-open",
+                999,
+                "panel",
+                "slot",
+                AlarmSeverity.Critical,
+                AlarmOperatorAction.OpenPanel),
+            new(
+                "critical-cancel-mute",
+                7,
+                "panel",
+                "slot",
+                AlarmSeverity.Critical,
+                AlarmOperatorAction.OpenPanelAndCancelTemporaryMute),
+            default,
+        };
+        IsTrue(AlarmAttentionQueuePolicy.TryTakeBest(
+            requests,
+            candidate => candidate.AlarmKey != "stale",
+            out var best));
+        AreEqual("emergency", best.AlarmKey);
+        IsFalse(requests.Any(item => item.AlarmKey == "stale"));
+        IsTrue(AlarmAttentionQueuePolicy.TryTakeBest(
+            requests,
+            candidate => true,
+            out best));
+        AreEqual("critical-cancel-mute", best.AlarmKey);
+        IsTrue(AlarmAttentionQueuePolicy.TryTakeBest(
+            requests,
+            candidate => true,
+            out best));
+        AreEqual("critical-open", best.AlarmKey);
+        IsTrue(AlarmAttentionQueuePolicy.TryTakeBest(
+            requests,
+            candidate => true,
+            out best));
+        AreEqual("warning-strong-action", best.AlarmKey);
+        IsFalse(AlarmAttentionQueuePolicy.TryTakeBest(
+            requests,
+            candidate => true,
+            out _));
+        IsFalse(AlarmAttentionQueuePolicy.TryTakeBest(
+            null,
+            candidate => true,
+            out _));
+
+        requests.Add(new AlarmAttentionRequest(
+            "older",
+            10,
+            "",
+            "",
+            AlarmSeverity.Warning,
+            AlarmOperatorAction.OpenPanel));
+        requests.Add(new AlarmAttentionRequest(
+            "newer",
+            20,
+            "",
+            "",
+            AlarmSeverity.Warning,
+            AlarmOperatorAction.OpenPanel));
+        IsTrue(AlarmAttentionQueuePolicy.TryTakeBest(
+            requests,
+            isStillRelevant: null,
+            out best));
+        AreEqual("newer", best.AlarmKey);
+    }
+
     private static void TestAlarmTimingModelNormalization()
     {
         var defaultRule = new AlarmRuleDefinition();
@@ -744,7 +1239,7 @@ internal static class Program
         legacyStage.Conditions[0].Hysteresis = 7.5d;
         legacy.Normalize();
 
-        AreEqual(18, legacy.SchemaVersion);
+        AreEqual(19, legacy.SchemaVersion);
         AreEqual(0, legacyRule.ActivationDelayTicks);
         AreEqual(0, legacyRule.ResetDelayTicks);
         AreEqual(0, legacyRule.MinimumActiveTicks);
@@ -802,6 +1297,214 @@ internal static class Program
         AreEqual(0, currentStage.ResetDelayTicks);
         AreEqual(44, currentStage.MinimumActiveTicks);
         AreEqual(0d, currentStage.Conditions[0].Hysteresis);
+    }
+
+    private static void TestAlarmEscalationModelNormalization()
+    {
+        var defaultRule = new AlarmRuleDefinition();
+        IsTrue(defaultRule.Escalation != null);
+        IsFalse(defaultRule.Escalation.Enabled);
+        AreEqual(AlarmSeverity.Critical, defaultRule.Escalation.Severity);
+        AreEqual(
+            AlarmOperatorAction.None,
+            new SystemAlarmStageDefinition().OperatorAction);
+        AreEqual(19, new UnmaConfiguration().SchemaVersion);
+
+        var legacy = UnmaConfiguration.CreateDefault();
+        legacy.SchemaVersion = 18;
+        var legacyRule = new AlarmRuleDefinition
+        {
+            Id = "legacy-escalation-rule",
+            PanelId = legacy.Panels.Find(panel => !panel.IsDashboard).Id,
+            Severity = AlarmSeverity.Warning,
+            Conditions = new List<ConditionDefinition>
+            {
+                new()
+                {
+                    MetricPath = "$global:population.total",
+                    Comparison = ComparisonOperator.Less,
+                    Threshold = 100d,
+                },
+            },
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 50,
+                Severity = AlarmSeverity.Emergency,
+                SoundId = "siren",
+                OperatorAction =
+                    AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            },
+        };
+        legacy.Rules.Add(legacyRule);
+        var legacyStage = legacy.SystemAlarms[0].Stages[0];
+        legacyStage.OperatorAction =
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute;
+        var ruleOwnerKey = AlarmTimingMemoryPolicy.RuleOwnerKey(
+            legacyRule.Id);
+        var ruleTimingSignature = AlarmTimingMemoryPolicy
+            .RuleDefinitionSignature(legacyRule);
+        legacy.AlarmTimingMemories.Add(
+            AlarmTimingMemoryPolicy.CreateMemory(
+                ruleOwnerKey,
+                ruleTimingSignature,
+                AlarmTimingState.ActiveAt(25),
+                new Dictionary<int, bool> { [0] = true }));
+        var stageOwnerKey = AlarmTimingMemoryPolicy.SystemStageOwnerKey(
+            legacy.SystemAlarms[0].Id,
+            legacyStage.Id,
+            0);
+        var stageTimingSignature = AlarmTimingMemoryPolicy
+            .SystemStageDefinitionSignature(legacyStage);
+        legacy.AlarmTimingMemories.Add(
+            AlarmTimingMemoryPolicy.CreateMemory(
+                stageOwnerKey,
+                stageTimingSignature,
+                AlarmTimingState.ActiveAt(35),
+                new Dictionary<int, bool> { [0] = true }));
+        legacy.Normalize();
+
+        AreEqual(19, legacy.SchemaVersion);
+        IsTrue(legacyRule.Escalation != null);
+        IsFalse(legacyRule.Escalation.Enabled);
+        AreEqual(0, legacyRule.Escalation.AfterTicks);
+        AreEqual(AlarmSeverity.Critical, legacyRule.Escalation.Severity);
+        AreEqual("", legacyRule.Escalation.SoundId);
+        AreEqual(
+            AlarmOperatorAction.None,
+            legacyRule.Escalation.OperatorAction);
+        AreEqual(AlarmOperatorAction.None, legacyStage.OperatorAction);
+        AreEqual(2, legacy.AlarmTimingMemories.Count);
+        var preservedRuleMemory = legacy.AlarmTimingMemories.Single(memory =>
+            string.Equals(
+                memory.OwnerKey,
+                ruleOwnerKey,
+                StringComparison.Ordinal));
+        AreEqual(25L, preservedRuleMemory.ActiveSinceTick);
+        AreEqual(ruleTimingSignature, preservedRuleMemory
+            .DefinitionSignature);
+        var preservedStageMemory = legacy.AlarmTimingMemories.Single(memory =>
+            string.Equals(
+                memory.OwnerKey,
+                stageOwnerKey,
+                StringComparison.Ordinal));
+        AreEqual(stageOwnerKey, preservedStageMemory.OwnerKey);
+        AreEqual(stageTimingSignature, preservedStageMemory
+            .DefinitionSignature);
+        IsTrue(preservedStageMemory.IsActive);
+        AreEqual(35L, preservedStageMemory.ActiveSinceTick);
+
+        var current = UnmaConfiguration.CreateDefault();
+        var currentPanelId = current.Panels
+            .Find(panel => !panel.IsDashboard).Id;
+        var validRule = new AlarmRuleDefinition
+        {
+            Id = "valid-escalation",
+            PanelId = currentPanelId,
+            Severity = AlarmSeverity.Warning,
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = int.MaxValue,
+                Severity = AlarmSeverity.Emergency,
+                SoundId = " auto ",
+                OperatorAction =
+                    AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            },
+        };
+        var malformedRule = new AlarmRuleDefinition
+        {
+            Id = "malformed-escalation",
+            PanelId = currentPanelId,
+            Severity = AlarmSeverity.Warning,
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = -50,
+                Severity = (AlarmSeverity)999,
+                SoundId = null,
+                OperatorAction = (AlarmOperatorAction)999,
+            },
+        };
+        var nullDefinitionRule = new AlarmRuleDefinition
+        {
+            Id = "null-escalation",
+            PanelId = currentPanelId,
+            Escalation = null,
+        };
+        var nonIncreasingRule = new AlarmRuleDefinition
+        {
+            Id = "non-increasing-escalation",
+            PanelId = currentPanelId,
+            Severity = AlarmSeverity.Critical,
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 10,
+                Severity = AlarmSeverity.Warning,
+                SoundId = "none",
+                OperatorAction = AlarmOperatorAction.OpenPanel,
+            },
+        };
+        current.Rules.Add(validRule);
+        current.Rules.Add(malformedRule);
+        current.Rules.Add(nullDefinitionRule);
+        current.Rules.Add(nonIncreasingRule);
+        var validStage = current.SystemAlarms[0].Stages[0];
+        validStage.OperatorAction = AlarmOperatorAction.OpenPanel;
+        var malformedStage = current.SystemAlarms[0].Stages[1];
+        malformedStage.OperatorAction = (AlarmOperatorAction)999;
+        current.Normalize();
+
+        IsTrue(validRule.Escalation.Enabled);
+        AreEqual(
+            AlarmTimingPolicy.MaximumTimingTicks,
+            validRule.Escalation.AfterTicks);
+        AreEqual(AlarmSeverity.Emergency, validRule.Escalation.Severity);
+        AreEqual("auto", validRule.Escalation.SoundId);
+        AreEqual(
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            validRule.Escalation.OperatorAction);
+        IsFalse(malformedRule.Escalation.Enabled);
+        AreEqual(0, malformedRule.Escalation.AfterTicks);
+        AreEqual(AlarmSeverity.Critical, malformedRule.Escalation.Severity);
+        AreEqual("", malformedRule.Escalation.SoundId);
+        AreEqual(
+            AlarmOperatorAction.None,
+            malformedRule.Escalation.OperatorAction);
+        IsTrue(nullDefinitionRule.Escalation != null);
+        IsFalse(nullDefinitionRule.Escalation.Enabled);
+        IsFalse(nonIncreasingRule.Escalation.Enabled);
+        AreEqual("none", nonIncreasingRule.Escalation.SoundId);
+        AreEqual(AlarmOperatorAction.OpenPanel, validStage.OperatorAction);
+        AreEqual(AlarmOperatorAction.None, malformedStage.OperatorAction);
+
+        using var stream = new MemoryStream();
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        serializer.WriteObject(stream, current);
+        stream.Position = 0;
+        var restored = (UnmaConfiguration)serializer.ReadObject(stream);
+        restored.Normalize();
+        AreEqual(19, restored.SchemaVersion);
+        var restoredRule = restored.Rules.Single(rule =>
+            rule.Id == validRule.Id);
+        IsTrue(restoredRule.Escalation.Enabled);
+        AreEqual(
+            AlarmTimingPolicy.MaximumTimingTicks,
+            restoredRule.Escalation.AfterTicks);
+        AreEqual(
+            AlarmSeverity.Emergency,
+            restoredRule.Escalation.Severity);
+        AreEqual("auto", restoredRule.Escalation.SoundId);
+        AreEqual(
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            restoredRule.Escalation.OperatorAction);
+        var restoredStage = restored.SystemAlarms[0].Stages.Single(stage =>
+            stage.Id == validStage.Id);
+        AreEqual(
+            AlarmOperatorAction.OpenPanel,
+            restoredStage.OperatorAction);
     }
 
     private static void TestAlarmTimingMemoryPolicy()
@@ -1780,7 +2483,7 @@ internal static class Program
             },
         };
         legacyConfiguration.Normalize();
-        AreEqual(18, legacyConfiguration.SchemaVersion);
+        AreEqual(19, legacyConfiguration.SchemaVersion);
         AreEqual(1, legacyConfiguration.Instruments.Count);
         AreEqual(1, legacyConfiguration.Instruments[0].Sources.Count);
         AreEqual(42, legacyConfiguration.Instruments[0].Sources[0].EntityId);
@@ -2029,7 +2732,7 @@ internal static class Program
             EditorWindowHeight = 780f,
         };
         configuration.Normalize();
-        AreEqual(18, configuration.SchemaVersion);
+        AreEqual(19, configuration.SchemaVersion);
         AreEqual("Lagerhaus III", entityPanel.OwnerEntityTitle);
         AreEqual("AirStorageT3", entityPanel.OwnerEntityPrototypeId);
         AreEqual(
@@ -2244,6 +2947,14 @@ internal static class Program
             ActivationDelayTicks = 120,
             ResetDelayTicks = 240,
             MinimumActiveTicks = 360,
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = false,
+                AfterTicks = 720,
+                Severity = AlarmSeverity.Emergency,
+                SoundId = "siren",
+                OperatorAction = AlarmOperatorAction.OpenPanel,
+            },
         };
         var linkedRule = new AlarmRuleDefinition
         {
@@ -2265,6 +2976,15 @@ internal static class Program
             SoundId = "bell",
             Enabled = true,
             LinkedPanelIds = new List<string> { " source-panel " },
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = true,
+                AfterTicks = 480,
+                Severity = AlarmSeverity.Emergency,
+                SoundId = "auto",
+                OperatorAction =
+                    AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            },
         };
         var missingSlotRule = new AlarmRuleDefinition
         {
@@ -2388,6 +3108,24 @@ internal static class Program
         AreEqual(
             primaryRule.MinimumActiveTicks,
             clonedPrimary.MinimumActiveTicks);
+        IsFalse(ReferenceEquals(
+            primaryRule.Escalation,
+            clonedPrimary.Escalation));
+        AreEqual(
+            primaryRule.Escalation.Enabled,
+            clonedPrimary.Escalation.Enabled);
+        AreEqual(
+            primaryRule.Escalation.AfterTicks,
+            clonedPrimary.Escalation.AfterTicks);
+        AreEqual(
+            primaryRule.Escalation.Severity,
+            clonedPrimary.Escalation.Severity);
+        AreEqual(
+            primaryRule.Escalation.SoundId,
+            clonedPrimary.Escalation.SoundId);
+        AreEqual(
+            primaryRule.Escalation.OperatorAction,
+            clonedPrimary.Escalation.OperatorAction);
         AreEqual(0, clonedPrimary.LinkedPanelIds.Count);
         AreEqual(1, clonedPrimary.Conditions.Count);
         IsFalse(ReferenceEquals(primaryRule, clonedPrimary));
@@ -2432,6 +3170,20 @@ internal static class Program
             AreEqual(plan.Panel.Id, clonedRule.PanelId);
             AreEqual(0, clonedRule.LinkedPanelIds.Count);
         }
+        var clonedLinked = plan.Rules.Single(rule =>
+            rule.Id == "clone-linked");
+        IsFalse(ReferenceEquals(
+            linkedRule.Escalation,
+            clonedLinked.Escalation));
+        IsTrue(clonedLinked.Escalation.Enabled);
+        AreEqual(480, clonedLinked.Escalation.AfterTicks);
+        AreEqual(
+            AlarmSeverity.Emergency,
+            clonedLinked.Escalation.Severity);
+        AreEqual("auto", clonedLinked.Escalation.SoundId);
+        AreEqual(
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute,
+            clonedLinked.Escalation.OperatorAction);
 
         IsFalse(ReferenceEquals(source.Slots, plan.Panel.Slots));
         IsFalse(ReferenceEquals(source.Slots[0], plan.Panel.Slots[0]));
@@ -2443,12 +3195,16 @@ internal static class Program
         clonedCondition.Threshold = 1d;
         clonedCondition.Hysteresis = 0.25d;
         clonedPrimary.ActivationDelayTicks = 1;
+        clonedPrimary.Escalation.AfterTicks = 1;
+        clonedLinked.Escalation.SoundId = "clone-only-sound";
         clonedPrimary.LinkedPanelIds.Add("clone-only-link");
         AreEqual("FOOD", source.Slots[0].DisplayName);
         AreEqual(5, source.ExcludedAlarmIds.Count);
         AreEqual(12.5d, primaryRule.Conditions[0].Threshold);
         AreEqual(1.75d, primaryRule.Conditions[0].Hysteresis);
         AreEqual(120, primaryRule.ActivationDelayTicks);
+        AreEqual(720, primaryRule.Escalation.AfterTicks);
+        AreEqual("auto", linkedRule.Escalation.SoundId);
         AreEqual(1, primaryRule.LinkedPanelIds.Count);
 
         var dashboardCalls = 0;
@@ -3198,7 +3954,7 @@ internal static class Program
             IsGloballyDisabled = true,
         });
         legacyConfig.Normalize();
-        AreEqual(18, legacyConfig.SchemaVersion);
+        AreEqual(19, legacyConfig.SchemaVersion);
         IsFalse(legacyConfig.SoundOverrides.Last().IsGloballyDisabled);
         AreEqual(
             VanillaNotificationBehavior.Hidden,
@@ -4023,7 +4779,7 @@ internal static class Program
         IsFalse(restoredSystemOverride.IsGloballyDisabled);
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
-        AreEqual(18, restored.SchemaVersion);
+        AreEqual(19, restored.SchemaVersion);
         AreEqual(1, restored.InstrumentPanels.Count);
         AreEqual("instruments-main", restored.InstrumentPanels[0].Id);
         AreEqual(1, restored.Instruments.Count);
@@ -4406,7 +5162,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(18, restored.SchemaVersion);
+        AreEqual(19, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -4445,7 +5201,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(18, oldConfiguration.SchemaVersion);
+        AreEqual(19, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(100, oldConfiguration.UiScalePercent);
@@ -4571,7 +5327,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(18, schemaSeven.SchemaVersion);
+        AreEqual(19, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -4649,7 +5405,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(18, legacy.SchemaVersion);
+        AreEqual(19, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -4701,7 +5457,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(18, versionFive.SchemaVersion);
+        AreEqual(19, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -4778,7 +5534,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(18, schemaEight.SchemaVersion);
+        AreEqual(19, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

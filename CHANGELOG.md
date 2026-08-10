@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.23 – 2026-08-10
+
+- Eigene Regeln können nach einer frei wählbaren aktiven Spielzeit einmalig auf
+  eine strikt höhere Alarmstufe und einen eigenen Ton eskalieren. Ein leerer
+  Eskalationston übernimmt bewusst den Grundton.
+- Die Eskalation erzeugt eine neue Meldungsfolge und verlangt damit erneut eine
+  Quittierung. Eine Tonpause der vorherigen Folge wird nicht übernommen.
+- Jede Systemalarmstufe kann eine sichere Operatoraktion auslösen, wenn ein
+  bereits aktiver Alarm in diese Stufe wechselt.
+- Operatoraktionen öffnen ausschließlich das passende UNMA-Panel und scrollen
+  zur Meldung. Optional beenden sie nur die vorübergehende
+  Fünf-Minuten-Stummschaltung; Kamera, Maschinen, globale Audioeinstellung und
+  schlitzbezogene Tonpausen bleiben unangetastet.
+- Eine auf 64 Einträge begrenzte Laufzeit-Queue verwirft veraltete,
+  quittierte oder ersetzte Anforderungen und priorisiert Alarmstufe, Aktion und
+  jüngste Meldungsfolge deterministisch.
+- Schema 19 migriert bestehende Welten mit deaktivierter Eskalation und ohne
+  Operatoraktionen; die in 0.9.22 gespeicherten Timer und Latches bleiben
+  vollständig erhalten.
+
 ## 0.9.22 – 2026-08-10
 
 - Eigene Regeln und jede einzelne Systemalarmstufe besitzen jetzt eine

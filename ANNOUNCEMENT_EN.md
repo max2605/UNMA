@@ -1,45 +1,36 @@
-# UNMA v0.9.22 – Stable alarm timing and per-slot audio snooze
+# UNMA v0.9.23 – Escalation and safe operator attention
 
-UNMA v0.9.22 gives operators control over when an alarm becomes active, when
-it clears, and which single alarm should stay quiet for a while. All timing is
-based on Captain of Industry's game calendar and remains independent from
-frame rate or wall-clock time.
+UNMA v0.9.23 lets a persistent custom alarm escalate once after a selected
+amount of Captain of Industry game time. The escalated state can use a higher
+severity, a different sound, and a deliberately limited operator action.
 
-## What changed in v0.9.22
+## What changed in v0.9.23
 
-- Every custom alarm has an activation delay, reset delay, and optional
-  minimum active time.
-- Every built-in system-alarm stage has the same independent timing controls.
-- Numeric conditions support hysteresis for all six comparison operators,
-  preventing noisy repeated transitions near a threshold.
-- Existing worlds keep their immediate behavior because all migrated values
-  default to zero.
-- Running timers and condition latches persist per world and resume safely
-  after loading. Game-clock rollback is handled without inheriting invalid
-  elapsed time.
-- Display-only edits such as text, color, and sound no longer reset active
-  timing state or create artificial history events.
-
-Alarm tiles now provide a compact audio action between acknowledgement and
-navigation:
-
-- **Z** snoozes that slot for one game month.
-- **R** resumes its audio immediately.
-- Aggregated object slots apply the action to every represented occurrence.
-- Snooze never acknowledges, hides, clears, or changes the sound assignment of
-  an alarm, and it does not alter counters or history.
-- A genuinely new alarm occurrence is audible again even if an older sequence
-  was snoozed.
+- Custom alarms can escalate after an **AFTER** duration to a strictly higher
+  severity.
+- The escalation sound may inherit the base sound or use any available sound.
+- Escalation starts a new occurrence, requiring acknowledgement again and
+  leaving occurrence-bound audio snooze behind.
+- An optional action opens the matching UNMA panel and scrolls to the alarm.
+- A second action may also end only the temporary five-minute mute. It never
+  moves the camera, opens an entity inspector, changes global audio, alters a
+  per-slot snooze, acknowledges an alarm, or controls a machine.
+- Built-in system-alarm stages expose the same safe actions when an already
+  active alarm advances to a new stage.
+- A bounded queue removes stale or acknowledged requests and selects the most
+  severe, strongest, newest valid occurrence.
+- Existing worlds migrate with escalation and actions disabled while all
+  v0.9.22 timing memories continue unchanged.
 
 ## Compatibility and safety
 
 - Captain of Industry: **0.8.6c**
-- UNMA: **0.9.22**
+- UNMA: **0.9.23**
 - Required dependency: **MultiLangLib 0.1.0 or newer**
 - Optional dependency: **Keybind Framework 2.0.2 or newer**
 - Can be added to or removed from existing saves.
-- Existing configurations migrate automatically with immediate timing
-  defaults; runtime timing state is saved only for matching rule definitions.
+- Existing configurations migrate automatically. Escalation and operator
+  actions remain opt-in, and saved alarm-timing state is preserved.
 
 ## Download and documentation
 
@@ -50,4 +41,5 @@ and back up `Mods/UNMA` before updating.
 - [English User Guide](https://coigame.com/Topic/1926/User-Guide)
 - [Deutsche Benutzeranleitung](https://coigame.com/Topic/1927/Benutzeranleitung)
 
-Debounce the threshold, snooze the noisy slot, and keep the factory moving.
+Escalate the persistent fault, bring the right panel forward, and keep the
+operator in control.

@@ -224,6 +224,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private readonly TimingDraftValue m_draftActivationDelay = new();
     private readonly TimingDraftValue m_draftResetDelay = new();
     private readonly TimingDraftValue m_draftMinimumActive = new();
+    private bool m_draftEscalationEnabled;
+    private readonly TimingDraftValue m_draftEscalationAfter = new();
+    private AlarmSeverity m_draftEscalationSeverity = AlarmSeverity.Critical;
+    private string m_draftEscalationSoundId = "";
+    private AlarmOperatorAction m_draftEscalationOperatorAction;
     private string m_editingRuleId = "";
     private string m_draftTargetPanelId = "";
     private string m_lastAlarmTileClickId = "";
@@ -440,6 +445,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_inspectorAlarmButtons?.Update();
             m_inputBlocker?.EnsureActive();
+            if (m_runtime.TryTakeAttentionRequest(out var attentionRequest))
+            {
+                HandleAttentionRequest(attentionRequest);
+            }
         }
 
         if (m_runtime.TryTakeCompletedInspection(out var inspection))
@@ -5202,6 +5211,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             {
                 m_draftSeverity = severity;
                 m_draftColor = DefaultColorFor(severity);
+                EnsureDraftEscalationTarget();
             }
         }
         NativeGUILayout.Label(
@@ -5280,6 +5290,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndHorizontal();
 
         DrawAlarmTimingDraft();
+        DrawAlarmEscalationDraft(sounds);
 
         NativeGUILayout.BeginHorizontal();
         NativeGUI.enabled = m_draftConditions.Count > 0 &&
@@ -5352,6 +5363,230 @@ public sealed class UnmaOverlayController : MonoBehaviour
             UnmaText.Get("ui.timing.minimum_active", "MINIMUM ACTIVE"),
             m_draftMinimumActive,
             UnmaText.Get("ui.timing.zero.off", "OFF"));
+    }
+
+    private void DrawAlarmEscalationDraft(
+        IReadOnlyList<SoundOption> sounds)
+    {
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.title", "ESCALATION"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.escalation.hint",
+                "Escalation raises severity and can change the sound when an alarm remains active for the configured game time."),
+            m_smallLabelStyle);
+
+        var canEscalate = m_draftSeverity < AlarmSeverity.Emergency;
+        NativeGUI.enabled = canEscalate;
+        m_draftEscalationEnabled = NativeGUILayout.Toggle(
+            m_draftEscalationEnabled,
+            UnmaText.Get("ui.escalation.enabled", "ENABLE ESCALATION"),
+            NativeGUILayout.Width(250f));
+        NativeGUI.enabled = true;
+        if (!canEscalate)
+        {
+            m_draftEscalationEnabled = false;
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.escalation.unavailable_emergency",
+                    "Emergency is already the highest severity."),
+                m_smallLabelStyle);
+            return;
+        }
+        if (!m_draftEscalationEnabled)
+        {
+            return;
+        }
+
+        EnsureDraftEscalationTarget();
+        DrawTimingDraftValue(
+            UnmaText.Get("ui.escalation.after", "AFTER"),
+            m_draftEscalationAfter,
+            UnmaText.Get("ui.escalation.required", "REQUIRED"));
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.escalation.target_severity",
+                "TARGET SEVERITY"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        foreach (AlarmSeverity severity in Enum.GetValues(
+                     typeof(AlarmSeverity)))
+        {
+            if (severity <= m_draftSeverity)
+            {
+                continue;
+            }
+            if (NativeGUILayout.Button(
+                    SeverityLabel(severity),
+                    m_draftEscalationSeverity == severity
+                        ? m_primaryButtonStyle
+                        : m_buttonStyle,
+                    NativeGUILayout.Width(125f),
+                    NativeGUILayout.Height(28f)))
+            {
+                m_draftEscalationSeverity = severity;
+            }
+        }
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.sound", "ESCALATION SOUND"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        if (NativeGUILayout.Button(
+                "<",
+                m_buttonStyle,
+                NativeGUILayout.Width(38f),
+                NativeGUILayout.Height(28f)))
+        {
+            CycleDraftEscalationSound(sounds, -1);
+        }
+        NativeGUILayout.Label(
+            EscalationSoundLabel(sounds, m_draftEscalationSoundId),
+            m_labelStyle,
+            NativeGUILayout.Width(260f));
+        if (NativeGUILayout.Button(
+                ">",
+                m_buttonStyle,
+                NativeGUILayout.Width(38f),
+                NativeGUILayout.Height(28f)))
+        {
+            CycleDraftEscalationSound(sounds, 1);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.test", "TEST"),
+                m_buttonStyle,
+                NativeGUILayout.Width(65f),
+                NativeGUILayout.Height(28f)))
+        {
+            TestSound(
+                ResolveDraftEscalationTestSound(sounds),
+                m_draftEscalationSeverity);
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.operator_action", "OPERATOR ACTION"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        if (NativeGUILayout.Button(
+                OperatorActionLabel(m_draftEscalationOperatorAction),
+                m_buttonStyle,
+                NativeGUILayout.Width(330f),
+                NativeGUILayout.Height(28f)))
+        {
+            m_draftEscalationOperatorAction = NextEnum(
+                m_draftEscalationOperatorAction);
+        }
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.escalation.operator_action_hint",
+                "Operator actions only open the matching UNMA panel. The mute option ends only the temporary five-minute mute."),
+            m_smallLabelStyle);
+    }
+
+    private void EnsureDraftEscalationTarget()
+    {
+        if (m_draftSeverity >= AlarmSeverity.Emergency)
+        {
+            m_draftEscalationEnabled = false;
+            m_draftEscalationSeverity = AlarmSeverity.Emergency;
+            return;
+        }
+        if (m_draftEscalationSeverity <= m_draftSeverity)
+        {
+            m_draftEscalationSeverity =
+                (AlarmSeverity)((int)m_draftSeverity + 1);
+        }
+    }
+
+    private void CycleDraftEscalationSound(
+        IReadOnlyList<SoundOption> sounds,
+        int direction)
+    {
+        var ids = new List<string> { "" };
+        if (sounds != null)
+        {
+            foreach (var sound in sounds)
+            {
+                if (sound != null && !ids.Any(id => string.Equals(
+                        id,
+                        sound.Id,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    ids.Add(sound.Id);
+                }
+            }
+        }
+        var current = ids.FindIndex(id => string.Equals(
+            id,
+            m_draftEscalationSoundId,
+            StringComparison.OrdinalIgnoreCase));
+        m_draftEscalationSoundId = ids[Wrap(
+            Math.Max(0, current) + direction,
+            ids.Count)];
+    }
+
+    private static string EscalationSoundLabel(
+        IReadOnlyList<SoundOption> sounds,
+        string soundId)
+    {
+        if (string.IsNullOrEmpty(soundId))
+        {
+            return UnmaText.Get(
+                "ui.escalation.sound_inherit",
+                "INHERIT BASE SOUND");
+        }
+        var sound = sounds?.FirstOrDefault(option =>
+            option != null && string.Equals(
+                option.Id,
+                soundId,
+                StringComparison.OrdinalIgnoreCase));
+        return sound?.Label ??
+               UnmaText.Get("auto.40bffd508dbf") + soundId;
+    }
+
+    private string ResolveDraftEscalationTestSound(
+        IReadOnlyList<SoundOption> sounds)
+    {
+        if (!string.IsNullOrEmpty(m_draftEscalationSoundId))
+        {
+            return m_draftEscalationSoundId;
+        }
+        if (!string.IsNullOrWhiteSpace(m_editingRuleId) &&
+            !m_draftSoundChanged)
+        {
+            return m_originalDraftSoundId;
+        }
+        return sounds != null && sounds.Count > 0
+            ? sounds[Math.Max(
+                0,
+                Math.Min(m_draftSoundIndex, sounds.Count - 1))].Id
+            : "auto";
+    }
+
+    private static string OperatorActionLabel(AlarmOperatorAction action)
+    {
+        return action switch
+        {
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute =>
+                UnmaText.Get(
+                    "ui.operator_action.open_panel_cancel_mute",
+                    "OPEN PANEL + END 5-MIN MUTE"),
+            AlarmOperatorAction.OpenPanel => UnmaText.Get(
+                "ui.operator_action.open_panel",
+                "OPEN PANEL"),
+            _ => UnmaText.Get("ui.operator_action.none", "NONE"),
+        };
     }
 
     private void DrawTimingDraftValue(
@@ -5727,6 +5962,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.EndHorizontal();
 
             DrawSystemStageTiming(stageIndex, stage);
+            DrawSystemStageOperatorAction(stage);
 
             for (var index = 0; index < stage.Conditions.Count; index++)
             {
@@ -5898,6 +6134,31 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "minimum-active",
                 stage.MinimumActiveTicks),
             UnmaText.Get("ui.timing.zero.off", "OFF"));
+    }
+
+    private void DrawSystemStageOperatorAction(
+        SystemAlarmStageDefinition stage)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.escalation.operator_action", "OPERATOR ACTION"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(190f));
+        if (NativeGUILayout.Button(
+                OperatorActionLabel(stage.OperatorAction),
+                m_buttonStyle,
+                NativeGUILayout.Width(330f),
+                NativeGUILayout.Height(28f)))
+        {
+            stage.OperatorAction = NextEnum(stage.OperatorAction);
+        }
+        NativeGUILayout.FlexibleSpace();
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.system.operator_action_hint",
+                "Runs once when an already-active alarm advances to this stage. It never moves the camera or changes per-alarm snoozes."),
+            m_smallLabelStyle);
     }
 
     private TimingDraftValue GetSystemTimingDraft(
@@ -7491,6 +7752,101 @@ public sealed class UnmaOverlayController : MonoBehaviour
         SynchronizeNativeLauncher();
     }
 
+    private void HandleAttentionRequest(AlarmAttentionRequest request)
+    {
+        if (!request.IsValid || m_isUiSuppressedByMenu)
+        {
+            return;
+        }
+
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            candidate != null && string.Equals(
+                candidate.Id,
+                request.PanelId,
+                StringComparison.Ordinal));
+        if (panel != null && !GetPanelViews(panel).Any(alarm => string.Equals(
+                PanelSlotProjection.StableAlarmId(alarm),
+                request.SlotId,
+                StringComparison.Ordinal)))
+        {
+            panel = null;
+        }
+        if (panel == null)
+        {
+            panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+                candidate != null && GetPanelViews(candidate).Any(alarm =>
+                    string.Equals(
+                        PanelSlotProjection.StableAlarmId(alarm),
+                        request.SlotId,
+                        StringComparison.Ordinal)));
+        }
+        if (panel == null)
+        {
+            SetStatus(UnmaText.Get(
+                "board.operator_attention_panel_missing",
+                "Escalation requested an unavailable panel."));
+            return;
+        }
+
+        var cancelTemporaryMute =
+            request.OperatorAction ==
+            AlarmOperatorAction.OpenPanelAndCancelTemporaryMute;
+        var temporaryMuteEnded = cancelTemporaryMute &&
+                                 Time.realtimeSinceStartup <
+                                 m_audioMutedUntil;
+        if (cancelTemporaryMute)
+        {
+            m_audioMutedUntil = 0f;
+        }
+
+        m_isOpen = true;
+        m_tab = TabBoard;
+        if (PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            m_activeEntityPanelId = panel.Id;
+        }
+        else
+        {
+            m_activeEntityPanelId = "";
+            var panelIndex = GlobalPanels.FindIndex(candidate => string.Equals(
+                candidate.Id,
+                panel.Id,
+                StringComparison.Ordinal));
+            if (panelIndex >= 0)
+            {
+                m_currentPanelIndex = panelIndex;
+            }
+        }
+
+        var visible = GetPanelViews(panel);
+        var alarmIndex = visible.ToList().FindIndex(candidate => string.Equals(
+            PanelSlotProjection.StableAlarmId(candidate),
+            request.SlotId,
+            StringComparison.Ordinal));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, panel.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (TileHeight + 6f) - 12f);
+        }
+        else
+        {
+            m_boardScroll = Vector2.zero;
+        }
+
+        SetStatus(UnmaText.Format(
+            temporaryMuteEnded
+                ? "board.operator_attention_mute_cancelled"
+                : "board.operator_attention",
+            temporaryMuteEnded
+                ? "Escalation opened panel and ended the temporary five-minute mute: {0}"
+                : "Escalation opened panel: {0}",
+            panel.Name));
+        SynchronizeNativeWindowVisibility();
+        SynchronizeNativeLauncher();
+    }
+
     private void DrawAlarmNavigationButton(
         Rect tileRect,
         AlarmView alarm,
@@ -7857,6 +8213,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
                TimingDraftHasInput(m_draftActivationDelay) ||
                TimingDraftHasInput(m_draftResetDelay) ||
                TimingDraftHasInput(m_draftMinimumActive) ||
+               m_draftEscalationEnabled ||
+               TimingDraftHasInput(m_draftEscalationAfter) ||
+               m_draftEscalationSeverity != AlarmSeverity.Critical ||
+               !string.IsNullOrEmpty(m_draftEscalationSoundId) ||
+               m_draftEscalationOperatorAction != AlarmOperatorAction.None ||
                m_draftValueMode != ConditionValueMode.Absolute ||
                m_draftComparison != ComparisonOperator.Less ||
                !string.Equals(
@@ -8350,6 +8711,39 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "Enter non-negative whole timing values within 100 game years."));
             return false;
         }
+        if (!TryGetTimingTicks(
+                m_draftEscalationAfter,
+                out var escalationAfterTicks) &&
+            m_draftEscalationEnabled)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.escalation.invalid_after",
+                "Enter a non-negative whole escalation time within 100 game years."));
+            return false;
+        }
+        if (!m_draftEscalationEnabled &&
+            !TryGetTimingTicks(
+                m_draftEscalationAfter,
+                out escalationAfterTicks))
+        {
+            escalationAfterTicks = 0;
+        }
+        if (m_draftEscalationEnabled && escalationAfterTicks <= 0)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.escalation.after_required",
+                "Escalation requires a game-time delay greater than zero."));
+            return false;
+        }
+        if (m_draftEscalationEnabled &&
+            (m_draftSeverity >= AlarmSeverity.Emergency ||
+             m_draftEscalationSeverity <= m_draftSeverity))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.escalation.invalid_severity",
+                "Escalation severity must be strictly higher than the base severity."));
+            return false;
+        }
 
         for (var index = 0; index < m_draftConditions.Count; index++)
         {
@@ -8490,6 +8884,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             ActivationDelayTicks = activationDelayTicks,
             ResetDelayTicks = resetDelayTicks,
             MinimumActiveTicks = minimumActiveTicks,
+            Escalation = new AlarmEscalationDefinition
+            {
+                Enabled = m_draftEscalationEnabled,
+                AfterTicks = escalationAfterTicks,
+                Severity = m_draftEscalationSeverity,
+                SoundId = m_draftEscalationSoundId ?? "",
+                OperatorAction = m_draftEscalationOperatorAction,
+            },
             Conditions = m_draftConditions.Select(CloneCondition).ToList(),
             LinkedPanelIds = m_draftLinkedPanelIds.ToList(),
         };
@@ -8532,6 +8934,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         LoadTimingDraft(m_draftActivationDelay, rule.ActivationDelayTicks);
         LoadTimingDraft(m_draftResetDelay, rule.ResetDelayTicks);
         LoadTimingDraft(m_draftMinimumActive, rule.MinimumActiveTicks);
+        var escalation = rule.Escalation ?? new AlarmEscalationDefinition();
+        m_draftEscalationEnabled = escalation.Enabled;
+        LoadTimingDraft(m_draftEscalationAfter, escalation.AfterTicks);
+        m_draftEscalationSeverity = escalation.Severity;
+        m_draftEscalationSoundId = escalation.SoundId ?? "";
+        m_draftEscalationOperatorAction = escalation.OperatorAction;
+        EnsureDraftEscalationTarget();
         m_draftLinkedPanelIds.Clear();
         foreach (var panelId in rule.LinkedPanelIds ?? new List<string>())
         {
@@ -8592,6 +9001,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         LoadTimingDraft(m_draftActivationDelay, 0);
         LoadTimingDraft(m_draftResetDelay, 0);
         LoadTimingDraft(m_draftMinimumActive, 0);
+        m_draftEscalationEnabled = false;
+        LoadTimingDraft(m_draftEscalationAfter, 0);
+        m_draftEscalationSeverity = AlarmSeverity.Critical;
+        m_draftEscalationSoundId = "";
+        m_draftEscalationOperatorAction = AlarmOperatorAction.None;
         m_draftLinkedPanelIds.Clear();
         m_draftValueMode = ConditionValueMode.Absolute;
         m_draftComparison = ComparisonOperator.Less;

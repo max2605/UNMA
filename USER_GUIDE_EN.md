@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.22** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.23** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -279,6 +279,24 @@ the alarm. Timers and hysteresis latches are saved per world and continue after
 loading. Trend increase/decrease conditions intentionally do not use
 hysteresis.
 
+### Escalation and operator attention
+
+Enable **ESCALATION** on a custom rule when an alarm that remains active should
+be raised to a strictly higher severity after a selected game-time duration.
+Choose an explicit escalation sound or keep **INHERIT BASE SOUND**. Escalation
+starts a new occurrence, so it requires acknowledgement again and does not
+inherit an occurrence-bound audio snooze from the earlier state.
+
+The optional operator action can open the matching UNMA panel and scroll to
+the alarm. A second mode also ends only UNMA's temporary five-minute mute. It
+never moves the camera, opens an entity inspector, changes the global audio
+setting, modifies a slot snooze, acknowledges an alarm, or controls a machine.
+
+System-alarm stages expose the same actions. They run only when an already
+active system alarm advances into a new stage, not on its initial activation.
+For a staged escalation, configure a lower immediate stage and a higher stage
+with an activation delay.
+
 ### Rules with several conditions or objects
 
 After adding the first row, you can select another object in the game and click
@@ -346,9 +364,10 @@ invisible everywhere.
 The **SYSTEM** tab contains the built-in health, food, and worker monitoring.
 Each system alarm can be enabled, edited, or restored to its factory defaults.
 Its stages expose measured value, operator, threshold, hysteresis, activation
-and reset delay, minimum active time, severity, color, and sound. Each stage is
-timed independently before the highest applicable severity and priority is
-displayed. Restoring factory defaults requires a second press for confirmation.
+and reset delay, minimum active time, severity, color, sound, and an optional
+operator action. Each stage is timed independently before the highest
+applicable severity and priority is displayed. Restoring factory defaults
+requires a second press for confirmation.
 
 The game's health value is not a conventional 0–100 percent scale. `10` is the
 neutral base value, and health-related population loss starts below `0`. UNMA

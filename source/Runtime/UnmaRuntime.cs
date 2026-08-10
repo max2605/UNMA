@@ -261,6 +261,9 @@ public sealed class UnmaRuntime : IDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, AlarmAudioSnoozeState>
         m_alarmAudioSnoozes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> m_escalatedRuleIds =
+        new(StringComparer.Ordinal);
+    private readonly List<AlarmAttentionRequest> m_attentionRequests = new();
 
     private const int MaximumInstrumentHistorySamples = 100000;
     private const double InstrumentHistorySampleIntervalTicks =
@@ -529,6 +532,7 @@ public sealed class UnmaRuntime : IDisposable
             m_systemStageTimingStates.Clear();
             m_systemStageConditionLatches.Clear();
             m_systemStageTimingSignatures.Clear();
+            m_escalatedRuleIds.Clear();
 
             foreach (var rule in rules.Where(rule => rule.Enabled))
             {
@@ -625,6 +629,20 @@ public sealed class UnmaRuntime : IDisposable
                         m_ruleTimingSignatures[ruleId] =
                             AlarmTimingMemoryPolicy
                                 .RuleDefinitionSignature(rule);
+                    }
+                    if (rule != null &&
+                        AlarmEscalationPolicy.IsEscalatedOccurrenceId(
+                            rule.Id,
+                            view.OccurrenceId) &&
+                        AlarmEscalationPolicy.Normalize(
+                            rule.Escalation,
+                            rule.Severity).Enabled)
+                    {
+                        // Escalation memory is deliberately runtime-only.
+                        // Restore it exclusively from the exact active
+                        // occurrence so a base occurrence can never inherit
+                        // a stale escalation latch from severity or priority.
+                        m_escalatedRuleIds.Add(rule.Id);
                     }
                     continue;
                 }
@@ -1733,6 +1751,33 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// Takes the strongest pending presentation request. Requests are
+    /// runtime-only and become stale when their exact occurrence is no
+    /// longer active and unacknowledged. The UI decides how to present the
+    /// request; this method never mutates the simulation or machine state.
+    /// </summary>
+    public bool TryTakeAttentionRequest(
+        out AlarmAttentionRequest request)
+    {
+        lock (m_gate)
+        {
+            return AlarmAttentionQueuePolicy.TryTakeBest(
+                m_attentionRequests,
+                IsAttentionRequestRelevantLocked,
+                out request);
+        }
+    }
+
+    private bool IsAttentionRequestRelevantLocked(
+        AlarmAttentionRequest request)
+    {
+        return m_alarms.TryGetValue(request.AlarmKey, out var alarm) &&
+               alarm.Sequence == request.Sequence &&
+               alarm.View.IsActive &&
+               !alarm.View.IsAcknowledged;
+    }
+
     private void PruneAlarmAudioSnoozes(long currentGameTick)
     {
         lock (m_gate)
@@ -2022,6 +2067,45 @@ public sealed class UnmaRuntime : IDisposable
                     panel.Id,
                     normalizedPanelId,
                     StringComparison.Ordinal));
+        }
+    }
+
+    private string ResolveAttentionPanelId(
+        string preferredPanelId,
+        string slotId)
+    {
+        var normalizedPreferredPanelId = preferredPanelId?.Trim() ?? "";
+        var normalizedSlotId = slotId?.Trim() ?? "";
+        lock (m_configurationGate)
+        {
+            if (normalizedPreferredPanelId.Length > 0 &&
+                Configuration.Panels.Any(panel =>
+                    panel != null && string.Equals(
+                        panel.Id,
+                        normalizedPreferredPanelId,
+                        StringComparison.Ordinal)))
+            {
+                return normalizedPreferredPanelId;
+            }
+
+            var slottedPanel = Configuration.Panels.FirstOrDefault(panel =>
+                panel != null &&
+                !panel.IsDashboard &&
+                (panel.Slots ?? new List<PanelSlotDefinition>()).Any(slot =>
+                    slot != null && string.Equals(
+                        slot.AlarmId,
+                        normalizedSlotId,
+                        StringComparison.Ordinal)));
+            if (slottedPanel != null)
+            {
+                return slottedPanel.Id ?? "";
+            }
+
+            return Configuration.Panels.FirstOrDefault(panel =>
+                       panel != null && panel.IsDashboard)?.Id ??
+                   Configuration.Panels.FirstOrDefault(panel =>
+                       panel != null)?.Id ??
+                   "";
         }
     }
 
@@ -5084,7 +5168,8 @@ public sealed class UnmaRuntime : IDisposable
     private bool AdvanceRuleTiming(
         AlarmRuleDefinition rule,
         bool conditionMet,
-        long currentGameTick)
+        long currentGameTick,
+        out AlarmEscalationEvaluation escalation)
     {
         AlarmTimingEvaluation evaluation;
         bool changed;
@@ -5104,6 +5189,23 @@ public sealed class UnmaRuntime : IDisposable
             changed = AlarmTimingPolicy.HasPersistentStateChanged(
                 state,
                 evaluation.State);
+            var wasEscalated = m_escalatedRuleIds.Contains(rule.Id);
+            escalation = AlarmEscalationPolicy.Evaluate(
+                rule.Escalation,
+                rule.Severity,
+                rule.SoundId,
+                wasEscalated,
+                evaluation.IsActive,
+                evaluation.State.ActiveSinceTick,
+                currentGameTick);
+            if (escalation.IsEscalated)
+            {
+                m_escalatedRuleIds.Add(rule.Id);
+            }
+            else
+            {
+                m_escalatedRuleIds.Remove(rule.Id);
+            }
         }
         if (changed)
         {
@@ -5599,6 +5701,7 @@ public sealed class UnmaRuntime : IDisposable
             changed = m_ruleTimingStates.Remove(ruleId);
             changed |= m_ruleConditionLatches.Remove(ruleId);
             changed |= m_ruleTimingSignatures.Remove(ruleId);
+            changed |= m_escalatedRuleIds.Remove(ruleId);
         }
         RemoveSustainedStatesForRule(ruleId);
         return changed;
@@ -5771,7 +5874,11 @@ public sealed class UnmaRuntime : IDisposable
                     alarm.AutoAcknowledgeOnClear,
                 occurrenceId: selectedStage.Id,
                 occurrencePriority: selectedStage.Priority,
-                slotId: alarm.Id);
+                slotId: alarm.Id,
+                operatorAction: selectedStage.OperatorAction,
+                attentionPanelId: ResolveAttentionPanelId(
+                    preferredPanelId: "",
+                    slotId: alarm.Id));
         }
     }
 
@@ -6717,10 +6824,12 @@ public sealed class UnmaRuntime : IDisposable
             }
         }
 
+        var currentGameTick = CurrentGameTick;
         var isActive = AdvanceRuleTiming(
             rule,
             AlarmEvaluation.Combine(values, rule.Logic),
-            CurrentGameTick);
+            currentGameTick,
+            out var escalation);
         var alarmKey = "rule:" + rule.Id;
         if (!isActive)
         {
@@ -6737,16 +6846,24 @@ public sealed class UnmaRuntime : IDisposable
                 details),
             "custom",
             rule.PanelId,
-            rule.Severity,
+            escalation.Severity,
             isActive,
             missingSource,
-            rule.SoundId,
-            rule.ActiveColor,
+            escalation.SoundId,
+            escalation.IsEscalated
+                ? ColorFor(escalation.Severity)
+                : rule.ActiveColor,
             lastValue,
             autoAcknowledgeOnClear:
                 rule.AutoAcknowledgeOnClear,
-            occurrenceId: rule.Id,
-            slotId: "rule:" + rule.Id);
+            occurrenceId: AlarmEscalationPolicy.GetOccurrenceId(
+                rule.Id,
+                escalation.IsEscalated),
+            occurrencePriority: escalation.IsEscalated
+                ? AlarmEscalationPolicy.EscalatedOccurrencePriority
+                : AlarmEscalationPolicy.BaseOccurrencePriority,
+            slotId: "rule:" + rule.Id,
+            operatorAction: escalation.OperatorAction);
     }
 
     private bool EvaluateSustainedCondition(
@@ -7619,7 +7736,9 @@ public sealed class UnmaRuntime : IDisposable
         string slotId = "",
         int entityId = -1,
         string entityPrototypeId = "",
-        string entityTitle = "")
+        string entityTitle = "",
+        AlarmOperatorAction operatorAction = AlarmOperatorAction.None,
+        string attentionPanelId = "")
     {
         var shouldPersist = false;
         var shouldPublishExternal = false;
@@ -7725,6 +7844,22 @@ public sealed class UnmaRuntime : IDisposable
                 state.View.Sequence = state.Sequence;
                 m_alarmHistory.Add(CreateHistoryFromState(state));
                 historyChanged = true;
+                if (ShouldEnqueueAttentionRequest(
+                        wasActive,
+                        transition.IsNewOccurrence))
+                {
+                    AlarmAttentionQueuePolicy.TryEnqueue(
+                        m_attentionRequests,
+                        new AlarmAttentionRequest(
+                            state.View.Key,
+                            state.Sequence,
+                            string.IsNullOrWhiteSpace(attentionPanelId)
+                                ? state.View.PanelId
+                                : attentionPanelId,
+                            state.View.SlotId,
+                            state.View.Severity,
+                            operatorAction));
+                }
             }
             else if (state.Sequence > 0 &&
                      (wasActive || wasGoneUnacknowledged ||
@@ -7830,6 +7965,13 @@ public sealed class UnmaRuntime : IDisposable
         {
             PublishExternalDisplayAlarm(slotCandidate, true);
         }
+    }
+
+    private static bool ShouldEnqueueAttentionRequest(
+        bool wasActive,
+        bool isNewOccurrence)
+    {
+        return wasActive && isNewOccurrence;
     }
 
     private void ClearAlarm(
@@ -8907,6 +9049,7 @@ public sealed class UnmaRuntime : IDisposable
             ActivationDelayTicks = source.ActivationDelayTicks,
             ResetDelayTicks = source.ResetDelayTicks,
             MinimumActiveTicks = source.MinimumActiveTicks,
+            Escalation = AlarmEscalationPolicy.Clone(source.Escalation),
             Conditions = source.Conditions.Select(condition =>
                 new ConditionDefinition
                 {
@@ -8956,6 +9099,7 @@ public sealed class UnmaRuntime : IDisposable
                     ActivationDelayTicks = stage.ActivationDelayTicks,
                     ResetDelayTicks = stage.ResetDelayTicks,
                     MinimumActiveTicks = stage.MinimumActiveTicks,
+                    OperatorAction = stage.OperatorAction,
                     Conditions = stage.Conditions.Select(condition =>
                         new SystemConditionDefinition
                         {

@@ -12,6 +12,9 @@ Set-StrictMode -Version Latest
 $runtimeTypeName = "UNMA.Runtime.UnmaRuntime"
 $configurationTypeName = "UNMA.Domain.UnmaConfiguration"
 $timingMemoryPolicyTypeName = "UNMA.Domain.AlarmTimingMemoryPolicy"
+$escalationPolicyTypeName = "UNMA.Domain.AlarmEscalationPolicy"
+$attentionQueuePolicyTypeName = "UNMA.Domain.AlarmAttentionQueuePolicy"
+$attentionRequestTypeName = "UNMA.Domain.AlarmAttentionRequest"
 $entityTypeName = "Mafi.Core.Entities.IEntity"
 $entitiesManagerTypeName = "Mafi.Core.Entities.IEntitiesManager"
 $nonSaveableEventTypeName = "Mafi.IEventNonSaveable``1"
@@ -339,6 +342,10 @@ $configurationType = $assembly.GetType(
     $configurationTypeName,
     $true,
     $false)
+$attentionRequestType = $assembly.GetType(
+    $attentionRequestTypeName,
+    $true,
+    $false)
 $bindingFlags = [System.Reflection.BindingFlags]::Instance -bor
     [System.Reflection.BindingFlags]::Static -bor
     [System.Reflection.BindingFlags]::Public -bor
@@ -353,6 +360,13 @@ $restoreConfiguration = @(
     $methods | Where-Object Name -eq "RestoreConfiguration")
 $restoreAlarmTimingStates = @(
     $methods | Where-Object Name -eq "RestoreAlarmTimingStates")
+$advanceRuleTiming = @(
+    $methods | Where-Object Name -eq "AdvanceRuleTiming")
+$setAlarm = @($methods | Where-Object Name -eq "SetAlarm")
+$tryTakeAttentionRequest = @(
+    $methods | Where-Object Name -eq "TryTakeAttentionRequest")
+$shouldEnqueueAttention = @(
+    $methods | Where-Object Name -eq "ShouldEnqueueAttentionRequest")
 Assert-Condition ($initialize.Count -eq 1) "Initialize was not found exactly once."
 Assert-Condition ($dispose.Count -eq 1) "Dispose was not found exactly once."
 Assert-Condition `
@@ -361,6 +375,18 @@ Assert-Condition `
 Assert-Condition `
     ($restoreAlarmTimingStates.Count -eq 1) `
     "RestoreAlarmTimingStates was not found exactly once."
+Assert-Condition `
+    ($advanceRuleTiming.Count -eq 1) `
+    "AdvanceRuleTiming was not found exactly once."
+Assert-Condition `
+    ($setAlarm.Count -eq 1) `
+    "SetAlarm was not found exactly once."
+Assert-Condition `
+    ($tryTakeAttentionRequest.Count -eq 1) `
+    "TryTakeAttentionRequest was not found exactly once."
+Assert-Condition `
+    ($shouldEnqueueAttention.Count -eq 1) `
+    "ShouldEnqueueAttentionRequest was not found exactly once."
 
 $restoredStageSelectorCalls = @(
     Read-MethodInstructions $restoreAlarmTimingStates[0] | Where-Object {
@@ -374,6 +400,124 @@ Assert-Condition `
     "RestoreAlarmTimingStates must use the strict stage selector exactly once."
 Write-Host `
     "UNMA restored-stage bootstrap IL regression passed."
+
+# Escalation is deliberately split into pure domain policy plus a runtime-only
+# UI hand-off. Verify the compiled call graph and public dequeue contract so a
+# later refactor cannot accidentally bypass the one-shot latch or execute a
+# game/system mutation while consuming presentation intent.
+$attentionParameters = @($tryTakeAttentionRequest[0].GetParameters())
+Assert-Condition `
+    ($tryTakeAttentionRequest[0].IsPublic -and
+        $tryTakeAttentionRequest[0].ReturnType -eq [bool]) `
+    "TryTakeAttentionRequest must remain a public bool API."
+Assert-Condition `
+    ($attentionParameters.Count -eq 1 -and
+        $attentionParameters[0].IsOut -and
+        $attentionParameters[0].ParameterType.IsByRef -and
+        $attentionParameters[0].ParameterType.GetElementType().FullName -eq
+            $attentionRequestTypeName) `
+    "TryTakeAttentionRequest must expose one out AlarmAttentionRequest."
+
+$attentionProperties = @{}
+foreach ($property in $attentionRequestType.GetProperties(
+        [System.Reflection.BindingFlags]::Instance -bor
+        [System.Reflection.BindingFlags]::Public -bor
+        [System.Reflection.BindingFlags]::DeclaredOnly)) {
+    $attentionProperties[$property.Name] = $property.PropertyType.FullName
+}
+foreach ($requiredProperty in @{
+        PanelId = "System.String"
+        SlotId = "System.String"
+        OperatorAction = "UNMA.Domain.AlarmOperatorAction"
+    }.GetEnumerator()) {
+    Assert-Condition `
+        ($attentionProperties.ContainsKey($requiredProperty.Key) -and
+            $attentionProperties[$requiredProperty.Key] -eq
+                $requiredProperty.Value) `
+        "AlarmAttentionRequest.$($requiredProperty.Key) has the wrong type."
+}
+
+$advanceEscalationCalls = @(
+    Read-MethodInstructions $advanceRuleTiming[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $escalationPolicyTypeName `
+            "Evaluate"
+    })
+Assert-Condition `
+    ($advanceEscalationCalls.Count -eq 1) `
+    "AdvanceRuleTiming must evaluate escalation exactly once."
+
+$enqueueAttentionCalls = @(
+    Read-MethodInstructions $setAlarm[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $attentionQueuePolicyTypeName `
+            "TryEnqueue"
+    })
+Assert-Condition `
+    ($enqueueAttentionCalls.Count -eq 1) `
+    "SetAlarm must enqueue attention through the bounded policy exactly once."
+$enqueueGuardCalls = @(
+    Read-MethodInstructions $setAlarm[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $runtimeTypeName `
+            "ShouldEnqueueAttentionRequest"
+    })
+Assert-Condition `
+    ($enqueueGuardCalls.Count -eq 1) `
+    "SetAlarm must guard attention hand-off exactly once."
+Assert-Condition `
+    (-not [bool]$shouldEnqueueAttention[0].Invoke(
+        $null,
+        @($false, $true))) `
+    "Initial activation must not enqueue operator attention."
+Assert-Condition `
+    (-not [bool]$shouldEnqueueAttention[0].Invoke(
+        $null,
+        @($true, $false))) `
+    "An unchanged active occurrence must not enqueue operator attention."
+Assert-Condition `
+    ([bool]$shouldEnqueueAttention[0].Invoke(
+        $null,
+        @($true, $true))) `
+    "Only an active alarm entering a new occurrence may enqueue attention."
+
+$takeAttentionInstructions = @(
+    Read-MethodInstructions $tryTakeAttentionRequest[0])
+$takeBestCalls = @($takeAttentionInstructions | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $attentionQueuePolicyTypeName `
+            "TryTakeBest"
+    })
+Assert-Condition `
+    ($takeBestCalls.Count -eq 1) `
+    "TryTakeAttentionRequest must prune/select through TryTakeBest exactly once."
+foreach ($instruction in $takeAttentionInstructions) {
+    if ($instruction.Operand -isnot [System.Reflection.MethodBase]) {
+        continue
+    }
+    $declaringTypeName = $instruction.Operand.DeclaringType.FullName
+    Assert-Condition `
+        (-not ($declaringTypeName -like "Mafi*" -or
+            $declaringTypeName -like "UnityEngine*")) `
+        "TryTakeAttentionRequest must not call game or Unity APIs."
+}
+
+$restoredEscalationCalls = @(
+    Read-MethodInstructions $restoreAlarmTimingStates[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $escalationPolicyTypeName `
+            "IsEscalatedOccurrenceId"
+    })
+Assert-Condition `
+    ($restoredEscalationCalls.Count -eq 1) `
+    "RestoreAlarmTimingStates must use the exact escalation occurrence ID."
+Write-Host `
+    "UNMA escalation runtime IL/reflection regression passed."
 
 # Atomic configuration rollback must not silently miss a newly added
 # DataMember. Validate the compiled IL rather than maintaining a fragile

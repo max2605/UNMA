@@ -72,6 +72,11 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Spielzeitbasierte Auslöse- und Rücksetzverzögerung sowie Mindestaktivzeit je
   eigener Regel und Systemalarmstufe. Eine Hysterese je numerischer Bedingung
   hält Grenzwerte stabil; laufende Timer und Latches überleben Save/Load.
+- Eigene Regeln können nach frei wählbarer aktiver Spielzeit einmalig auf eine
+  höhere Stufe und einen anderen Ton eskalieren. Optional öffnet UNMA dann das
+  passende Panel und beendet ausschließlich die vorübergehende
+  Fünf-Minuten-Stummschaltung. Systemstufen bieten dieselben sicheren
+  Operatoraktionen beim Wechsel eines bereits aktiven Alarms.
 - Absolute Schwellen und `% VON` einem wählbaren Bezugs-Messwert. Kapazitäten
   werden für Lager, Förderer/Rohre und Fahrzeugfracht automatisch empfohlen.
 - Bedingungen können statt eines Spielobjekts auch **GLOBALE VARIABLEN** wie

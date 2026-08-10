@@ -396,6 +396,7 @@ public static class PanelClonePolicy
             ActivationDelayTicks = source.ActivationDelayTicks,
             ResetDelayTicks = source.ResetDelayTicks,
             MinimumActiveTicks = source.MinimumActiveTicks,
+            Escalation = AlarmEscalationPolicy.Clone(source.Escalation),
         };
     }
 
