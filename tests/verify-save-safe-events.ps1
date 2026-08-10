@@ -17,6 +17,12 @@ $attentionQueuePolicyTypeName = "UNMA.Domain.AlarmAttentionQueuePolicy"
 $attentionRequestTypeName = "UNMA.Domain.AlarmAttentionRequest"
 $forecastPolicyTypeName = "UNMA.Domain.InstrumentForecastPolicy"
 $forecastResultTypeName = "UNMA.Domain.InstrumentForecastResult"
+$alarmAreaPolicyTypeName = "UNMA.Domain.AlarmAreaPolicy"
+$alarmAreaDefinitionTypeName = "UNMA.Domain.AlarmAreaDefinition"
+$alarmAreaFilterTypeName = "UNMA.Domain.AlarmAreaFilter"
+$alarmAreaFilterKindTypeName = "UNMA.Domain.AlarmAreaFilterKind"
+$alarmViewTypeName = "UNMA.Domain.AlarmView"
+$panelProjectionTypeName = "UNMA.Domain.PanelSlotProjection"
 $entityTypeName = "Mafi.Core.Entities.IEntity"
 $entitiesManagerTypeName = "Mafi.Core.Entities.IEntitiesManager"
 $nonSaveableEventTypeName = "Mafi.IEventNonSaveable``1"
@@ -352,6 +358,22 @@ $forecastResultType = $assembly.GetType(
     $forecastResultTypeName,
     $true,
     $false)
+$alarmAreaDefinitionType = $assembly.GetType(
+    $alarmAreaDefinitionTypeName,
+    $true,
+    $false)
+$alarmAreaFilterType = $assembly.GetType(
+    $alarmAreaFilterTypeName,
+    $true,
+    $false)
+$alarmAreaFilterKindType = $assembly.GetType(
+    $alarmAreaFilterKindTypeName,
+    $true,
+    $false)
+$alarmViewType = $assembly.GetType(
+    $alarmViewTypeName,
+    $true,
+    $false)
 $bindingFlags = [System.Reflection.BindingFlags]::Instance -bor
     [System.Reflection.BindingFlags]::Static -bor
     [System.Reflection.BindingFlags]::Public -bor
@@ -381,6 +403,24 @@ $forecastWindowHelper = @(
     $methods | Where-Object Name -eq "IsInstrumentForecastSampleInWindow")
 $instrumentClockRollbackHelper = @(
     $methods | Where-Object Name -eq "DidInstrumentClockRollBack")
+$replaceAlarmAreas = @(
+    $methods | Where-Object Name -eq "ReplaceAlarmAreas")
+$updatePanelSettings = @(
+    $methods | Where-Object Name -eq "UpdatePanelSettings")
+$tryGetDashboardViews = @(
+    $methods | Where-Object Name -eq "TryGetDashboardViews")
+$tryCaptureAlarmAreaProjection = @(
+    $methods | Where-Object Name -eq "TryCaptureAlarmAreaProjection")
+$tryAcknowledgeDashboard = @(
+    $methods | Where-Object Name -eq "TryAcknowledgeDashboard")
+$tryGetNextDashboardUnacknowledged = @(
+    $methods | Where-Object Name -eq "TryGetNextDashboardUnacknowledged")
+$projectActiveDashboardArea = @(
+    $methods | Where-Object Name -eq "ProjectActiveDashboardArea")
+$canAcknowledgeFilteredDashboardAlarm = @(
+    $methods | Where-Object Name -eq "CanAcknowledgeFilteredDashboardAlarm")
+$isExactAlarmAreaFilter = @(
+    $methods | Where-Object Name -eq "IsExactAlarmAreaFilter")
 Assert-Condition ($initialize.Count -eq 1) "Initialize was not found exactly once."
 Assert-Condition ($dispose.Count -eq 1) "Dispose was not found exactly once."
 Assert-Condition `
@@ -413,6 +453,33 @@ Assert-Condition `
 Assert-Condition `
     ($instrumentClockRollbackHelper.Count -eq 1) `
     "Instrument clock rollback helper was not found exactly once."
+Assert-Condition `
+    ($replaceAlarmAreas.Count -eq 1) `
+    "ReplaceAlarmAreas was not found exactly once."
+Assert-Condition `
+    ($updatePanelSettings.Count -eq 2) `
+    "UpdatePanelSettings must expose exactly two overloads."
+Assert-Condition `
+    ($tryGetDashboardViews.Count -eq 1) `
+    "TryGetDashboardViews was not found exactly once."
+Assert-Condition `
+    ($tryCaptureAlarmAreaProjection.Count -eq 1) `
+    "TryCaptureAlarmAreaProjection was not found exactly once."
+Assert-Condition `
+    ($tryAcknowledgeDashboard.Count -eq 1) `
+    "TryAcknowledgeDashboard was not found exactly once."
+Assert-Condition `
+    ($tryGetNextDashboardUnacknowledged.Count -eq 1) `
+    "TryGetNextDashboardUnacknowledged was not found exactly once."
+Assert-Condition `
+    ($projectActiveDashboardArea.Count -eq 1) `
+    "ProjectActiveDashboardArea was not found exactly once."
+Assert-Condition `
+    ($canAcknowledgeFilteredDashboardAlarm.Count -eq 1) `
+    "CanAcknowledgeFilteredDashboardAlarm was not found exactly once."
+Assert-Condition `
+    ($isExactAlarmAreaFilter.Count -eq 1) `
+    "IsExactAlarmAreaFilter was not found exactly once."
 
 $restoredStageSelectorCalls = @(
     Read-MethodInstructions $restoreAlarmTimingStates[0] | Where-Object {
@@ -731,6 +798,315 @@ Assert-Condition `
     "CaptureInstrumentValues must evaluate clock rollback exactly once."
 Write-Host `
     "UNMA instrument forecast runtime IL/reflection regression passed."
+
+# Alarm-area dashboard filtering is a presentation scope over existing panel
+# visibility. Keep the public atomic APIs stable, reject stale area filters,
+# exclude gone latches from filtered dashboards, and preserve full rollback for
+# configuration mutations.
+$replaceParameters = @($replaceAlarmAreas[0].GetParameters())
+Assert-Condition `
+    ($replaceAlarmAreas[0].IsPublic -and
+        $replaceAlarmAreas[0].ReturnType -eq [bool] -and
+        $replaceParameters.Count -eq 2 -and
+        (Get-GenericTypeDefinitionName ($replaceParameters[0].ParameterType)) -eq
+            "System.Collections.Generic.IReadOnlyList``1" -and
+        $replaceParameters[0].ParameterType.GetGenericArguments()[0] -eq
+            $alarmAreaDefinitionType -and
+        $replaceParameters[1].IsOut -and
+        $replaceParameters[1].ParameterType.IsByRef -and
+        $replaceParameters[1].ParameterType.GetElementType() -eq [int]) `
+    "ReplaceAlarmAreas public contract changed."
+
+$dashboardViewParameters = @($tryGetDashboardViews[0].GetParameters())
+$dashboardViewOutType =
+    $dashboardViewParameters[1].ParameterType.GetElementType()
+Assert-Condition `
+    ($tryGetDashboardViews[0].IsPublic -and
+        $tryGetDashboardViews[0].ReturnType -eq [bool] -and
+        $dashboardViewParameters.Count -eq 2 -and
+        $dashboardViewParameters[0].ParameterType -eq $alarmAreaFilterType -and
+        $dashboardViewParameters[1].IsOut -and
+        $dashboardViewOutType.IsGenericType -and
+        (Get-GenericTypeDefinitionName $dashboardViewOutType) -eq
+            "System.Collections.Generic.IReadOnlyList``1" -and
+        $dashboardViewOutType.GetGenericArguments()[0] -eq $alarmViewType) `
+    "TryGetDashboardViews public contract changed."
+
+$dashboardAckParameters = @($tryAcknowledgeDashboard[0].GetParameters())
+Assert-Condition `
+    ($tryAcknowledgeDashboard[0].IsPublic -and
+        $tryAcknowledgeDashboard[0].ReturnType -eq [bool] -and
+        $dashboardAckParameters.Count -eq 3 -and
+        $dashboardAckParameters[0].ParameterType -eq $alarmAreaFilterType -and
+        (Get-GenericTypeDefinitionName `
+            ($dashboardAckParameters[1].ParameterType)) -eq
+            "System.Collections.Generic.IEnumerable``1" -and
+        $dashboardAckParameters[1].ParameterType.GetGenericArguments()[0] -eq
+            [string] -and
+        $dashboardAckParameters[2].IsOut -and
+        $dashboardAckParameters[2].ParameterType.GetElementType() -eq [int]) `
+    "TryAcknowledgeDashboard public contract changed."
+
+$dashboardNextParameters = @(
+    $tryGetNextDashboardUnacknowledged[0].GetParameters())
+Assert-Condition `
+    ($tryGetNextDashboardUnacknowledged[0].IsPublic -and
+        $tryGetNextDashboardUnacknowledged[0].ReturnType -eq [bool] -and
+        $dashboardNextParameters.Count -eq 3 -and
+        $dashboardNextParameters[0].ParameterType -eq $alarmAreaFilterType -and
+        $dashboardNextParameters[1].ParameterType -eq [string] -and
+        $dashboardNextParameters[2].IsOut -and
+        $dashboardNextParameters[2].ParameterType.GetElementType() -eq
+            $alarmViewType) `
+    "TryGetNextDashboardUnacknowledged public contract changed."
+
+$legacyPanelSettings = @($updatePanelSettings | Where-Object {
+    @($_.GetParameters()).Count -eq 6
+})
+$areaPanelSettings = @($updatePanelSettings | Where-Object {
+    @($_.GetParameters()).Count -eq 7
+})
+Assert-Condition `
+    ($legacyPanelSettings.Count -eq 1 -and
+        $areaPanelSettings.Count -eq 1 -and
+        $areaPanelSettings[0].GetParameters()[6].ParameterType -eq [string]) `
+    "UpdatePanelSettings area overload changed."
+$legacyPanelSettingsDelegations = @(
+    Read-MethodInstructions $legacyPanelSettings[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $runtimeTypeName `
+            "UpdatePanelSettings"
+    })
+Assert-Condition `
+    ($legacyPanelSettingsDelegations.Count -eq 1) `
+    "Legacy UpdatePanelSettings must delegate exactly once."
+
+foreach ($mutationContract in @(
+        [pscustomobject]@{
+            Method = $replaceAlarmAreas[0]
+            PolicyMethod = "ValidateReplacement"
+        },
+        [pscustomobject]@{
+            Method = $areaPanelSettings[0]
+            PolicyMethod = "TryAssign"
+        })) {
+    $mutationInstructions = @(
+        Read-MethodInstructions $mutationContract.Method)
+    foreach ($runtimeCall in @(
+            "CloneConfiguration",
+            "SaveConfiguration",
+            "RestoreConfiguration",
+            "RestoreConfigurationAlarmSnapshots")) {
+        $calls = @($mutationInstructions | Where-Object {
+            Test-IsMethodInstruction $_ $runtimeTypeName $runtimeCall
+        })
+        Assert-Condition `
+            ($calls.Count -eq 1) `
+            "$($mutationContract.Method.Name) must call $runtimeCall exactly once."
+    }
+    $policyCalls = @($mutationInstructions | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $alarmAreaPolicyTypeName `
+            $mutationContract.PolicyMethod
+    })
+    Assert-Condition `
+        ($policyCalls.Count -eq 1) `
+        "$($mutationContract.Method.Name) must use $($mutationContract.PolicyMethod) exactly once."
+}
+
+$dashboardViewInstructions = @(
+    Read-MethodInstructions $tryGetDashboardViews[0])
+foreach ($requiredCall in @(
+        "TryCaptureAlarmAreaProjection",
+        "GetViews",
+        "ProjectActiveDashboardArea")) {
+    $calls = @($dashboardViewInstructions | Where-Object {
+        Test-IsMethodInstruction $_ $runtimeTypeName $requiredCall
+    })
+    Assert-Condition `
+        ($calls.Count -eq 1) `
+        "TryGetDashboardViews must call $requiredCall exactly once."
+}
+$dashboardViewMonitorEnter = @($dashboardViewInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Enter"
+})
+$dashboardViewMonitorExit = @($dashboardViewInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Exit"
+})
+Assert-Condition `
+    ($dashboardViewMonitorEnter.Count -eq 1 -and
+        $dashboardViewMonitorExit.Count -eq 1) `
+    "Filtered dashboard alarm snapshot must use one balanced monitor section."
+$dashboardProjectionCalls = @($dashboardViewInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "ProjectActiveDashboardArea"
+})
+Assert-Condition `
+    ($dashboardProjectionCalls[0].Offset -gt
+        $dashboardViewMonitorExit[0].Offset) `
+    "Area visibility and projection must run after leaving the alarm lock."
+
+$captureAreaInstructions = @(
+    Read-MethodInstructions $tryCaptureAlarmAreaProjection[0])
+$captureAreaMonitorEnter = @($captureAreaInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Enter"
+})
+$captureAreaMonitorExit = @($captureAreaInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Exit"
+})
+$alarmGateField = $runtimeType.GetField("m_gate", $bindingFlags)
+$captureAlarmGateLoads = @($captureAreaInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.FieldInfo] -and
+        (Test-SameField $_.Operand $alarmGateField)
+})
+Assert-Condition `
+    ($captureAreaMonitorEnter.Count -eq 1 -and
+        $captureAreaMonitorExit.Count -eq 1 -and
+        $captureAlarmGateLoads.Count -eq 0) `
+    "Area membership snapshot must use only the configuration monitor."
+foreach ($instruction in $dashboardViewInstructions) {
+    if ($instruction.Operand -isnot [System.Reflection.MethodBase] -or
+        $null -eq $instruction.Operand.DeclaringType) {
+        continue
+    }
+    $declaringTypeName = $instruction.Operand.DeclaringType.FullName
+    Assert-Condition `
+        (-not ($declaringTypeName -like "Mafi*" -or
+            $declaringTypeName -like "UnityEngine*")) `
+        "TryGetDashboardViews must not call game or Unity APIs."
+}
+
+$projectAreaInstructions = @(
+    Read-MethodInstructions $projectActiveDashboardArea[0])
+$projectActiveCalls = @($projectAreaInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $panelProjectionTypeName `
+        "ProjectActive"
+})
+Assert-Condition `
+    ($projectActiveCalls.Count -eq 1) `
+    "Filtered area projection must deduplicate through ProjectActive exactly once."
+
+$activeAcknowledged = [Activator]::CreateInstance($alarmViewType)
+$activeAcknowledged.Key = "active-acknowledged"
+$activeAcknowledged.SlotId = "shared-slot"
+$activeAcknowledged.IsActive = $true
+$activeAcknowledged.IsAcknowledged = $true
+$activeAcknowledged.Sequence = [long]1
+$activeDuplicate = [Activator]::CreateInstance($alarmViewType)
+$activeDuplicate.Key = "active-duplicate"
+$activeDuplicate.SlotId = "shared-slot"
+$activeDuplicate.IsActive = $true
+$activeDuplicate.IsAcknowledged = $true
+$activeDuplicate.Sequence = [long]2
+$goneUnacknowledged = [Activator]::CreateInstance($alarmViewType)
+$goneUnacknowledged.Key = "gone-unacknowledged"
+$goneUnacknowledged.SlotId = "shared-slot"
+$goneUnacknowledged.IsGoneUnacknowledged = $true
+$goneUnacknowledged.Sequence = [long]999
+$projectionCandidates = [Array]::CreateInstance($alarmViewType, 3)
+$projectionCandidates.SetValue($activeAcknowledged, 0)
+$projectionCandidates.SetValue($activeDuplicate, 1)
+$projectionCandidates.SetValue($goneUnacknowledged, 2)
+$projectionArguments = [object[]]::new(1)
+$projectionArguments[0] = $projectionCandidates
+$projectedAreaViews = @(
+    $projectActiveDashboardArea[0].Invoke($null, $projectionArguments))
+Assert-Condition `
+    ($projectedAreaViews.Count -eq 1 -and
+        $projectedAreaViews[0].IsActive -and
+        $projectedAreaViews[0].IsAcknowledged -and
+        -not $projectedAreaViews[0].RequiresAcknowledgement) `
+    "Filtered area projection must exclude gone latches before deduplication."
+
+$activeUnacknowledged = [Activator]::CreateInstance($alarmViewType)
+$activeUnacknowledged.IsActive = $true
+$activeUnacknowledged.IsAcknowledged = $false
+Assert-Condition `
+    ([bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
+        $null,
+        @($activeUnacknowledged))) `
+    "Filtered dashboard must acknowledge active unacknowledged alarms."
+Assert-Condition `
+    (-not [bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
+        $null,
+        @($activeAcknowledged))) `
+    "Filtered dashboard must not acknowledge already acknowledged alarms."
+Assert-Condition `
+    (-not [bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
+        $null,
+        @($goneUnacknowledged))) `
+    "Filtered dashboard must never acknowledge gone latches."
+
+$areaKind = [Enum]::Parse($alarmAreaFilterKindType, "Area")
+$allFilter = $alarmAreaFilterType.GetProperty("All").GetValue($null)
+$unknownAreaFilter = [Activator]::CreateInstance(
+    $alarmAreaFilterType,
+    [object[]]@($areaKind, "missing-area"))
+Assert-Condition `
+    (-not [bool]$isExactAlarmAreaFilter[0].Invoke(
+        $null,
+        @($unknownAreaFilter, $allFilter))) `
+    "A stale area filter must never fall back to ALL."
+
+$dashboardAckInstructions = @(
+    Read-MethodInstructions $tryAcknowledgeDashboard[0])
+$dashboardAckMonitorEnter = @($dashboardAckInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Enter"
+})
+$dashboardAckMonitorExit = @($dashboardAckInstructions | Where-Object {
+    Test-IsMethodInstruction $_ "System.Threading.Monitor" "Exit"
+})
+$persistenceGateField = $runtimeType.GetField(
+    "m_persistenceGate",
+    $bindingFlags)
+$ackPersistenceGateLoads = @($dashboardAckInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.FieldInfo] -and
+        (Test-SameField $_.Operand $persistenceGateField)
+})
+$ackConfigurationGateLoads = @($dashboardAckInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.FieldInfo] -and
+        (Test-SameField $_.Operand $configurationGateField)
+})
+Assert-Condition `
+    ($dashboardAckMonitorEnter.Count -eq 3 -and
+        $dashboardAckMonitorExit.Count -eq 3 -and
+        $ackPersistenceGateLoads.Count -ge 1 -and
+        $ackConfigurationGateLoads.Count -eq 0) `
+    "Scoped acknowledgement lock order changed or nested the configuration gate."
+$globalAckCalls = @($dashboardAckInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $runtimeTypeName "AcknowledgeAll"
+})
+Assert-Condition `
+    ($globalAckCalls.Count -eq 0) `
+    "Scoped dashboard acknowledgement must never call AcknowledgeAll."
+$areaPersistCalls = @($dashboardAckInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $runtimeTypeName "PersistAlarmState"
+})
+Assert-Condition `
+    ($areaPersistCalls.Count -eq 1) `
+    "Scoped dashboard acknowledgement must expose one persistence hand-off."
+$nextInstructions = @(
+    Read-MethodInstructions $tryGetNextDashboardUnacknowledged[0])
+$nextViewCalls = @($nextInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $runtimeTypeName "TryGetDashboardViews"
+})
+$nextMutationCalls = @($nextInstructions | Where-Object {
+    $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq $runtimeTypeName -and
+        ($_.Operand.Name -like "Acknowledge*" -or
+            $_.Operand.Name -eq "PersistAlarmState")
+})
+Assert-Condition `
+    ($nextViewCalls.Count -eq 1 -and $nextMutationCalls.Count -eq 0) `
+    "Next alarm navigation must be a read-only view query."
+Write-Host `
+    "UNMA alarm-area runtime IL/reflection regression passed."
 
 # Atomic configuration rollback must not silently miss a newly added
 # DataMember. Validate the compiled IL rather than maintaining a fragile

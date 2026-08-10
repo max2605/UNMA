@@ -1,3 +1,14 @@
+v0.9.25 | 2026-08-11
+Operational alarm areas
+* Added user-defined areas that group global panels without changing alarm state, history, historian data, or audio behavior.
+* Added ALL, UNASSIGNED, and concrete area filters for the panel bar and HOME; filtered HOME deduplicates active alarm tiles from its member panels.
+* Added area-scoped acknowledgement and next-alarm navigation while keeping MASTER ACK explicitly global.
+* Kept acknowledgement on the underlying global alarm state, so one alarm visible in several areas becomes acknowledged everywhere without duplicate history.
+* Made area create, rename, reorder, and delete one atomic draft; deleting an area only moves its panels to UNASSIGNED.
+* Added area assignment to panel settings, source-area inheritance for panel clones, and concrete-current-area inheritance for new panels.
+* Protected unsaved panel and area drafts and stacked narrow or 200-percent layouts without hiding required controls.
+* Migrated schema 20 with existing panels UNASSIGNED and the prior ALL behavior unchanged.
+
 v0.9.24 | 2026-08-10
 Instrument historian and directed ETA
 * Added HIST to every instrument type with shared game-time ranges from one day through the complete session history.

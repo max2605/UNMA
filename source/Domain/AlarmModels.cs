@@ -250,6 +250,14 @@ public sealed class PanelSlotDefinition
 }
 
 [DataContract]
+public sealed class AlarmAreaDefinition
+{
+    [DataMember(Order = 1)] public string Id =
+        Guid.NewGuid().ToString("N");
+    [DataMember(Order = 2)] public string Name = "AREA";
+}
+
+[DataContract]
 public sealed class PanelDefinition
 {
     [DataMember(Order = 1)] public string Id = Guid.NewGuid().ToString("N");
@@ -267,6 +275,7 @@ public sealed class PanelDefinition
     [DataMember(Order = 11)] public string OwnerEntityTitle = "";
     [DataMember(Order = 12)] public string OwnerEntityPrototypeId = "";
     [DataMember(Order = 13)] public string OwnerEntityType = "";
+    [DataMember(Order = 14)] public string AreaId = "";
 }
 
 [DataContract]
@@ -405,7 +414,7 @@ public sealed class AlarmHistoryDefinition
 [DataContract]
 public sealed class UnmaConfiguration
 {
-    [DataMember(Order = 1)] public int SchemaVersion = 19;
+    [DataMember(Order = 1)] public int SchemaVersion = 20;
     [DataMember(Order = 2)] public List<PanelDefinition> Panels = new();
     [DataMember(Order = 3)] public List<AlarmRuleDefinition> Rules = new();
     [DataMember(Order = 4)] public string WarningColor = "#F0C541";
@@ -440,6 +449,8 @@ public sealed class UnmaConfiguration
     public List<InstrumentPanelDefinition> InstrumentPanels = new();
     [DataMember(Order = 26)]
     public List<AlarmTimingMemoryDefinition> AlarmTimingMemories = new();
+    [DataMember(Order = 27)]
+    public List<AlarmAreaDefinition> AlarmAreas = new();
 
     public static UnmaConfiguration CreateDefault()
     {
@@ -649,6 +660,7 @@ public sealed class UnmaConfiguration
         Instruments ??= new List<InstrumentDefinition>();
         InstrumentPanels ??= new List<InstrumentPanelDefinition>();
         AlarmTimingMemories ??= new List<AlarmTimingMemoryDefinition>();
+        AlarmAreas ??= new List<AlarmAreaDefinition>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -718,6 +730,19 @@ public sealed class UnmaConfiguration
                 IncludeSystem = true,
                 IsDashboard = false,
             });
+        }
+        if (loadedSchemaVersion < 20)
+        {
+            AlarmAreas = new List<AlarmAreaDefinition>();
+            AlarmAreaPolicy.NormalizePanelAssignments(
+                Panels,
+                AlarmAreas,
+                discardAssignments: true);
+        }
+        else
+        {
+            AlarmAreas = AlarmAreaPolicy.Normalize(AlarmAreas);
+            AlarmAreaPolicy.NormalizePanelAssignments(Panels, AlarmAreas);
         }
         // Keep legacy dashboard slots serialized for lossless downgrade and
         // recovery. Dashboard projection and editing deliberately ignore them.
@@ -1148,7 +1173,7 @@ public sealed class UnmaConfiguration
                 legacyOverride.IsGloballyDisabled = false;
             }
         }
-        SchemaVersion = Math.Max(SchemaVersion, 19);
+        SchemaVersion = Math.Max(SchemaVersion, 20);
     }
 
     private static float NormalizeFinite(float value, float fallback)

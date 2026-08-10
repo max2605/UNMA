@@ -274,6 +274,7 @@ public static class PanelClonePolicy
             OwnerEntityTitle = "",
             OwnerEntityPrototypeId = "",
             OwnerEntityType = "",
+            AreaId = AlarmAreaPolicy.CloneAreaId(source),
         };
         plan = new PanelClonePlan(
             clonedPanel,

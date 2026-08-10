@@ -27,6 +27,15 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
   `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
   vollständig ausgeblendet.
+- Benutzerdefinierte Betriebsbereiche gruppieren globale Panels, ohne deren
+  Alarm-, Verlaufs- oder Audiologik zu verändern. **ALLE**, **NICHT
+  ZUGEORDNET** und jeder konkrete Bereich filtern Panelleiste und HOME; das
+  gefilterte HOME führt aktive Meldungen seiner Mitgliedspanels zu genau einem
+  Schlitz je Alarm zusammen.
+- **BEREICH QUITT.** und **BEREICH WEITER** gelten für den aktuellen Bereich;
+  **ALLES QUITTIEREN** bleibt global. Quittiert wird immer der gemeinsame
+  Alarmzustand: Ist derselbe Alarm in mehreren Bereichen sichtbar, erscheint
+  die Quittierung deshalb überall und erzeugt keinen zweiten Verlauf.
 - Dauerhaft feste Meldeschlitze je Fachpanel: Eine stabile Alarm-ID behält ihren
   Platz auch zwischen `NORMAL`, `KOMMT`, `STEHT` und `GEGANGEN`. Wiederholte
   Vanilla-Ereignisse derselben Meldungsart und Entität erscheinen genau einmal;
@@ -121,11 +130,20 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Globale Panels lassen sich als unabhängige Vorlage duplizieren. Reihenfolge,
   Filter und eigene Regeln werden tief kopiert; kopierte Regeln erhalten neue
   Kennungen und starten deaktiviert, während Livezustand und Verlauf unberührt
-  bleiben.
+  bleiben. Das Duplikat übernimmt den Bereich seines Quellpanels.
+- Im Bereichseditor lassen sich bis zu 64 Bereiche als gemeinsamer Entwurf
+  anlegen, umbenennen, umsortieren und löschen. Erst Speichern wendet den
+  gesamten Entwurf atomar an; beim Löschen werden die betroffenen Panels nur
+  **NICHT ZUGEORDNET**. Die Panel-Einstellungen weisen ein Panel direkt zu.
+  Ein neues Panel übernimmt einen konkret ausgewählten Bereich, beginnt unter
+  **ALLE** oder **NICHT ZUGEORDNET** jedoch unzugeordnet.
 - Persistente UI-Skalierung von 75 bis 200 Prozent für 1080p- und 4K-Monitore.
   Klicks, Drags und Mausradbewegungen werden nur innerhalb der sichtbaren
   UNMA-Rahmen abgefangen. Außerhalb bleiben Gebäudeauswahl, Kartenbewegung und
-  Zoom auch bei geöffnetem UNMA-Fenster verfügbar.
+  Zoom auch bei geöffnetem UNMA-Fenster verfügbar. Schmale beziehungsweise
+  auf 200 Prozent skalierte Panel- und Bereichseinstellungen stapeln ihre
+  Bedienelemente; ungespeicherte Entwürfe werden vor Schließen oder Wechseln
+  ausdrücklich geschützt.
 - Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
@@ -138,7 +156,8 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Spielstandsbezogene Persistenz in `unma-world-<GameId>.json`; Entity-Regeln
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
   Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern
-  und Neuladen.
+  und Neuladen. Schema 20 übernimmt ältere Konfigurationen mit unzugeordneten
+  Panels und unverändertem **ALLE**-Verhalten.
 - Beim endgültigen Abriss beziehungsweise Zerstören einer überwachten Entity
   löscht UNMA deren eigene Regel samt festem Schlitz und aktivem Zustand
   automatisch. Bei einer Sammelmeldung wird die ganze UND-/ODER-Regel entfernt,
@@ -154,11 +173,13 @@ Zielversion: Captain of Industry **0.8.6c**.
    Die Schaltfläche erscheint nur bei geschlossener Zentrale und lässt sich am
    `↕`-Griff aus anderen HUD-Bereichen herausziehen; ihre Position wird
    gespeichert.
-3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Für die dauerhaft
-   definierte Schlitztafel ein Fachpanel wählen.
+3. In **MELDETAFEL** zeigt **HOME** alle aktiven Meldungen. Über **ALLE**,
+   **NICHT ZUGEORDNET** oder einen Betriebsbereich Panelleiste und HOME
+   eingrenzen; für die dauerhaft definierte Schlitztafel ein Fachpanel wählen.
 4. Mit `Q` nur einen Schlitz, mit `PANEL QUITTIEREN` die sichtbare Tafel oder
-   mit `ALLES QUITTIEREN` sämtliche kommenden und gegangenen Meldungen
-   quittieren. `NÄCHSTER ALARM` beziehungsweise standardmäßig
+   mit **BEREICH QUITT.** den ausgewählten Bereich oder mit `ALLES QUITTIEREN`
+   sämtliche kommenden und gegangenen Meldungen quittieren. **BEREICH
+   WEITER**, `NÄCHSTER ALARM` beziehungsweise standardmäßig
    `Umschalt links + F8` springt zyklisch durch unquittierte Meldungen.
    Bei einer weiterhin anstehenden Meldung bleibt die Aktivfarbe sichtbar,
    bis die Ursache verschwindet.
@@ -187,7 +208,8 @@ Zielversion: Captain of Industry **0.8.6c**.
    oder auf die Werkvorgabe zurückgesetzt werden.
 11. Unter **OPTIONEN** lässt sich die gesamte UNMA-Oberfläche von 75 bis
     200 Prozent skalieren. `+ PANEL` legt eine globale Tafel an; das Zahnrad
-    daneben öffnet deren getrennte Einstellungen.
+    daneben öffnet deren getrennte Einstellungen samt Bereichszuordnung. Über
+    **⚙ BEREICHE** werden Betriebsbereiche gemeinsam verwaltet.
 
 Die Gesundheitsanzeige des Spiels ist keine klassische 0–100-%-Skala:
 `10` ist der neutrale Basiswert und erst unter `0` entsteht ein

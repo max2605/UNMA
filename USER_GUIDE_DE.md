@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.24** und
+Diese Anleitung gilt für **UNMA 0.9.25** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -41,6 +41,8 @@ werden.
 2. Alternativ den frei schwebenden Launcher verwenden, der zunächst nahe am
    linken Bildschirmrand liegt.
 3. Unter **MELDETAFEL** befinden sich HOME und die dauerhaft angelegten Panels.
+   **ALLE**, **NICHT ZUGEORDNET** oder einen Betriebsbereich auswählen, um die
+   Tafel einzugrenzen.
 4. Mit **Q** nur einen Schlitz, mit **PANEL QUITTIEREN** die angezeigte Tafel
    oder mit **ALLES QUITTIEREN** sämtliche neuen und gegangenen Meldungen
    quittieren.
@@ -132,9 +134,47 @@ oder löscht keinen Verlaufseintrag.
 
 ### HOME
 
-HOME ist die Live-Übersicht aller aktuell anstehenden Meldungen. Angezeigt
-werden `K` und `KQ` aus allen Quellen. HOME besitzt keine festen Schlitze;
-inaktive, gegangene und leere Plätze werden ausgeblendet.
+HOME ist unter **ALLE** die Live-Übersicht aller aktuell anstehenden Meldungen.
+Angezeigt werden `K` und `KQ` aus allen Quellen. HOME besitzt keine festen
+Schlitze; inaktive, gegangene und leere Plätze werden ausgeblendet.
+
+### Betriebsbereiche
+
+Betriebsbereiche ordnen globale Panels, ohne einen zweiten Alarmzustand,
+Verlaufseintrag, Historian-Datenstrom oder Audiostatus zu erzeugen. Die
+Filterzeile bietet **ALLE**, **NICHT ZUGEORDNET** und jeden selbst angelegten
+Bereich:
+
+- **ALLE** erhält die vollständige bisherige Panel- und HOME-Ansicht.
+- **NICHT ZUGEORDNET** zeigt globale Panels ohne Betriebsbereich.
+- Ein konkreter Bereich zeigt nur seine Mitgliedspanels. Sein HOME sammelt
+  deren aktive Meldungen und führt sie zu genau einem Schlitz je zugrunde
+  liegendem Alarm zusammen.
+
+Der ausgewählte Bereichschip zeigt die Zahl seiner Panels sowie aktiver und
+unbestätigter Alarme. **BEREICH QUITT.** und **BEREICH WEITER** arbeiten nur
+mit den Alarmen der ausgewählten Bereichs- beziehungsweise
+**NICHT ZUGEORDNET**-Ansicht. **ALLES QUITTIEREN** bleibt immer die
+ausdrückliche globale Aktion.
+
+Die Quittierung gehört weiterhin zur zugrunde liegenden Alarmfolge und nicht
+zur Bereichsansicht. Ist derselbe Alarm über Panels in mehreren Bereichen
+sichtbar, wird er durch eine Quittierung in einem Bereich überall quittiert.
+UNMA erzeugt dafür weder getrennte Zustände noch doppelte Verlaufseinträge.
+
+Über **⚙ BEREICHE** lassen sich Bereiche anlegen, umbenennen, umsortieren und
+zum Löschen vormerken. Alle Änderungen bleiben in einem gemeinsamen Entwurf
+und werden erst beim Speichern atomar angewendet. Beim Löschen bleiben Panels,
+Schlitze, Regeln und Alarmzustände erhalten; die Panels werden lediglich
+**NICHT ZUGEORDNET**. Warnt UNMA vor ungespeicherten Bereichs- oder
+Panel-Einstellungen, muss der Entwurf gespeichert, verworfen oder weiter
+bearbeitet werden.
+
+Die Zuordnung eines globalen Panels befindet sich in seinen
+Zahnrad-Einstellungen. Ein dupliziertes Panel übernimmt den Bereich seiner
+Quelle. Ein neues Panel übernimmt nur den konkret ausgewählten Bereich; unter
+**ALLE** oder **NICHT ZUGEORDNET** beginnt es unzugeordnet. Objektpanels und
+HOME werden keinem Bereich zugewiesen.
 
 ### Globale Panels
 
@@ -148,7 +188,8 @@ Provider- und eigene Meldungen.
 - **PANEL DUPLIZIEREN** erstellt dort eine unabhängige Kopie einschließlich
   Reihenfolge, Filter und eigener Meldungen. Die kopierten eigenen Meldungen
   erhalten neue Kennungen und starten aus Sicherheitsgründen deaktiviert;
-  bestehende Alarmzustände und der Verlauf werden nicht kopiert.
+  bestehende Alarmzustände und der Verlauf werden nicht kopiert. Das neue
+  Panel behält die Bereichszuordnung seiner Quelle.
 - Bekannte Meldungen gezielt in freie Schlitze aufnehmen und Plätze nach oben
   oder unten verschieben.
 - Neu entdeckte Meldungen, die zu einer automatischen Quelle oder einem Filter
@@ -436,7 +477,9 @@ das Fenster klein oder die Inhaltsskalierung groß ist.
 - Die Inhalte von Hauptfenster, Editor und abgekoppelten Tafeln in
   25-Prozent-Schritten von 75 bis 200 Prozent skalieren oder auf 100 Prozent
   zurücksetzen. Native COI-Rahmen, Hauptnavigation und Launcher behalten die
-  vom Spiel vorgegebene UI-Skalierung.
+  vom Spiel vorgegebene UI-Skalierung. Panel- und Bereichseinstellungen
+  stapeln ihre Bedienelemente in schmalen Fenstern und bei 200 Prozent, damit
+  alle notwendigen Aktionen per Scrollen erreichbar bleiben.
 - Warn-, Kritisch- und Notfallfarbe bearbeiten und speichern.
 - Den Ordner für eigene Töne anzeigen und unterstützte WAV- und Ogg-Dateien
   ohne Neustart neu einlesen.
@@ -500,7 +543,7 @@ UNMA speichert weltbezogene Daten in
 `Mods/UNMA/unma-world-<GameId>.json`. Diese Dateien sind nicht Bestandteil des
 Release-Archivs. Folgende Informationen überleben Speichern und Neuladen:
 
-- Paneldefinitionen und Schlitzreihenfolge;
+- Paneldefinitionen, Schlitzreihenfolge, Betriebsbereiche und Zuordnungen;
 - eigene Regeln und verknüpfte Panels;
 - quittierte aktive Meldungen;
 - gegangene, aber noch nicht quittierte Meldungen;
@@ -508,6 +551,11 @@ Release-Archivs. Folgende Informationen überleben Speichern und Neuladen:
 - Messpulte, Instrumente, Quellen, Berechnungsarten und Anzeigeskalen;
 - angepasste Systemstufen sowie Vanilla-Verhaltens- und Tonregeln;
 - Inhaltsskalierung, Launcherposition sowie Größen von Hauptfenster und Editor.
+
+Schema 20 übernimmt Konfigurationen früherer UNMA-Versionen mit allen
+vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
+**ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
+zugewiesen werden.
 
 Ist eine Konfigurationsdatei beschädigt, legt UNMA eine Sicherung an und ersetzt
 sie durch sichere Vorgaben.

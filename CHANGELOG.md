@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.25 – 2026-08-11
+
+- Benutzerdefinierte Betriebsbereiche gruppieren globale Panels, ohne
+  Alarmzustand, Verlauf, Historian oder Audioverhalten zu verändern. **ALLE**,
+  **NICHT ZUGEORDNET** und jeder eigene Bereich filtern Panelleiste und HOME.
+- Das gefilterte HOME führt aktive Meldungen der zugehörigen Panels zu genau
+  einem Schlitz je Alarm zusammen. **BEREICH QUITT.** und **BEREICH WEITER**
+  arbeiten nur in der ausgewählten Ansicht; **ALLES QUITTIEREN** bleibt global.
+- Quittierung gehört weiterhin zum eigentlichen Alarmzustand: Ist dieselbe
+  Meldung über mehrere Bereiche sichtbar, wird ihre Quittierung überall
+  wirksam und erzeugt weder Kopien noch getrennte Verlaufsereignisse.
+- Bereiche lassen sich in einem atomaren Entwurf anlegen, umbenennen,
+  umsortieren und löschen. Beim Löschen werden ihre Panels ausschließlich
+  **NICHT ZUGEORDNET**; Panels, Schlitze, Regeln und Zustände bleiben erhalten.
+- Die Panel-Einstellungen weisen Bereiche direkt zu. Duplikate übernehmen den
+  Bereich ihrer Quelle; neue Panels übernehmen nur einen konkret ausgewählten
+  Bereich und bleiben unter **ALLE** oder **NICHT ZUGEORDNET** unzugeordnet.
+- Entwurfswechsel und Schließen schützen ungespeicherte Panel- und
+  Bereichseinstellungen. Schmale Fenster und 200-%-Skalierung verwenden
+  gestapelte, scrollbar bleibende Layouts.
+- Schema 20 migriert vorhandene Welten ohne Bereichszuordnung. Dadurch bleibt
+  ihre bisherige **ALLE**-Ansicht unverändert.
+
 ## 0.9.24 – 2026-08-10
 
 - Jedes Instrument besitzt jetzt unabhängig vom Anzeigetyp einen gemeinsamen

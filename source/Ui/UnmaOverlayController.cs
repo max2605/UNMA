@@ -47,6 +47,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private const int TabInstruments = 5;
     private const float TileHeight = 112f;
     private const float HistoryRowHeight = 40f;
+    private const int MaximumAlarmAreas = 64;
     private static readonly float[] s_instrumentPreviewSamples =
     {
         0.12f, 0.18f, 0.24f, 0.22f, 0.36f, 0.48f, 0.45f, 0.61f,
@@ -84,6 +85,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         Rule,
         PanelCreation,
         PanelSettings,
+        AlarmAreas,
     }
 
     private enum TimingDisplayUnit
@@ -123,6 +125,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_draftHysteresisTexts = new();
     private readonly Dictionary<string, PanelViewCacheEntry> m_panelViewCache =
         new(StringComparer.Ordinal);
+    private int m_alarmAreaViewCacheFrame = -1;
+    private AlarmAreaFilter m_alarmAreaViewCacheFilter = AlarmAreaFilter.All;
+    private IReadOnlyList<AlarmView> m_alarmAreaViewCache =
+        Array.Empty<AlarmView>();
+    private bool m_alarmAreaViewCacheSucceeded;
     private readonly Dictionary<string, List<float>> m_instrumentSamples =
         new(StringComparer.Ordinal);
     private readonly List<InstrumentHistoryBucket>
@@ -149,7 +156,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Rect m_entityAlarmWindowRect = new(180f, 110f, 1080f, 720f);
     private Rect m_lastPersistedEditorWindowRect;
     private Vector2 m_boardScroll;
+    private Vector2 m_boardActionsScroll;
     private Vector2 m_panelTabsScroll;
+    private Vector2 m_alarmAreaTabsScroll;
+    private Vector2 m_panelSettingsAreaScroll;
     private Vector2 m_historyScroll;
     private Vector2 m_editorScroll;
     private Vector2 m_entityAlarmScroll;
@@ -176,6 +186,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_panelSettingsIncludeVanilla;
     private bool m_panelSettingsIncludeSystem;
     private string m_panelSettingsFilter = "";
+    private string m_panelSettingsAreaId = "";
+    private readonly List<AlarmAreaDefinition> m_alarmAreaDraft = new();
+    private AlarmAreaFilter m_alarmAreaFilter = AlarmAreaFilter.All;
+    private string m_newAlarmAreaName = "";
+    private string m_pendingAlarmAreaDeleteId = "";
+    private float m_pendingAlarmAreaDeleteUntil;
     private string m_activeEntityPanelId = "";
     private int m_openEntityPanelAfterInspectionId = -1;
     private bool m_openEntityAlarmAfterInspection;
@@ -994,8 +1010,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var isEntityPanel = PanelTopologyPolicy.IsEntityPanel(panel);
+        if (!isEntityPanel)
+        {
+            DrawAlarmAreaFilter();
+            EnsureCurrentPanelVisibleInArea();
+            panel = CurrentPanel;
+            if (panel == null)
+            {
+                return;
+            }
+        }
+
         NativeGUILayout.BeginHorizontal();
-        if (PanelTopologyPolicy.IsEntityPanel(panel))
+        if (isEntityPanel)
         {
             if (NativeGUILayout.Button(
                     UnmaText.Get("auto.c76615f2e3a1"),
@@ -1014,6 +1042,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         else
         {
             var globalPanels = GlobalPanels;
+            var visiblePanels = GetVisibleGlobalPanels();
             m_panelTabsScroll = NativeGUILayout.BeginScrollView(
                 m_panelTabsScroll,
                 false,
@@ -1021,23 +1050,33 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 NativeGUILayout.Height(52f),
                 NativeGUILayout.ExpandWidth(true));
             NativeGUILayout.BeginHorizontal();
-            for (var index = 0; index < globalPanels.Count; index++)
+            foreach (var candidate in visiblePanels)
             {
-                var candidate = globalPanels[index];
+                var globalIndex = globalPanels.FindIndex(item =>
+                    string.Equals(
+                        item.Id,
+                        candidate.Id,
+                        StringComparison.Ordinal));
+                if (globalIndex < 0)
+                {
+                    continue;
+                }
+                var tabLabel = GetAreaAwarePanelTabLabel(candidate);
                 var tabWidth = Mathf.Clamp(
-                    (candidate.Name?.Length ?? 0) *
+                    (tabLabel?.Length ?? 0) *
                     Mathf.Max(7f, m_buttonStyle.fontSize * 0.58f) + 24f,
                     110f,
-                    230f);
+                    280f);
                 if (NativeGUILayout.Button(
-                        candidate.Name,
-                        index == m_currentPanelIndex
+                        tabLabel,
+                        globalIndex == m_currentPanelIndex
                             ? m_primaryButtonStyle
                             : m_buttonStyle,
                         NativeGUILayout.Width(tabWidth),
                         NativeGUILayout.Height(30f)))
                 {
-                    m_currentPanelIndex = index;
+                    m_currentPanelIndex = globalIndex;
+                    m_lastNavigatedAlarmSlotId = "";
                     m_boardScroll = Vector2.zero;
                 }
             }
@@ -1063,10 +1102,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndHorizontal();
 
         DrawEntityAssignmentBanner(panel);
-        var alarms = GetPanelViews(panel);
+        var alarms = GetBoardViews(panel);
         var activeCount = alarms.Count(alarm => alarm.IsActive);
         var unacknowledgedCount = alarms.Count(alarm =>
             alarm.RequiresAcknowledgement);
+        var compactActions = m_windowRect.width < 760f;
         NativeGUILayout.Space(6f);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
@@ -1074,29 +1114,53 @@ public sealed class UnmaOverlayController : MonoBehaviour
             UnmaText.Get("auto.ac9ef4c5783a") + unacknowledgedCount,
             m_sectionStyle,
             NativeGUILayout.Height(34f));
+        if (compactActions)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
+        var scopedDashboard = IsAreaScopedDashboard(panel);
+        var scopeActionWidth = compactActions
+            ? Math.Max(118f, (m_windowRect.width - 70f) * 0.5f)
+            : 160f;
         if (NativeGUILayout.Button(
-                UnmaText.Get("board.acknowledge_panel", "PANEL ACK"),
+                scopedDashboard
+                    ? UnmaText.Get("board.acknowledge_area", "AREA ACK")
+                    : UnmaText.Get("board.acknowledge_panel", "PANEL ACK"),
                 m_dangerButtonStyle,
-                NativeGUILayout.Width(160f),
+                NativeGUILayout.Width(scopeActionWidth),
                 NativeGUILayout.Height(34f)))
         {
             AcknowledgePanelAlarms(panel);
         }
         if (NativeGUILayout.Button(
-                UnmaText.Get("board.next_alarm", "NEXT ALARM"),
+                scopedDashboard
+                    ? UnmaText.Get("board.next_area_alarm", "AREA NEXT")
+                    : UnmaText.Get("board.next_alarm", "NEXT ALARM"),
                 m_primaryButtonStyle,
-                NativeGUILayout.Width(150f),
+                NativeGUILayout.Width(compactActions
+                    ? scopeActionWidth
+                    : 150f),
                 NativeGUILayout.Height(34f)))
         {
             NavigateToNextUnacknowledgedAlarm(panel);
         }
         NativeGUILayout.EndHorizontal();
 
+        if (compactActions)
+        {
+            m_boardActionsScroll = NativeGUILayout.BeginScrollView(
+                m_boardActionsScroll,
+                false,
+                false,
+                NativeGUILayout.Height(42f),
+                NativeGUILayout.ExpandWidth(true));
+        }
         NativeGUILayout.BeginHorizontal();
         if (NativeGUILayout.Button(
                 UnmaText.Get("board.acknowledge_master", "MASTER ACK"),
                 m_dangerButtonStyle,
-                NativeGUILayout.Width(160f),
+                NativeGUILayout.Width(compactActions ? 140f : 160f),
                 NativeGUILayout.Height(34f)))
         {
             AcknowledgeAllAlarms();
@@ -1109,7 +1173,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             DetachPanel(panel.Id);
         }
-        if (!panel.IsDashboard && NativeGUILayout.Button(
+        if (!panel.IsDashboard &&
+            NativeGUILayout.Button(
                 UnmaText.Get("auto.1cc8d34d4b3e"),
                 m_primaryButtonStyle,
                 NativeGUILayout.Width(175f),
@@ -1118,9 +1183,14 @@ public sealed class UnmaOverlayController : MonoBehaviour
             OpenNewRuleEditor(panel);
         }
         NativeGUILayout.EndHorizontal();
+        if (compactActions)
+        {
+            NativeGUILayout.EndScrollView();
+        }
 
         DrawStatusMessage();
-        if (!m_entityAssignmentPending)
+        if (!m_entityAssignmentPending &&
+            (!compactActions || m_windowRect.height >= 340f))
         {
             NativeGUILayout.Label(
                 UnmaText.Get("auto.22344e5e1ac7"),
@@ -1132,7 +1202,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             panel.Columns,
             m_windowRect.width - 54f,
             m_boardScroll.y,
-            Math.Max(220f, m_windowRect.height - 190f),
+            Math.Max(
+                m_windowRect.height < 360f ? 32f : 220f,
+                m_windowRect.height -
+                (isEntityPanel ? 190f : 232f) -
+                (compactActions ? 42f : 0f)),
             panel.IsDashboard ? null : panel,
             panel,
             m_entityAssignmentPending && !panel.IsDashboard,
@@ -1141,6 +1215,325 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 : UnmaText.Get("auto.e8bad0a4452b"),
             !panel.IsDashboard);
         NativeGUILayout.EndScrollView();
+    }
+
+    private void DrawAlarmAreaFilter()
+    {
+        var filter = NormalizeAlarmAreaFilter();
+        var compact = m_windowRect.width < 820f;
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("board.area_filter", "AREA"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(compact ? 58f : 76f),
+            NativeGUILayout.Height(30f));
+        m_alarmAreaTabsScroll = NativeGUILayout.BeginScrollView(
+            m_alarmAreaTabsScroll,
+            false,
+            false,
+            NativeGUILayout.Height(42f),
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.BeginHorizontal();
+        DrawAlarmAreaFilterButton(
+            AlarmAreaFilter.All,
+            UnmaText.Get("board.area_all", "ALL"),
+            filter);
+        DrawAlarmAreaFilterButton(
+            AlarmAreaFilter.Unassigned,
+            UnmaText.Get("board.area_unassigned", "UNASSIGNED"),
+            filter);
+        foreach (var area in m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>())
+        {
+            if (area == null || string.IsNullOrWhiteSpace(area.Id))
+            {
+                continue;
+            }
+            DrawAlarmAreaFilterButton(
+                AlarmAreaFilter.ForArea(area.Id),
+                area.Name,
+                filter);
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.EndScrollView();
+        if (NativeGUILayout.Button(
+                compact
+                    ? "⚙"
+                    : UnmaText.Get("board.area_manage", "⚙ AREAS"),
+                m_buttonStyle,
+                NativeGUILayout.Width(compact ? 42f : 122f),
+                NativeGUILayout.Height(30f)))
+        {
+            OpenAlarmAreasEditor();
+        }
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private void DrawAlarmAreaFilterButton(
+        AlarmAreaFilter candidate,
+        string name,
+        AlarmAreaFilter selected)
+    {
+        var panelCount = AlarmAreaPolicy.Select(GlobalPanels, candidate)
+            .Count(AlarmAreaPolicy.IsAssignablePanel);
+        var isSelected = AlarmAreaFiltersEqual(candidate, selected);
+        var displayName = string.IsNullOrWhiteSpace(name)
+            ? UnmaText.Get("ui.area.default_name", "AREA")
+            : name.Trim();
+        var label = UnmaText.Format(
+            "board.area_filter_item",
+            "{0} · {1} PANELS",
+            displayName,
+            panelCount);
+        if (isSelected && TryGetCachedAlarmAreaDashboardViews(
+                candidate,
+                out var scopedViews))
+        {
+            scopedViews ??= Array.Empty<AlarmView>();
+            label = UnmaText.Format(
+                "board.area_filter_item_selected",
+                "{0} · {1} PANELS · {2} ACTIVE · {3} UNACK",
+                displayName,
+                panelCount,
+                scopedViews.Count(view => view.IsActive),
+                scopedViews.Count(view => view.RequiresAcknowledgement));
+        }
+        var width = Mathf.Clamp(
+            label.Length * Mathf.Max(7f, m_buttonStyle.fontSize * 0.58f) + 24f,
+            116f,
+            isSelected ? 380f : 290f);
+        if (NativeGUILayout.Button(
+                label,
+                isSelected
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                NativeGUILayout.Width(width),
+                NativeGUILayout.Height(30f)))
+        {
+            SelectAlarmAreaFilter(candidate);
+        }
+    }
+
+    private void SelectAlarmAreaFilter(AlarmAreaFilter requested)
+    {
+        var next = AlarmAreaPolicy.NormalizeFilter(
+            requested,
+            m_runtime.Configuration.AlarmAreas);
+        if (AlarmAreaFiltersEqual(next, NormalizeAlarmAreaFilter()))
+        {
+            return;
+        }
+
+        var current = CurrentPanel;
+        m_alarmAreaFilter = next;
+        var visiblePanels = GetVisibleGlobalPanels();
+        if (current == null ||
+            !visiblePanels.Any(panel => string.Equals(
+                panel.Id,
+                current.Id,
+                StringComparison.Ordinal)))
+        {
+            var fallback = visiblePanels.FirstOrDefault(panel =>
+                               panel.IsDashboard) ??
+                           visiblePanels.FirstOrDefault();
+            SelectGlobalPanel(fallback, false);
+        }
+        m_lastNavigatedAlarmSlotId = "";
+        m_boardScroll = Vector2.zero;
+    }
+
+    private void SelectGlobalPanel(
+        PanelDefinition panel,
+        bool revealOutsideCurrentArea)
+    {
+        if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return;
+        }
+
+        if (revealOutsideCurrentArea &&
+            !panel.IsDashboard &&
+            !GetVisibleGlobalPanels().Any(candidate => string.Equals(
+                candidate.Id,
+                panel.Id,
+                StringComparison.Ordinal)))
+        {
+            var areaId = panel.AreaId?.Trim() ?? "";
+            if (areaId.Length == 0)
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.Unassigned;
+            }
+            else if ((m_runtime.Configuration.AlarmAreas ??
+                      new List<AlarmAreaDefinition>()).Any(area =>
+                         area != null && string.Equals(
+                             area.Id,
+                             areaId,
+                             StringComparison.Ordinal)))
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.ForArea(areaId);
+            }
+            else
+            {
+                m_alarmAreaFilter = AlarmAreaFilter.All;
+            }
+        }
+
+        m_activeEntityPanelId = "";
+        var panelIndex = GlobalPanels.FindIndex(candidate => string.Equals(
+            candidate.Id,
+            panel.Id,
+            StringComparison.Ordinal));
+        if (panelIndex >= 0)
+        {
+            m_currentPanelIndex = panelIndex;
+        }
+    }
+
+    private void EnsureCurrentPanelVisibleInArea()
+    {
+        var current = CurrentPanel;
+        if (current == null || PanelTopologyPolicy.IsEntityPanel(current))
+        {
+            return;
+        }
+        var visible = GetVisibleGlobalPanels();
+        if (visible.Any(panel => string.Equals(
+                panel.Id,
+                current.Id,
+                StringComparison.Ordinal)))
+        {
+            return;
+        }
+        SelectGlobalPanel(
+            visible.FirstOrDefault(panel => panel.IsDashboard) ??
+            visible.FirstOrDefault(),
+            false);
+        m_boardScroll = Vector2.zero;
+    }
+
+    private AlarmAreaFilter NormalizeAlarmAreaFilter()
+    {
+        m_alarmAreaFilter = AlarmAreaPolicy.NormalizeFilter(
+            m_alarmAreaFilter,
+            m_runtime.Configuration.AlarmAreas);
+        return m_alarmAreaFilter;
+    }
+
+    private List<PanelDefinition> GetVisibleGlobalPanels()
+    {
+        var globalPanels = GlobalPanels;
+        var filter = NormalizeAlarmAreaFilter();
+        if (filter.Kind == AlarmAreaFilterKind.All)
+        {
+            return globalPanels;
+        }
+
+        var visible = AlarmAreaPolicy.Select(globalPanels, filter).ToList();
+        var dashboard = globalPanels.FirstOrDefault(panel =>
+            panel != null && panel.IsDashboard);
+        if (dashboard != null)
+        {
+            visible.Insert(0, dashboard);
+        }
+        return visible;
+    }
+
+    private string GetAreaAwarePanelTabLabel(PanelDefinition panel)
+    {
+        if (panel == null || !panel.IsDashboard)
+        {
+            return panel?.Name ?? "";
+        }
+        var filter = NormalizeAlarmAreaFilter();
+        if (filter.Kind == AlarmAreaFilterKind.All)
+        {
+            return panel.Name;
+        }
+        return UnmaText.Format(
+            "board.dashboard_scope",
+            "{0} · {1}",
+            panel.Name,
+            GetAlarmAreaFilterName(filter));
+    }
+
+    private string GetAlarmAreaFilterName(AlarmAreaFilter filter)
+    {
+        switch (filter.Kind)
+        {
+            case AlarmAreaFilterKind.Unassigned:
+                return UnmaText.Get(
+                    "board.area_unassigned",
+                    "UNASSIGNED");
+            case AlarmAreaFilterKind.Area:
+                return m_runtime.Configuration.AlarmAreas?
+                           .FirstOrDefault(area => area != null &&
+                               string.Equals(
+                                   area.Id,
+                                   filter.AreaId,
+                                   StringComparison.Ordinal))?.Name ??
+                       UnmaText.Get("ui.area.default_name", "AREA");
+            default:
+                return UnmaText.Get("board.area_all", "ALL");
+        }
+    }
+
+    private string GetCurrentConcreteAlarmAreaId()
+    {
+        var filter = NormalizeAlarmAreaFilter();
+        return filter.Kind == AlarmAreaFilterKind.Area
+            ? filter.AreaId ?? ""
+            : "";
+    }
+
+    private IReadOnlyList<AlarmView> GetBoardViews(PanelDefinition panel)
+    {
+        if (!IsAreaScopedDashboard(panel))
+        {
+            return GetPanelViews(panel);
+        }
+        return TryGetCachedAlarmAreaDashboardViews(
+            NormalizeAlarmAreaFilter(),
+            out var views)
+            ? views ?? Array.Empty<AlarmView>()
+            : Array.Empty<AlarmView>();
+    }
+
+    private bool TryGetCachedAlarmAreaDashboardViews(
+        AlarmAreaFilter filter,
+        out IReadOnlyList<AlarmView> views)
+    {
+        if (m_alarmAreaViewCacheFrame == Time.frameCount &&
+            AlarmAreaFiltersEqual(m_alarmAreaViewCacheFilter, filter))
+        {
+            views = m_alarmAreaViewCache;
+            return m_alarmAreaViewCacheSucceeded;
+        }
+
+        m_alarmAreaViewCacheFrame = Time.frameCount;
+        m_alarmAreaViewCacheFilter = filter;
+        m_alarmAreaViewCacheSucceeded = m_runtime.TryGetDashboardViews(
+            filter,
+            out views);
+        m_alarmAreaViewCache = views ?? Array.Empty<AlarmView>();
+        views = m_alarmAreaViewCache;
+        return m_alarmAreaViewCacheSucceeded;
+    }
+
+    private bool IsAreaScopedDashboard(PanelDefinition panel)
+    {
+        return panel?.IsDashboard == true &&
+               NormalizeAlarmAreaFilter().Kind != AlarmAreaFilterKind.All;
+    }
+
+    private static bool AlarmAreaFiltersEqual(
+        AlarmAreaFilter left,
+        AlarmAreaFilter right)
+    {
+        return left.Kind == right.Kind &&
+               string.Equals(
+                   left.AreaId ?? "",
+                   right.AreaId ?? "",
+                   StringComparison.Ordinal);
     }
 
     private void DrawInstruments()
@@ -2080,6 +2473,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void OpenInstrumentAlarmEditor(InstrumentDefinition instrument)
     {
         if (instrument == null)
+        {
+            return;
+        }
+        if (BlockEditorSwitchFromConfigurationDraft())
         {
             return;
         }
@@ -3338,6 +3735,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             DrawPanelSettingsWindowContent();
         }
+        else if (m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            DrawAlarmAreasWindowContent();
+        }
         else
         {
             DrawAlarmRuleEditor(true);
@@ -3354,6 +3755,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 UnmaText.Get("auto.5e9e7c9addd9"),
             EditorWindowMode.PanelSettings =>
                 UnmaText.Get("auto.0e8b76140a09"),
+            EditorWindowMode.AlarmAreas =>
+                UnmaText.Get("ui.area.editor_title", "MANAGE AREAS"),
             _ => UnmaText.Get("auto.b9ccafdfaef7") +
                  (targetPanel == null ? "" : " · " + targetPanel.Name),
         };
@@ -3361,6 +3764,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void RequestEditorClose()
     {
+        if (m_editorWindowMode == EditorWindowMode.AlarmAreas &&
+            HasUnsavedAlarmAreas())
+        {
+            m_editorClosePromptOpen = true;
+            m_clearGuiFocusPending = true;
+            return;
+        }
+        if (m_editorWindowMode == EditorWindowMode.PanelSettings)
+        {
+            var panel = m_runtime.Configuration.Panels.FirstOrDefault(
+                candidate => candidate != null && string.Equals(
+                    candidate.Id,
+                    m_panelSettingsPanelId,
+                    StringComparison.Ordinal));
+            if (HasUnsavedPanelSettings(panel))
+            {
+                m_editorClosePromptOpen = true;
+                m_clearGuiFocusPending = true;
+                return;
+            }
+        }
         if (m_editorWindowMode == EditorWindowMode.Rule &&
             HasDraftRuleWork())
         {
@@ -3373,6 +3797,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawEditorClosePrompt()
     {
+        if (m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            DrawAlarmAreasClosePrompt();
+            return;
+        }
+        if (m_editorWindowMode == EditorWindowMode.PanelSettings)
+        {
+            DrawPanelSettingsClosePrompt();
+            return;
+        }
         NativeGUILayout.Space(24f);
         NativeGUILayout.Label(
             UnmaText.Get(
@@ -3474,6 +3908,444 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndHorizontal();
     }
 
+    private void DrawAlarmAreasWindowContent()
+    {
+        if (Time.realtimeSinceStartup > m_pendingAlarmAreaDeleteUntil)
+        {
+            m_pendingAlarmAreaDeleteId = "";
+        }
+
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.area.editor_title", "MANAGE AREAS"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.area.editor_hint",
+                "Areas group global panels without changing their alarms. Deleting an area moves its panels to UNASSIGNED."),
+            m_smallLabelStyle);
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.area.new_name", "NEW AREA"),
+            m_labelStyle,
+            NativeGUILayout.Width(120f));
+        m_newAlarmAreaName = NativeGUILayout.TextField(
+            m_newAlarmAreaName,
+            AlarmAreaPolicy.MaximumDraftNameLength,
+            m_textFieldStyle,
+            NativeGUILayout.ExpandWidth(true));
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.area.add", "ADD"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(110f),
+                NativeGUILayout.Height(32f)))
+        {
+            AddAlarmAreaDraft();
+        }
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.Space(10f);
+        if (m_alarmAreaDraft.Count == 0)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.area.empty",
+                    "No custom areas. Panels are currently UNASSIGNED."),
+                m_labelStyle);
+        }
+
+        var compact = m_entityAlarmWindowRect.width /
+                      Math.Max(0.75f, UiScale) < 900f;
+        for (var index = 0; index < m_alarmAreaDraft.Count; index++)
+        {
+            var area = m_alarmAreaDraft[index];
+            if (area == null)
+            {
+                continue;
+            }
+            var panelCount = m_runtime.Configuration.Panels.Count(panel =>
+                AlarmAreaPolicy.IsAssignablePanel(panel) &&
+                string.Equals(
+                    panel.AreaId,
+                    area.Id,
+                    StringComparison.Ordinal));
+
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                (index + 1) + ".",
+                m_smallLabelStyle,
+                NativeGUILayout.Width(32f));
+            area.Name = NativeGUILayout.TextField(
+                area.Name ?? "",
+                AlarmAreaPolicy.MaximumDraftNameLength,
+                m_textFieldStyle,
+                NativeGUILayout.ExpandWidth(true));
+            if (!compact)
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "ui.area.panel_count",
+                        "{0} PANEL(S)",
+                        panelCount),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(120f));
+            }
+            NativeGUILayout.EndHorizontal();
+
+            NativeGUILayout.BeginHorizontal();
+            if (compact)
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "ui.area.panel_count",
+                        "{0} PANEL(S)",
+                        panelCount),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(130f));
+            }
+            else
+            {
+                NativeGUILayout.Space(32f);
+            }
+            var guiWasEnabled = NativeGUI.enabled;
+            NativeGUI.enabled = guiWasEnabled && index > 0;
+            var moveUp = NativeGUILayout.Button(
+                "↑",
+                m_buttonStyle,
+                NativeGUILayout.Width(42f),
+                NativeGUILayout.Height(30f));
+            NativeGUI.enabled = guiWasEnabled &&
+                                index < m_alarmAreaDraft.Count - 1;
+            var moveDown = NativeGUILayout.Button(
+                "↓",
+                m_buttonStyle,
+                NativeGUILayout.Width(42f),
+                NativeGUILayout.Height(30f));
+            NativeGUI.enabled = guiWasEnabled;
+
+            var confirmingDelete = string.Equals(
+                                       m_pendingAlarmAreaDeleteId,
+                                       area.Id,
+                                       StringComparison.Ordinal) &&
+                                   Time.realtimeSinceStartup <=
+                                   m_pendingAlarmAreaDeleteUntil;
+            var delete = NativeGUILayout.Button(
+                confirmingDelete
+                    ? UnmaText.Get(
+                        "ui.area.delete_confirm",
+                        "CONFIRM DELETE")
+                    : UnmaText.Get("ui.area.delete", "DELETE"),
+                confirmingDelete ? m_dangerButtonStyle : m_buttonStyle,
+                NativeGUILayout.Width(confirmingDelete ? 170f : 110f),
+                NativeGUILayout.Height(30f));
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.Space(4f);
+
+            if (moveUp || moveDown)
+            {
+                AlarmAreaPolicy.TryMove(
+                    m_alarmAreaDraft,
+                    area.Id,
+                    moveUp ? index - 1 : index + 1,
+                    out _);
+                m_pendingAlarmAreaDeleteId = "";
+                return;
+            }
+            if (delete)
+            {
+                if (!confirmingDelete)
+                {
+                    m_pendingAlarmAreaDeleteId = area.Id;
+                    m_pendingAlarmAreaDeleteUntil =
+                        Time.realtimeSinceStartup + 6f;
+                    SetStatus(UnmaText.Format(
+                        "ui.area.delete_impact",
+                        "Delete this area? {0} panel(s) will become UNASSIGNED.",
+                        panelCount));
+                }
+                else
+                {
+                    m_alarmAreaDraft.RemoveAt(index);
+                    m_pendingAlarmAreaDeleteId = "";
+                    SetStatus(UnmaText.Get(
+                        "ui.area.delete_pending",
+                        "Area marked for deletion. Save to apply."));
+                }
+                return;
+            }
+        }
+
+        NativeGUILayout.Space(12f);
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.save", "SAVE"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(150f),
+                NativeGUILayout.Height(34f)))
+        {
+            SaveAlarmAreas();
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.cancel", "CANCEL"),
+                m_buttonStyle,
+                NativeGUILayout.Width(150f),
+                NativeGUILayout.Height(34f)))
+        {
+            ReloadAlarmAreaDraft();
+            CloseEditorWindow();
+        }
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private void AddAlarmAreaDraft()
+    {
+        if (m_alarmAreaDraft.Count >= MaximumAlarmAreas)
+        {
+            SetAlarmAreaFailure(AlarmAreaMutationFailure.TooManyAreas);
+            return;
+        }
+        if (!AlarmAreaPolicy.TryCreate(
+                m_alarmAreaDraft,
+                m_newAlarmAreaName,
+                () => Guid.NewGuid().ToString("N"),
+                out _,
+                out var failure))
+        {
+            SetAlarmAreaFailure(failure);
+            return;
+        }
+        m_newAlarmAreaName = "";
+        m_pendingAlarmAreaDeleteId = "";
+        SetStatus(UnmaText.Get(
+            "ui.area.added_to_draft",
+            "Area added to the draft."));
+    }
+
+    private bool SaveAlarmAreas()
+    {
+        if (!string.IsNullOrWhiteSpace(m_newAlarmAreaName))
+        {
+            SetStatus(UnmaText.Get(
+                "ui.area.error_add_pending",
+                "Add the entered area name to the draft before saving."));
+            return false;
+        }
+        if (!AlarmAreaPolicy.ValidateReplacement(
+                m_alarmAreaDraft,
+                out var normalized,
+                out var failure))
+        {
+            SetAlarmAreaFailure(failure);
+            return false;
+        }
+
+        var selectedAreaWillBeDeleted =
+            NormalizeAlarmAreaFilter().Kind == AlarmAreaFilterKind.Area &&
+            !normalized.Any(area => string.Equals(
+                area.Id,
+                m_alarmAreaFilter.AreaId,
+                StringComparison.Ordinal));
+        if (!m_runtime.ReplaceAlarmAreas(
+                normalized,
+                out var unassignedPanelCount))
+        {
+            SetStatus(UnmaText.Format(
+                "ui.area.save_failed",
+                "Areas could not be saved: {0}",
+                m_runtime.LastPersistenceError));
+            return false;
+        }
+
+        m_alarmAreaFilter = selectedAreaWillBeDeleted
+            ? AlarmAreaFilter.Unassigned
+            : AlarmAreaPolicy.NormalizeFilter(
+                m_alarmAreaFilter,
+                m_runtime.Configuration.AlarmAreas);
+        ReloadAlarmAreaDraft();
+        EnsureCurrentPanelVisibleInArea();
+        SetStatus(unassignedPanelCount > 0
+            ? UnmaText.Format(
+                "ui.area.saved_unassigned",
+                "Areas saved. {0} panel(s) are now UNASSIGNED.",
+                unassignedPanelCount)
+            : UnmaText.Get("ui.area.saved", "Areas saved."));
+        return true;
+    }
+
+    private void ReloadAlarmAreaDraft()
+    {
+        m_alarmAreaDraft.Clear();
+        foreach (var area in m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>())
+        {
+            if (area == null)
+            {
+                continue;
+            }
+            m_alarmAreaDraft.Add(new AlarmAreaDefinition
+            {
+                Id = area.Id,
+                Name = area.Name,
+            });
+        }
+        m_newAlarmAreaName = "";
+        m_pendingAlarmAreaDeleteId = "";
+        m_pendingAlarmAreaDeleteUntil = 0f;
+    }
+
+    private bool HasUnsavedAlarmAreas()
+    {
+        if (!string.IsNullOrWhiteSpace(m_newAlarmAreaName))
+        {
+            return true;
+        }
+        var stored = m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>();
+        if (stored.Count != m_alarmAreaDraft.Count)
+        {
+            return true;
+        }
+        for (var index = 0; index < stored.Count; index++)
+        {
+            var original = stored[index];
+            var draft = m_alarmAreaDraft[index];
+            if (original == null || draft == null ||
+                !string.Equals(
+                    original.Id,
+                    draft.Id,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    original.Name,
+                    draft.Name,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void SetAlarmAreaFailure(AlarmAreaMutationFailure failure)
+    {
+        SetStatus(failure switch
+        {
+            AlarmAreaMutationFailure.InvalidName => UnmaText.Get(
+                "ui.area.error_name_required",
+                "Enter an area name."),
+            AlarmAreaMutationFailure.NameTooLong => UnmaText.Get(
+                "ui.area.error_name_too_long",
+                "Area names may contain at most 40 characters."),
+            AlarmAreaMutationFailure.DuplicateName => UnmaText.Get(
+                "ui.area.error_name_duplicate",
+                "Area names must be unique."),
+            AlarmAreaMutationFailure.TooManyAreas => UnmaText.Get(
+                "ui.area.error_limit",
+                "A maximum of 64 areas is supported."),
+            _ => UnmaText.Get(
+                "ui.area.error_invalid",
+                "The area draft is invalid."),
+        });
+    }
+
+    private void DrawAlarmAreasClosePrompt()
+    {
+        NativeGUILayout.Space(24f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.area.close_title",
+                "CLOSE AREA EDITOR?"),
+            m_warningBannerStyle,
+            NativeGUILayout.Height(58f));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.area.close_description",
+                "The area draft has unsaved changes."),
+            m_labelStyle);
+        NativeGUILayout.Space(18f);
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.save_and_close", "SAVE & CLOSE"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            if (SaveAlarmAreas())
+            {
+                CloseEditorWindow();
+            }
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.discard", "DISCARD"),
+                m_dangerButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            ReloadAlarmAreaDraft();
+            CloseEditorWindow();
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Space(12f);
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.back_to_editor", "BACK TO EDITOR"),
+                m_buttonStyle,
+                NativeGUILayout.Width(230f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_editorClosePromptOpen = false;
+        }
+    }
+
+    private void DrawPanelSettingsClosePrompt()
+    {
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            candidate != null && string.Equals(
+                candidate.Id,
+                m_panelSettingsPanelId,
+                StringComparison.Ordinal));
+        NativeGUILayout.Space(24f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.panel.close_title",
+                "CLOSE PANEL SETTINGS?"),
+            m_warningBannerStyle,
+            NativeGUILayout.Height(58f));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.panel.close_description",
+                "The panel settings have unsaved changes."),
+            m_labelStyle);
+        NativeGUILayout.Space(18f);
+        NativeGUILayout.BeginHorizontal();
+        var guiWasEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = guiWasEnabled && panel != null;
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.save_and_close", "SAVE & CLOSE"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            if (SavePanelSettings(panel))
+            {
+                CloseEditorWindow();
+            }
+        }
+        NativeGUI.enabled = guiWasEnabled;
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.discard", "DISCARD"),
+                m_dangerButtonStyle,
+                NativeGUILayout.Height(42f)))
+        {
+            CloseEditorWindow();
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Space(12f);
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.editor.back_to_editor", "BACK TO EDITOR"),
+                m_buttonStyle,
+                NativeGUILayout.Width(230f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_editorClosePromptOpen = false;
+        }
+    }
+
     private void DrawPanelSettingsWindowContent()
     {
         var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
@@ -3489,6 +4361,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var compactSettings = m_entityAlarmWindowRect.width /
+                              Math.Max(0.75f, UiScale) < 840f;
         NativeGUILayout.Label(UnmaText.Get("auto.63a4d85953f8"), m_sectionStyle);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
@@ -3499,34 +4373,34 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_panelSettingsName,
             40,
             m_textFieldStyle,
-            NativeGUILayout.Width(300f));
-        NativeGUILayout.Label(
-            UnmaText.Get("auto.7f6972b99a3e") + m_panelSettingsColumns,
-            m_labelStyle,
-            NativeGUILayout.Width(90f));
-        if (NativeGUILayout.Button("−", m_buttonStyle, NativeGUILayout.Width(36f)))
+            compactSettings
+                ? NativeGUILayout.ExpandWidth(true)
+                : NativeGUILayout.Width(300f));
+        if (!compactSettings)
         {
-            m_panelSettingsColumns = Math.Max(
-                1,
-                m_panelSettingsColumns - 1);
-        }
-        if (NativeGUILayout.Button("+", m_buttonStyle, NativeGUILayout.Width(36f)))
-        {
-            m_panelSettingsColumns = Math.Min(
-                8,
-                m_panelSettingsColumns + 1);
-        }
-        if (NativeGUILayout.Button(
-                UnmaText.Get("ui.common.save", "SAVE"),
-                m_primaryButtonStyle,
-                NativeGUILayout.Width(150f)))
-        {
-            SavePanelSettings(panel);
+            DrawPanelSettingsColumnsAndSave(panel, false);
         }
         NativeGUILayout.EndHorizontal();
+        if (compactSettings)
+        {
+            NativeGUILayout.BeginHorizontal();
+            DrawPanelSettingsColumnsAndSave(panel, true);
+            NativeGUILayout.EndHorizontal();
+        }
 
         if (panel.IsDashboard)
         {
+            NativeGUILayout.BeginHorizontal();
+            NativeGUILayout.Label(
+                UnmaText.Get("ui.panel.area", "AREA"),
+                m_labelStyle,
+                NativeGUILayout.Width(90f));
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "ui.panel.area_dashboard",
+                    "AUTOMATIC — CURRENT BOARD FILTER"),
+                m_smallLabelStyle);
+            NativeGUILayout.EndHorizontal();
             NativeGUILayout.Label(
                 UnmaText.Get("auto.2eb2c75b7d87") +
                 UnmaText.Get("auto.a1af7061ed28"),
@@ -3534,6 +4408,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        DrawPanelSettingsAreaSelector();
         var hasUnsavedPanelSettings = HasUnsavedPanelSettings(panel);
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
@@ -3545,12 +4420,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     "ui.panel.clone_hint",
                     "Create an independent copy. Cloned custom alarms start disabled."),
             m_smallLabelStyle);
+        if (compactSettings)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
         var guiWasEnabled = NativeGUI.enabled;
         NativeGUI.enabled = guiWasEnabled && !hasUnsavedPanelSettings;
         if (NativeGUILayout.Button(
                 UnmaText.Get("ui.panel.clone", "DUPLICATE PANEL"),
                 m_primaryButtonStyle,
-                NativeGUILayout.Width(210f),
+                compactSettings
+                    ? NativeGUILayout.ExpandWidth(true)
+                    : NativeGUILayout.Width(210f),
                 NativeGUILayout.Height(30f)))
         {
             ClonePanel(panel);
@@ -3564,11 +4446,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_panelSettingsIncludeVanilla = NativeGUILayout.Toggle(
             m_panelSettingsIncludeVanilla,
             UnmaText.Get("auto.d696777f43cd"),
-            NativeGUILayout.Width(170f));
+            compactSettings
+                ? NativeGUILayout.ExpandWidth(true)
+                : NativeGUILayout.Width(170f));
         m_panelSettingsIncludeSystem = NativeGUILayout.Toggle(
             m_panelSettingsIncludeSystem,
             UnmaText.Get("auto.e71a0cea7772"),
-            NativeGUILayout.Width(170f));
+            compactSettings
+                ? NativeGUILayout.ExpandWidth(true)
+                : NativeGUILayout.Width(170f));
+        if (compactSettings)
+        {
+            NativeGUILayout.EndHorizontal();
+            NativeGUILayout.BeginHorizontal();
+        }
         NativeGUILayout.Label(
             UnmaText.Get("ui.panel.auto_filter", "Auto-filter"),
             m_labelStyle,
@@ -3625,7 +4516,113 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
     }
 
-    private void SavePanelSettings(PanelDefinition panel)
+    private void DrawPanelSettingsColumnsAndSave(
+        PanelDefinition panel,
+        bool expandSave)
+    {
+        NativeGUILayout.Label(
+            UnmaText.Get("auto.7f6972b99a3e") + m_panelSettingsColumns,
+            m_labelStyle,
+            NativeGUILayout.Width(90f));
+        if (NativeGUILayout.Button(
+                "−",
+                m_buttonStyle,
+                NativeGUILayout.Width(36f)))
+        {
+            m_panelSettingsColumns = Math.Max(
+                1,
+                m_panelSettingsColumns - 1);
+        }
+        if (NativeGUILayout.Button(
+                "+",
+                m_buttonStyle,
+                NativeGUILayout.Width(36f)))
+        {
+            m_panelSettingsColumns = Math.Min(
+                8,
+                m_panelSettingsColumns + 1);
+        }
+        if (expandSave)
+        {
+            if (NativeGUILayout.Button(
+                    UnmaText.Get("ui.common.save", "SAVE"),
+                    m_primaryButtonStyle,
+                    NativeGUILayout.ExpandWidth(true)))
+            {
+                SavePanelSettings(panel);
+            }
+        }
+        else if (NativeGUILayout.Button(
+                     UnmaText.Get("ui.common.save", "SAVE"),
+                     m_primaryButtonStyle,
+                     NativeGUILayout.Width(150f)))
+        {
+            SavePanelSettings(panel);
+        }
+    }
+
+    private void DrawPanelSettingsAreaSelector()
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.panel.area", "AREA"),
+            m_labelStyle,
+            NativeGUILayout.Width(90f));
+        m_panelSettingsAreaScroll = NativeGUILayout.BeginScrollView(
+            m_panelSettingsAreaScroll,
+            false,
+            false,
+            NativeGUILayout.Height(42f),
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.BeginHorizontal();
+        DrawPanelSettingsAreaButton(
+            "",
+            UnmaText.Get("board.area_unassigned", "UNASSIGNED"));
+        foreach (var area in m_runtime.Configuration.AlarmAreas ??
+                     new List<AlarmAreaDefinition>())
+        {
+            if (area == null || string.IsNullOrWhiteSpace(area.Id))
+            {
+                continue;
+            }
+            DrawPanelSettingsAreaButton(area.Id, area.Name);
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.EndScrollView();
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "ui.panel.area_hint",
+                "Assign this panel to an operational area."),
+            m_smallLabelStyle);
+    }
+
+    private void DrawPanelSettingsAreaButton(string areaId, string name)
+    {
+        areaId = areaId?.Trim() ?? "";
+        name = string.IsNullOrWhiteSpace(name)
+            ? UnmaText.Get("ui.area.default_name", "AREA")
+            : name.Trim();
+        var width = Mathf.Clamp(
+            name.Length * Mathf.Max(7f, m_buttonStyle.fontSize * 0.58f) + 24f,
+            120f,
+            260f);
+        if (NativeGUILayout.Button(
+                name,
+                string.Equals(
+                    m_panelSettingsAreaId ?? "",
+                    areaId,
+                    StringComparison.Ordinal)
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                NativeGUILayout.Width(width),
+                NativeGUILayout.Height(30f)))
+        {
+            m_panelSettingsAreaId = areaId;
+        }
+    }
+
+    private bool SavePanelSettings(PanelDefinition panel)
     {
         if (m_runtime.UpdatePanelSettings(
                 panel.Id,
@@ -3633,20 +4630,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_panelSettingsColumns,
                 m_panelSettingsIncludeVanilla,
                 m_panelSettingsIncludeSystem,
-                m_panelSettingsFilter))
+                m_panelSettingsFilter,
+                m_panelSettingsAreaId))
         {
             m_panelSettingsName = panel.Name;
             m_panelSettingsColumns = panel.Columns;
             m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
             m_panelSettingsIncludeSystem = panel.IncludeSystem;
             m_panelSettingsFilter = panel.NotificationFilter ?? "";
+            m_panelSettingsAreaId = panel.AreaId ?? "";
+            EnsureCurrentPanelVisibleInArea();
             SetStatus(UnmaText.Get("auto.4bd5b213cd77"));
-            return;
+            return true;
         }
 
         SetStatus(
             UnmaText.Get("auto.27f10f6dc69e") +
             m_runtime.LastPersistenceError);
+        return false;
     }
 
     private bool HasUnsavedPanelSettings(PanelDefinition panel)
@@ -3668,6 +4669,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
                    Math.Min(8, m_panelSettingsColumns)) ||
                panel.IncludeVanilla != m_panelSettingsIncludeVanilla ||
                panel.IncludeSystem != m_panelSettingsIncludeSystem ||
+               !string.Equals(
+                   panel.AreaId ?? "",
+                   m_panelSettingsAreaId ?? "",
+                   StringComparison.Ordinal) ||
                !string.Equals(
                    panel.NotificationFilter ?? "",
                    m_panelSettingsFilter ?? "",
@@ -7323,6 +8328,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private bool OpenRuleFromAlarmTile(AlarmView alarm)
     {
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
+            return true;
+        }
         if (!PanelSlotProjection.TryGetCustomRuleId(alarm, out var ruleId))
         {
             return false;
@@ -7366,14 +8375,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else
         {
-            var panelIndex = GlobalPanels.FindIndex(panel => string.Equals(
-                panel.Id,
-                rule.PanelId,
-                StringComparison.Ordinal));
-            if (panelIndex >= 0)
-            {
-                m_currentPanelIndex = panelIndex;
-            }
+            SelectGlobalPanel(primaryPanel, true);
         }
         m_isOpen = true;
         SelectMainTab(TabBoard);
@@ -7604,19 +8606,50 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
-        var count = m_runtime.AcknowledgePanel(panel.Id);
+        var isAreaScope = IsAreaScopedDashboard(panel);
+        int count;
+        if (isAreaScope)
+        {
+            var visibleSlotIds = GetBoardViews(panel)
+                .Select(PanelSlotProjection.StableAlarmId)
+                .Where(slotId => !string.IsNullOrWhiteSpace(slotId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (!m_runtime.TryAcknowledgeDashboard(
+                    NormalizeAlarmAreaFilter(),
+                    visibleSlotIds,
+                    out count))
+            {
+                SetStatus(UnmaText.Get(
+                    "board.area_unavailable",
+                    "The selected area is unavailable."));
+                return;
+            }
+        }
+        else
+        {
+            count = m_runtime.AcknowledgePanel(panel.Id);
+        }
         if (count > 0)
         {
             m_audio.StopAlarm();
         }
         SetStatus(count > 0
             ? UnmaText.Format(
-                "board.acknowledged_count",
-                "Acknowledged {0} alarm(s).",
+                isAreaScope
+                    ? "board.area_acknowledged_count"
+                    : "board.acknowledged_count",
+                isAreaScope
+                    ? "Acknowledged {0} alarm(s) in this area."
+                    : "Acknowledged {0} alarm(s).",
                 count)
             : UnmaText.Get(
-                "board.no_unacknowledged",
-                "No unacknowledged alarms."));
+                isAreaScope
+                    ? "board.area_no_unacknowledged"
+                    : "board.no_unacknowledged",
+                isAreaScope
+                    ? "No unacknowledged alarms in this area."
+                    : "No unacknowledged alarms."));
     }
 
     private void NavigateToNextUnacknowledgedAlarm(PanelDefinition panel)
@@ -7629,15 +8662,37 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
-        var alarm = m_runtime.GetNextUnacknowledged(
-            panel.Id,
-            m_lastNavigatedAlarmSlotId);
+        AlarmView alarm;
+        var isAreaScope = IsAreaScopedDashboard(panel);
+        if (isAreaScope)
+        {
+            if (!m_runtime.TryGetNextDashboardUnacknowledged(
+                    NormalizeAlarmAreaFilter(),
+                    m_lastNavigatedAlarmSlotId,
+                    out alarm))
+            {
+                SetStatus(UnmaText.Get(
+                    "board.area_unavailable",
+                    "The selected area is unavailable."));
+                return;
+            }
+        }
+        else
+        {
+            alarm = m_runtime.GetNextUnacknowledged(
+                panel.Id,
+                m_lastNavigatedAlarmSlotId);
+        }
         if (alarm == null)
         {
             m_lastNavigatedAlarmSlotId = "";
             SetStatus(UnmaText.Get(
-                "board.no_unacknowledged",
-                "No unacknowledged alarms."));
+                isAreaScope
+                    ? "board.area_no_unacknowledged"
+                    : "board.no_unacknowledged",
+                isAreaScope
+                    ? "No unacknowledged alarms in this area."
+                    : "No unacknowledged alarms."));
             return;
         }
 
@@ -7651,16 +8706,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else
         {
-            m_activeEntityPanelId = "";
-            var panelIndex = GlobalPanels.FindIndex(candidate =>
-                string.Equals(candidate.Id, panel.Id, StringComparison.Ordinal));
-            if (panelIndex >= 0)
-            {
-                m_currentPanelIndex = panelIndex;
-            }
+            SelectGlobalPanel(panel, true);
         }
 
-        var visible = GetPanelViews(panel);
+        var visible = GetBoardViews(panel);
         var alarmIndex = visible.ToList().FindIndex(candidate =>
             string.Equals(
                 PanelSlotProjection.StableAlarmId(candidate),
@@ -7744,18 +8793,19 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         else
         {
-            m_activeEntityPanelId = "";
-            var panelIndex = GlobalPanels.FindIndex(candidate => string.Equals(
-                candidate.Id,
-                panel.Id,
-                StringComparison.Ordinal));
-            if (panelIndex >= 0)
+            if (panel.IsDashboard &&
+                IsAreaScopedDashboard(panel) &&
+                !GetBoardViews(panel).Any(alarm => string.Equals(
+                    PanelSlotProjection.StableAlarmId(alarm),
+                    request.SlotId,
+                    StringComparison.Ordinal)))
             {
-                m_currentPanelIndex = panelIndex;
+                m_alarmAreaFilter = AlarmAreaFilter.All;
             }
+            SelectGlobalPanel(panel, true);
         }
 
-        var visible = GetPanelViews(panel);
+        var visible = GetBoardViews(panel);
         var alarmIndex = visible.ToList().FindIndex(candidate => string.Equals(
             PanelSlotProjection.StableAlarmId(candidate),
             request.SlotId,
@@ -7826,13 +8876,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
             tileRect.y + 4f,
             27f,
             27f);
-        if (NativeGUI.Button(
+        if (!NativeGUI.Button(
                 buttonRect,
                 UnmaText.Get("alarm_tile.acknowledge", "Q"),
-                m_dangerButtonStyle) &&
-            m_runtime.AcknowledgeAlarm(
-                panel.Id,
-                PanelSlotProjection.StableAlarmId(alarm)))
+                m_dangerButtonStyle))
+        {
+            return;
+        }
+
+        var slotId = PanelSlotProjection.StableAlarmId(alarm);
+        var acknowledged = IsAreaScopedDashboard(panel)
+            ? m_runtime.TryAcknowledgeDashboard(
+                  NormalizeAlarmAreaFilter(),
+                  new[] { slotId },
+                  out var count) && count > 0
+            : m_runtime.AcknowledgeAlarm(panel.Id, slotId);
+        if (acknowledged)
         {
             m_audio.StopAlarm();
             SetStatus(UnmaText.Get(
@@ -8961,6 +10020,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void OpenPanelCreationEditor()
     {
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
+            return;
+        }
         if (HasDraftRuleWork())
         {
             OpenRuleEditorWindow();
@@ -8974,9 +10037,52 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_newPanelName = UnmaText.Get("auto.3f5c86818d70");
     }
 
+    private void OpenAlarmAreasEditor()
+    {
+        if (m_entityAlarmWindowOpen &&
+            m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            m_clearGuiFocusPending = true;
+            return;
+        }
+        if (m_entityAlarmWindowOpen &&
+            m_editorWindowMode != EditorWindowMode.AlarmAreas)
+        {
+            SetStatus(UnmaText.Get(
+                "ui.area.editor_conflict",
+                "Close the current editor before managing areas."));
+            return;
+        }
+        if (HasDraftRuleWork())
+        {
+            OpenRuleEditorWindow();
+            SetDraftConflictStatus(UnmaText.Get("auto.48d5f7bcd7c1"));
+            return;
+        }
+        ReloadAlarmAreaDraft();
+        m_editorWindowMode = EditorWindowMode.AlarmAreas;
+        m_editorClosePromptOpen = false;
+        m_entityAlarmWindowOpen = true;
+        m_entityAlarmScroll = Vector2.zero;
+    }
+
     private void OpenPanelSettingsEditor(PanelDefinition panel)
     {
         if (panel == null || PanelTopologyPolicy.IsEntityPanel(panel))
+        {
+            return;
+        }
+        if (m_entityAlarmWindowOpen &&
+            m_editorWindowMode == EditorWindowMode.PanelSettings &&
+            string.Equals(
+                m_panelSettingsPanelId,
+                panel.Id,
+                StringComparison.Ordinal))
+        {
+            m_clearGuiFocusPending = true;
+            return;
+        }
+        if (BlockEditorSwitchFromConfigurationDraft())
         {
             return;
         }
@@ -8993,6 +10099,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_panelSettingsIncludeVanilla = panel.IncludeVanilla;
         m_panelSettingsIncludeSystem = panel.IncludeSystem;
         m_panelSettingsFilter = panel.NotificationFilter ?? "";
+        m_panelSettingsAreaId = panel.AreaId ?? "";
+        m_panelSettingsAreaScroll = Vector2.zero;
         m_editorWindowMode = EditorWindowMode.PanelSettings;
         m_entityAlarmWindowOpen = true;
         m_entityAlarmScroll = Vector2.zero;
@@ -9003,6 +10111,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         if (panel == null || panel.IsDashboard)
         {
             SetStatus(UnmaText.Get("auto.da029f65d8db"));
+            return;
+        }
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
             return;
         }
         if (HasDraftRuleWork())
@@ -9029,11 +10141,52 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void OpenRuleEditorWindow()
     {
+        if (BlockEditorSwitchFromConfigurationDraft())
+        {
+            return;
+        }
         m_editorWindowMode = EditorWindowMode.Rule;
         m_editorClosePromptOpen = false;
         m_entityAlarmWindowOpen = true;
         m_openEntityAlarmAfterInspection = false;
         m_entityAlarmScroll = Vector2.zero;
+    }
+
+    private bool BlockEditorSwitchFromConfigurationDraft()
+    {
+        if (!m_entityAlarmWindowOpen)
+        {
+            return false;
+        }
+        if (m_editorWindowMode == EditorWindowMode.AlarmAreas)
+        {
+            var dirty = HasUnsavedAlarmAreas();
+            SetStatus(UnmaText.Get(
+                dirty
+                    ? "ui.area.unsaved_editor_conflict"
+                    : "ui.area.close_editor_first",
+                dirty
+                    ? "Save or discard the area draft before opening another editor."
+                    : "Close the area editor before opening another editor."));
+            return true;
+        }
+        if (m_editorWindowMode != EditorWindowMode.PanelSettings)
+        {
+            return false;
+        }
+        var panel = m_runtime.Configuration.Panels.FirstOrDefault(candidate =>
+            candidate != null && string.Equals(
+                candidate.Id,
+                m_panelSettingsPanelId,
+                StringComparison.Ordinal));
+        if (!HasUnsavedPanelSettings(panel))
+        {
+            return false;
+        }
+        SetStatus(UnmaText.Get(
+            "ui.area.unsaved_editor_conflict",
+            "Save or discard the panel settings before opening another editor."));
+        return true;
     }
 
     private bool AddPanel()
@@ -9048,6 +10201,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             IncludeVanilla = false,
             IncludeSystem = false,
             IsDashboard = false,
+            AreaId = GetCurrentConcreteAlarmAreaId(),
         };
         if (!m_runtime.AddPanel(panel))
         {

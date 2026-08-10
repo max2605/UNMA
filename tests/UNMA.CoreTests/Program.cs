@@ -40,6 +40,7 @@ internal static class Program
         TestGlobalRuleMetricPaths();
         TestWindowResizeMath();
         TestPanelTopologyPolicy();
+        TestAlarmAreaPolicy();
         TestPanelClonePolicy();
         TestEntityVanillaSlotPolicy();
         TestCustomRuleLifecyclePolicy();
@@ -1240,7 +1241,7 @@ internal static class Program
         legacyStage.Conditions[0].Hysteresis = 7.5d;
         legacy.Normalize();
 
-        AreEqual(19, legacy.SchemaVersion);
+        AreEqual(20, legacy.SchemaVersion);
         AreEqual(0, legacyRule.ActivationDelayTicks);
         AreEqual(0, legacyRule.ResetDelayTicks);
         AreEqual(0, legacyRule.MinimumActiveTicks);
@@ -1309,7 +1310,7 @@ internal static class Program
         AreEqual(
             AlarmOperatorAction.None,
             new SystemAlarmStageDefinition().OperatorAction);
-        AreEqual(19, new UnmaConfiguration().SchemaVersion);
+        AreEqual(20, new UnmaConfiguration().SchemaVersion);
 
         var legacy = UnmaConfiguration.CreateDefault();
         legacy.SchemaVersion = 18;
@@ -1365,7 +1366,7 @@ internal static class Program
                 new Dictionary<int, bool> { [0] = true }));
         legacy.Normalize();
 
-        AreEqual(19, legacy.SchemaVersion);
+        AreEqual(20, legacy.SchemaVersion);
         IsTrue(legacyRule.Escalation != null);
         IsFalse(legacyRule.Escalation.Enabled);
         AreEqual(0, legacyRule.Escalation.AfterTicks);
@@ -1487,7 +1488,7 @@ internal static class Program
         stream.Position = 0;
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
-        AreEqual(19, restored.SchemaVersion);
+        AreEqual(20, restored.SchemaVersion);
         var restoredRule = restored.Rules.Single(rule =>
             rule.Id == validRule.Id);
         IsTrue(restoredRule.Escalation.Enabled);
@@ -2484,7 +2485,7 @@ internal static class Program
             },
         };
         legacyConfiguration.Normalize();
-        AreEqual(19, legacyConfiguration.SchemaVersion);
+        AreEqual(20, legacyConfiguration.SchemaVersion);
         AreEqual(1, legacyConfiguration.Instruments.Count);
         AreEqual(1, legacyConfiguration.Instruments[0].Sources.Count);
         AreEqual(42, legacyConfiguration.Instruments[0].Sources[0].EntityId);
@@ -3089,7 +3090,7 @@ internal static class Program
             EditorWindowHeight = 780f,
         };
         configuration.Normalize();
-        AreEqual(19, configuration.SchemaVersion);
+        AreEqual(20, configuration.SchemaVersion);
         AreEqual("Lagerhaus III", entityPanel.OwnerEntityTitle);
         AreEqual("AirStorageT3", entityPanel.OwnerEntityPrototypeId);
         AreEqual(
@@ -3175,6 +3176,693 @@ internal static class Program
             orphaned.Panels).Count > 0);
     }
 
+    private static void TestAlarmAreaPolicy()
+    {
+        AreEqual(64, AlarmAreaPolicy.MaximumAreaCount);
+        AreEqual(40, AlarmAreaPolicy.MaximumDraftNameLength);
+        AreEqual(40, AlarmAreaPolicy.MaximumStoredNameLength);
+        AreEqual(AlarmAreaFilterKind.All, AlarmAreaFilter.All.Kind);
+        AreEqual("", AlarmAreaFilter.All.AreaId);
+        AreEqual(
+            AlarmAreaFilterKind.Unassigned,
+            AlarmAreaFilter.Unassigned.Kind);
+        AreEqual("", AlarmAreaFilter.Unassigned.AreaId);
+        AreEqual(
+            AlarmAreaFilterKind.Area,
+            AlarmAreaFilter.ForArea(" north ").Kind);
+        AreEqual("north", AlarmAreaFilter.ForArea(" north ").AreaId);
+
+        var fortyCharacters = new string('X', 40);
+        var generatedIds = new Queue<string>(new[]
+        {
+            " alpha ",
+            " beta ",
+            " ",
+            "gamma",
+        });
+        var generatedIdCalls = 0;
+        var malformed = new List<AlarmAreaDefinition>
+        {
+            null,
+            new() { Id = " alpha ", Name = " North " },
+            new() { Id = "alpha", Name = " north " },
+            new() { Id = "ALPHA", Name = " " },
+            new() { Id = "", Name = fortyCharacters + "TAIL" },
+            new() { Id = "delta", Name = fortyCharacters },
+            new() { Id = "epsilon", Name = null },
+        };
+        var normalized = AlarmAreaPolicy.Normalize(
+            malformed,
+            () =>
+            {
+                generatedIdCalls++;
+                return generatedIds.Dequeue();
+            });
+        AreEqual(6, normalized.Count);
+        AreEqual(4, generatedIdCalls);
+        AreEqual("alpha", normalized[0].Id);
+        AreEqual("North", normalized[0].Name);
+        AreEqual("beta", normalized[1].Id);
+        AreEqual("north (2)", normalized[1].Name);
+        AreEqual("ALPHA", normalized[2].Id);
+        AreEqual("AREA", normalized[2].Name);
+        AreEqual("gamma", normalized[3].Id);
+        AreEqual(fortyCharacters, normalized[3].Name);
+        AreEqual("delta", normalized[4].Id);
+        AreEqual(new string('X', 36) + " (2)", normalized[4].Name);
+        AreEqual("epsilon", normalized[5].Id);
+        AreEqual("AREA (2)", normalized[5].Name);
+        IsTrue(ReferenceEquals(malformed[1], normalized[0]));
+        IsTrue(ReferenceEquals(malformed[6], normalized[5]));
+        var firstNormalization = string.Join(
+            "|",
+            normalized.Select(area => area.Id + ":" + area.Name));
+        var secondGeneratorCalls = 0;
+        var normalizedAgain = AlarmAreaPolicy.Normalize(
+            normalized,
+            () =>
+            {
+                secondGeneratorCalls++;
+                throw new InvalidOperationException("must not be called");
+            });
+        AreEqual(0, secondGeneratorCalls);
+        AreEqual(
+            firstNormalization,
+            string.Join(
+                "|",
+                normalizedAgain.Select(area => area.Id + ":" + area.Name)));
+        for (var index = 0; index < normalized.Count; index++)
+        {
+            IsTrue(ReferenceEquals(normalized[index], normalizedAgain[index]));
+        }
+
+        var fallbackCalls = 0;
+        var deterministicFallback = AlarmAreaPolicy.Normalize(
+            new[]
+            {
+                new AlarmAreaDefinition { Id = "area", Name = "ONE" },
+                new AlarmAreaDefinition { Id = "", Name = "TWO" },
+            },
+            () =>
+            {
+                fallbackCalls++;
+                return "area";
+            });
+        AreEqual(128, fallbackCalls);
+        AreEqual("area", deterministicFallback[0].Id);
+        AreEqual("area-2", deterministicFallback[1].Id);
+        var throwingGeneratorCalls = 0;
+        var throwingFallback = AlarmAreaPolicy.Normalize(
+            new[]
+            {
+                new AlarmAreaDefinition { Id = "", Name = "SAFE" },
+            },
+            () =>
+            {
+                throwingGeneratorCalls++;
+                throw new InvalidOperationException("generator failed");
+            });
+        AreEqual(1, throwingGeneratorCalls);
+        AreEqual("area", throwingFallback[0].Id);
+
+        var oversized = new List<AlarmAreaDefinition> { null };
+        oversized.AddRange(Enumerable.Range(0, 70).Select(index =>
+            new AlarmAreaDefinition
+            {
+                Id = "area-" + index,
+                Name = "AREA " + index,
+            }));
+        var capped = AlarmAreaPolicy.Normalize(oversized);
+        AreEqual(64, capped.Count);
+        AreEqual("area-0", capped[0].Id);
+        AreEqual("area-63", capped[63].Id);
+        AreEqual(71, oversized.Count);
+        AreEqual(64, capped.Select(area => area.Id)
+            .Distinct(StringComparer.Ordinal).Count());
+        AreEqual(64, capped.Select(area => area.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        AreEqual(0, AlarmAreaPolicy.Normalize(null).Count);
+
+        var north = new AlarmAreaDefinition
+        {
+            Id = "north",
+            Name = "NORTH",
+        };
+        var magicAll = new AlarmAreaDefinition
+        {
+            Id = "all",
+            Name = "LITERAL ALL AREA",
+        };
+        var filterAreas = new[] { north, magicAll };
+        var dashboard = new PanelDefinition
+        {
+            Id = "home",
+            IsDashboard = true,
+            AreaId = "north",
+        };
+        var northPanel = new PanelDefinition
+        {
+            Id = "north-panel",
+            AreaId = " north ",
+        };
+        var unassignedPanel = new PanelDefinition
+        {
+            Id = "unassigned-panel",
+            AreaId = "",
+        };
+        var magicPanel = new PanelDefinition
+        {
+            Id = "magic-panel",
+            AreaId = "all",
+        };
+        var orphanPanel = new PanelDefinition
+        {
+            Id = "orphan-panel",
+            AreaId = "missing",
+        };
+        var entityPanel = new PanelDefinition
+        {
+            Id = "entity-panel",
+            OwnerEntityId = 42,
+            AreaId = "north",
+        };
+        var filterPanels = new PanelDefinition[]
+        {
+            dashboard,
+            northPanel,
+            unassignedPanel,
+            magicPanel,
+            orphanPanel,
+            entityPanel,
+            null,
+        };
+        var allPanels = AlarmAreaPolicy.SelectGlobalPanels(
+            filterPanels,
+            AlarmAreaFilter.All);
+        AreEqual(5, allPanels.Count);
+        IsTrue(ReferenceEquals(dashboard, allPanels[0]));
+        IsTrue(ReferenceEquals(orphanPanel, allPanels[4]));
+        IsFalse(allPanels.Contains(entityPanel));
+        var unassignedPanels = AlarmAreaPolicy.SelectGlobalPanels(
+            filterPanels,
+            AlarmAreaFilter.Unassigned);
+        AreEqual(1, unassignedPanels.Count);
+        IsTrue(ReferenceEquals(unassignedPanel, unassignedPanels[0]));
+        var northPanels = AlarmAreaPolicy.SelectGlobalPanels(
+            filterPanels,
+            AlarmAreaFilter.ForArea("north"));
+        AreEqual(1, northPanels.Count);
+        IsTrue(ReferenceEquals(northPanel, northPanels[0]));
+        var literalAllPanels = AlarmAreaPolicy.SelectGlobalPanels(
+            filterPanels,
+            AlarmAreaFilter.ForArea("all"));
+        AreEqual(1, literalAllPanels.Count);
+        IsTrue(ReferenceEquals(magicPanel, literalAllPanels[0]));
+        AreEqual(
+            allPanels.Count,
+            AlarmAreaPolicy.Select(filterPanels, AlarmAreaFilter.All).Count);
+
+        var normalizedFilter = AlarmAreaPolicy.NormalizeFilter(
+            AlarmAreaFilter.ForArea(" north "),
+            filterAreas);
+        AreEqual(AlarmAreaFilterKind.Area, normalizedFilter.Kind);
+        AreEqual("north", normalizedFilter.AreaId);
+        AreEqual(
+            AlarmAreaFilterKind.All,
+            AlarmAreaPolicy.NormalizeFilter(
+                AlarmAreaFilter.ForArea("missing"),
+                filterAreas).Kind);
+        AreEqual(
+            AlarmAreaFilterKind.All,
+            AlarmAreaPolicy.NormalizeFilter(
+                new AlarmAreaFilter((AlarmAreaFilterKind)99, "north"),
+                filterAreas).Kind);
+        AreEqual(
+            AlarmAreaFilterKind.Unassigned,
+            AlarmAreaPolicy.NormalizeFilter(
+                new AlarmAreaFilter(
+                    AlarmAreaFilterKind.Unassigned,
+                    "north"),
+                filterAreas).Kind);
+
+        var assignmentOrder = filterPanels.Where(panel => panel != null)
+            .Select(panel => panel.Id).ToArray();
+        AlarmAreaPolicy.NormalizePanelAssignments(
+            filterPanels,
+            filterAreas);
+        AreEqual("", dashboard.AreaId);
+        AreEqual("north", northPanel.AreaId);
+        AreEqual("", unassignedPanel.AreaId);
+        AreEqual("all", magicPanel.AreaId);
+        AreEqual("", orphanPanel.AreaId);
+        AreEqual("", entityPanel.AreaId);
+        IsTrue(assignmentOrder.SequenceEqual(
+            filterPanels.Where(panel => panel != null)
+                .Select(panel => panel.Id),
+            StringComparer.Ordinal));
+        AlarmAreaPolicy.NormalizePanelAssignments(
+            filterPanels,
+            filterAreas,
+            discardAssignments: true);
+        IsTrue(filterPanels.Where(panel => panel != null).All(panel =>
+            panel.AreaId == ""));
+        IsFalse(AlarmAreaPolicy.IsAssignablePanel(dashboard));
+        IsFalse(AlarmAreaPolicy.IsAssignablePanel(entityPanel));
+        IsFalse(AlarmAreaPolicy.IsAssignablePanel(null));
+        IsTrue(AlarmAreaPolicy.IsAssignablePanel(northPanel));
+
+        var replacementDraft = new List<AlarmAreaDefinition>
+        {
+            new() { Id = " one ", Name = " First " },
+            new() { Id = "ONE", Name = " Second " },
+        };
+        IsTrue(AlarmAreaPolicy.ValidateReplacement(
+            replacementDraft,
+            out var replacement,
+            out var failure));
+        AreEqual(AlarmAreaMutationFailure.None, failure);
+        AreEqual(2, replacement.Count);
+        AreEqual("one", replacement[0].Id);
+        AreEqual("First", replacement[0].Name);
+        AreEqual("ONE", replacement[1].Id);
+        AreEqual("Second", replacement[1].Name);
+        IsFalse(ReferenceEquals(replacementDraft, replacement));
+        IsFalse(ReferenceEquals(replacementDraft[0], replacement[0]));
+        AreEqual(" one ", replacementDraft[0].Id);
+        AreEqual(" First ", replacementDraft[0].Name);
+
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            null,
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidId, failure);
+        AreEqual(0, replacement.Count);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            new AlarmAreaDefinition[] { null },
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidId, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            new[]
+            {
+                new AlarmAreaDefinition { Id = " ", Name = "NAME" },
+            },
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidId, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            new[]
+            {
+                new AlarmAreaDefinition { Id = "same", Name = "ONE" },
+                new AlarmAreaDefinition { Id = " same ", Name = "TWO" },
+            },
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidId, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            Enumerable.Range(0, 65).Select(index =>
+                new AlarmAreaDefinition
+                {
+                    Id = "id-" + index,
+                    Name = "NAME " + index,
+                }),
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.TooManyAreas, failure);
+        AreEqual(0, replacement.Count);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            new[]
+            {
+                new AlarmAreaDefinition { Id = "empty", Name = " " },
+            },
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidName, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            new[]
+            {
+                new AlarmAreaDefinition
+                {
+                    Id = "long",
+                    Name = new string('N', 41),
+                },
+            },
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.NameTooLong, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            new[]
+            {
+                new AlarmAreaDefinition { Id = "a", Name = "Alpha" },
+                new AlarmAreaDefinition { Id = "b", Name = " alpha " },
+            },
+            out replacement,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.DuplicateName, failure);
+        AreEqual(0, replacement.Count);
+
+        IsTrue(AlarmAreaPolicy.ValidateReplacement(
+            replacementDraft,
+            "one",
+            " first ",
+            out var replacementName,
+            out failure));
+        AreEqual("first", replacementName);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            replacementDraft,
+            "one",
+            " second ",
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.DuplicateName, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            replacementDraft,
+            "one",
+            " ",
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidName, failure);
+        IsFalse(AlarmAreaPolicy.ValidateReplacement(
+            replacementDraft,
+            "one",
+            new string('N', 41),
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.NameTooLong, failure);
+
+        var mutationAreas = new List<AlarmAreaDefinition>
+        {
+            new() { Id = "one", Name = "ONE" },
+            new() { Id = "two", Name = "TWO" },
+        };
+        var createIds = new Queue<string>(new[] { " one ", " three " });
+        IsTrue(AlarmAreaPolicy.TryCreate(
+            mutationAreas,
+            " THREE ",
+            () => createIds.Dequeue(),
+            out var created,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.None, failure);
+        IsTrue(ReferenceEquals(created, mutationAreas[2]));
+        AreEqual("three", created.Id);
+        AreEqual("THREE", created.Name);
+        IsFalse(AlarmAreaPolicy.TryCreate(
+            mutationAreas,
+            " two ",
+            () => "unused",
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.DuplicateName, failure);
+        AreEqual(3, mutationAreas.Count);
+        var fullDraft = Enumerable.Range(0, 64).Select(index =>
+            new AlarmAreaDefinition
+            {
+                Id = "full-" + index,
+                Name = "FULL " + index,
+            }).ToList();
+        var fullGeneratorCalls = 0;
+        IsFalse(AlarmAreaPolicy.TryCreate(
+            fullDraft,
+            "OVERFLOW",
+            () =>
+            {
+                fullGeneratorCalls++;
+                return "overflow";
+            },
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.TooManyAreas, failure);
+        AreEqual(0, fullGeneratorCalls);
+        AreEqual(64, fullDraft.Count);
+        IsFalse(AlarmAreaPolicy.TryCreate(
+            mutationAreas,
+            "FOUR",
+            null,
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.IdGenerationFailed, failure);
+
+        IsTrue(AlarmAreaPolicy.TryRename(
+            mutationAreas,
+            " one ",
+            " FIRST RENAMED ",
+            out failure));
+        AreEqual("FIRST RENAMED", mutationAreas[0].Name);
+        IsFalse(AlarmAreaPolicy.TryRename(
+            mutationAreas,
+            "one",
+            " two ",
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.DuplicateName, failure);
+        AreEqual("FIRST RENAMED", mutationAreas[0].Name);
+        IsFalse(AlarmAreaPolicy.TryRename(
+            mutationAreas,
+            "missing",
+            "MISSING",
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.AreaNotFound, failure);
+
+        IsTrue(AlarmAreaPolicy.TryMove(
+            mutationAreas,
+            "three",
+            0,
+            out failure));
+        AreEqual("three", mutationAreas[0].Id);
+        AreEqual("one", mutationAreas[1].Id);
+        AreEqual("two", mutationAreas[2].Id);
+        IsTrue(AlarmAreaPolicy.TryMove(
+            mutationAreas,
+            "one",
+            1,
+            out failure));
+        IsFalse(AlarmAreaPolicy.TryMove(
+            mutationAreas,
+            "one",
+            -1,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidTargetIndex, failure);
+        IsFalse(AlarmAreaPolicy.TryMove(
+            mutationAreas,
+            "one",
+            3,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.InvalidTargetIndex, failure);
+        IsFalse(AlarmAreaPolicy.TryMove(
+            mutationAreas,
+            "missing",
+            0,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.AreaNotFound, failure);
+
+        var assignDashboard = new PanelDefinition
+        {
+            Id = "assign-home",
+            IsDashboard = true,
+        };
+        var assignGlobal = new PanelDefinition
+        {
+            Id = "assign-global",
+        };
+        var assignEntity = new PanelDefinition
+        {
+            Id = "assign-entity",
+            OwnerEntityId = 7,
+        };
+        var assignPanels = new[]
+        {
+            assignDashboard,
+            assignGlobal,
+            assignEntity,
+        };
+        IsTrue(AlarmAreaPolicy.TryAssign(
+            assignPanels,
+            mutationAreas,
+            " assign-global ",
+            " one ",
+            out var assignedPanel,
+            out failure));
+        IsTrue(ReferenceEquals(assignGlobal, assignedPanel));
+        AreEqual("one", assignGlobal.AreaId);
+        IsFalse(AlarmAreaPolicy.TryAssign(
+            assignPanels,
+            mutationAreas,
+            "assign-global",
+            "missing",
+            out assignedPanel,
+            out failure));
+        IsTrue(assignedPanel == null);
+        AreEqual(AlarmAreaMutationFailure.AreaNotFound, failure);
+        AreEqual("one", assignGlobal.AreaId);
+        IsTrue(AlarmAreaPolicy.TryAssign(
+            assignPanels,
+            mutationAreas,
+            "assign-global",
+            " ",
+            out assignedPanel,
+            out failure));
+        AreEqual("", assignGlobal.AreaId);
+        IsFalse(AlarmAreaPolicy.TryAssign(
+            assignPanels,
+            mutationAreas,
+            "assign-home",
+            "one",
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.PanelNotAssignable, failure);
+        IsFalse(AlarmAreaPolicy.TryAssign(
+            assignPanels,
+            mutationAreas,
+            "assign-entity",
+            "one",
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.PanelNotAssignable, failure);
+        IsFalse(AlarmAreaPolicy.TryAssign(
+            assignPanels,
+            mutationAreas,
+            "missing-panel",
+            "one",
+            out _,
+            out failure));
+        AreEqual(AlarmAreaMutationFailure.PanelNotFound, failure);
+
+        var deletePanels = new List<PanelDefinition>
+        {
+            new() { Id = "delete-a", AreaId = "two" },
+            new()
+            {
+                Id = "delete-home",
+                IsDashboard = true,
+                AreaId = "two",
+            },
+            new()
+            {
+                Id = "delete-entity",
+                OwnerEntityId = 9,
+                AreaId = "two",
+            },
+            new() { Id = "delete-other", AreaId = "one" },
+        };
+        var deletePanelOrder = deletePanels.ToArray();
+        IsTrue(AlarmAreaPolicy.TryDelete(
+            mutationAreas,
+            deletePanels,
+            " two ",
+            out var unassignedCount,
+            out failure));
+        AreEqual(3, unassignedCount);
+        AreEqual(2, mutationAreas.Count);
+        IsFalse(mutationAreas.Any(area => area.Id == "two"));
+        AreEqual("one", deletePanels[3].AreaId);
+        IsTrue(deletePanels.Take(3).All(panel => panel.AreaId == ""));
+        AreEqual(deletePanelOrder.Length, deletePanels.Count);
+        for (var index = 0; index < deletePanelOrder.Length; index++)
+        {
+            IsTrue(ReferenceEquals(deletePanelOrder[index], deletePanels[index]));
+        }
+        IsFalse(AlarmAreaPolicy.TryDelete(
+            mutationAreas,
+            deletePanels,
+            "missing",
+            out unassignedCount,
+            out failure));
+        AreEqual(0, unassignedCount);
+        AreEqual(AlarmAreaMutationFailure.AreaNotFound, failure);
+        AreEqual("one", deletePanels[3].AreaId);
+
+        var cloneAreaSource = new PanelDefinition
+        {
+            Id = "clone-area-source",
+            AreaId = " one ",
+        };
+        AreEqual("one", AlarmAreaPolicy.CloneAreaId(cloneAreaSource));
+        AreEqual(
+            "one",
+            AlarmAreaPolicy.CloneAreaId(cloneAreaSource, mutationAreas));
+        cloneAreaSource.AreaId = "orphan";
+        AreEqual(
+            "",
+            AlarmAreaPolicy.CloneAreaId(cloneAreaSource, mutationAreas));
+        cloneAreaSource.IsDashboard = true;
+        AreEqual("", AlarmAreaPolicy.CloneAreaId(cloneAreaSource));
+
+        var current = UnmaConfiguration.CreateDefault();
+        current.AlarmAreas.Add(new AlarmAreaDefinition
+        {
+            Id = " production ",
+            Name = " Production ",
+        });
+        current.Panels[1].AreaId = " production ";
+        current.Normalize();
+        AreEqual(20, current.SchemaVersion);
+        AreEqual(1, current.AlarmAreas.Count);
+        AreEqual("production", current.AlarmAreas[0].Id);
+        AreEqual("Production", current.AlarmAreas[0].Name);
+        AreEqual("production", current.Panels[1].AreaId);
+        AreEqual("", current.Panels[0].AreaId);
+        var currentSnapshot = string.Join(
+            "|",
+            current.AlarmAreas.Select(area => area.Id + ":" + area.Name)) +
+            ";" + string.Join("|", current.Panels.Select(panel =>
+                panel.Id + ":" + panel.AreaId));
+        current.Normalize();
+        AreEqual(
+            currentSnapshot,
+            string.Join(
+                "|",
+                current.AlarmAreas.Select(area => area.Id + ":" + area.Name)) +
+            ";" + string.Join("|", current.Panels.Select(panel =>
+                panel.Id + ":" + panel.AreaId)));
+
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaConfiguration));
+        using (var stream = new MemoryStream())
+        {
+            serializer.WriteObject(stream, current);
+            stream.Position = 0;
+            var restored =
+                (UnmaConfiguration)serializer.ReadObject(stream);
+            restored.Normalize();
+            AreEqual(20, restored.SchemaVersion);
+            AreEqual(1, restored.AlarmAreas.Count);
+            AreEqual("production", restored.AlarmAreas[0].Id);
+            AreEqual("Production", restored.AlarmAreas[0].Name);
+            AreEqual("production", restored.Panels.Single(panel =>
+                panel.Id == "supply").AreaId);
+            AreEqual("", restored.Panels.Single(panel =>
+                panel.IsDashboard).AreaId);
+        }
+
+        var legacy = UnmaConfiguration.CreateDefault();
+        legacy.SchemaVersion = 19;
+        legacy.AlarmAreas = new List<AlarmAreaDefinition>
+        {
+            new() { Id = "legacy-area", Name = "LEGACY" },
+        };
+        legacy.Panels[0].AreaId = "legacy-area";
+        legacy.Panels[1].AreaId = "legacy-area";
+        legacy.Panels[1].Name = "SUPPLY PRESERVED";
+        legacy.Panels[1].Columns = 5;
+        legacy.Panels[1].IncludeVanilla = false;
+        legacy.Panels[1].NotificationFilter = "preserved-filter";
+        var legacyPanelOrder = legacy.Panels.ToArray();
+        legacy.Normalize();
+        AreEqual(20, legacy.SchemaVersion);
+        AreEqual(0, legacy.AlarmAreas.Count);
+        IsTrue(legacy.Panels.All(panel => panel.AreaId == ""));
+        AreEqual(legacyPanelOrder.Length, legacy.Panels.Count);
+        for (var index = 0; index < legacyPanelOrder.Length; index++)
+        {
+            IsTrue(ReferenceEquals(legacyPanelOrder[index], legacy.Panels[index]));
+        }
+        AreEqual("SUPPLY PRESERVED", legacy.Panels[1].Name);
+        AreEqual(5, legacy.Panels[1].Columns);
+        IsFalse(legacy.Panels[1].IncludeVanilla);
+        AreEqual(
+            "preserved-filter",
+            legacy.Panels[1].NotificationFilter);
+    }
+
     private static void TestPanelClonePolicy()
     {
         var source = new PanelDefinition
@@ -3185,6 +3873,7 @@ internal static class Program
             IncludeVanilla = false,
             IncludeSystem = true,
             NotificationFilter = "food, workers",
+            AreaId = "production-area",
             Slots = new List<PanelSlotDefinition>
             {
                 new()
@@ -3416,6 +4105,7 @@ internal static class Program
         AreEqual("", plan.Panel.OwnerEntityTitle);
         AreEqual("", plan.Panel.OwnerEntityPrototypeId);
         AreEqual("", plan.Panel.OwnerEntityType);
+        AreEqual("production-area", plan.Panel.AreaId);
         AreEqual(3, plan.SkippedRuleSlotCount);
         AreEqual(3, plan.OrphanRuleSlotCount);
         AreEqual(3, plan.Rules.Count);
@@ -3635,6 +4325,14 @@ internal static class Program
 
         var configuration = new UnmaConfiguration
         {
+            AlarmAreas = new List<AlarmAreaDefinition>
+            {
+                new()
+                {
+                    Id = "production-area",
+                    Name = "PRODUCTION",
+                },
+            },
             Panels = new List<PanelDefinition>
             {
                 new()
@@ -3656,6 +4354,7 @@ internal static class Program
         AreEqual(schemaVersion, configuration.SchemaVersion);
         var normalizedClone = configuration.Panels.Single(panel =>
             panel.Id == plan.Panel.Id);
+        AreEqual("production-area", normalizedClone.AreaId);
         AreEqual(3, configuration.Rules.Count(rule =>
             rule.PanelId == normalizedClone.Id));
         IsFalse(configuration.Rules.Where(rule =>
@@ -3675,6 +4374,7 @@ internal static class Program
         var restoredClone = restored.Panels.Single(panel =>
             panel.Id == plan.Panel.Id);
         AreEqual("SUPPLY COPY 3", restoredClone.Name);
+        AreEqual("production-area", restoredClone.AreaId);
         AreEqual(3, restored.Rules.Count(rule =>
             rule.PanelId == restoredClone.Id));
         IsFalse(restored.Rules.Where(rule =>
@@ -4311,7 +5011,7 @@ internal static class Program
             IsGloballyDisabled = true,
         });
         legacyConfig.Normalize();
-        AreEqual(19, legacyConfig.SchemaVersion);
+        AreEqual(20, legacyConfig.SchemaVersion);
         IsFalse(legacyConfig.SoundOverrides.Last().IsGloballyDisabled);
         AreEqual(
             VanillaNotificationBehavior.Hidden,
@@ -5136,7 +5836,7 @@ internal static class Program
         IsFalse(restoredSystemOverride.IsGloballyDisabled);
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
-        AreEqual(19, restored.SchemaVersion);
+        AreEqual(20, restored.SchemaVersion);
         AreEqual(1, restored.InstrumentPanels.Count);
         AreEqual("instruments-main", restored.InstrumentPanels[0].Id);
         AreEqual(1, restored.Instruments.Count);
@@ -5519,7 +6219,7 @@ internal static class Program
         var restored = (UnmaConfiguration)serializer.ReadObject(stream);
         restored.Normalize();
 
-        AreEqual(19, restored.SchemaVersion);
+        AreEqual(20, restored.SchemaVersion);
         AreEqual(1, restored.AlarmHistory.Count);
         var history = restored.AlarmHistory[0];
         AreEqual(91L, history.Sequence);
@@ -5558,7 +6258,7 @@ internal static class Program
         });
         oldConfiguration.Normalize();
 
-        AreEqual(19, oldConfiguration.SchemaVersion);
+        AreEqual(20, oldConfiguration.SchemaVersion);
         AreEqual(-1f, oldConfiguration.LauncherX);
         AreEqual(-1f, oldConfiguration.LauncherY);
         AreEqual(100, oldConfiguration.UiScalePercent);
@@ -5684,7 +6384,7 @@ internal static class Program
             panel.IsDashboard);
         var migratedFixedPanel = schemaSeven.Panels.Find(panel =>
             panel.Id == "supply");
-        AreEqual(19, schemaSeven.SchemaVersion);
+        AreEqual(20, schemaSeven.SchemaVersion);
         AreEqual(0, migratedDashboard.Slots.Count);
         AreEqual(7, migratedFixedPanel.Slots.Count);
         AreEqual("system:health", migratedFixedPanel.Slots[0].AlarmId);
@@ -5762,7 +6462,7 @@ internal static class Program
         var legacy = (UnmaConfiguration)new DataContractJsonSerializer(
             typeof(UnmaConfiguration)).ReadObject(legacyStream);
         legacy.Normalize();
-        AreEqual(19, legacy.SchemaVersion);
+        AreEqual(20, legacy.SchemaVersion);
         AreEqual(
             ConditionValueMode.Absolute,
             legacy.Rules[0].Conditions[0].ValueMode);
@@ -5814,7 +6514,7 @@ internal static class Program
 
         versionFive.Normalize();
 
-        AreEqual(19, versionFive.SchemaVersion);
+        AreEqual(20, versionFive.SchemaVersion);
         AreEqual(3, versionFive.AlarmHistory.Count);
         AreEqual(
             "K",
@@ -5891,7 +6591,7 @@ internal static class Program
 
         schemaEight.Normalize();
 
-        AreEqual(19, schemaEight.SchemaVersion);
+        AreEqual(20, schemaEight.SchemaVersion);
         IsTrue(schemaEight.LegacySustainedAlarmReconciliationPending);
         AreEqual(1, schemaEight.AlarmMemories.Count);
         var sustainedMemory = schemaEight.AlarmMemories[0];

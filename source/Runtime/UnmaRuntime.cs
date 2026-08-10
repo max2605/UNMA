@@ -159,6 +159,18 @@ public sealed class UnmaRuntime : IDisposable
         public string Signature = "";
     }
 
+    private sealed class AlarmAreaPanelSnapshot
+    {
+        public PanelDefinition Panel;
+        public HashSet<string> SlotIds;
+    }
+
+    private sealed class AlarmAreaAcknowledgementTarget
+    {
+        public string Key;
+        public long Sequence;
+    }
+
     private static readonly string[] s_emergencyNotificationTokens =
     {
         "meltdown",
@@ -1714,6 +1726,178 @@ public sealed class UnmaRuntime : IDisposable
         return PanelSlotProjection.Project(slots, candidates);
     }
 
+    public bool TryGetDashboardViews(
+        AlarmAreaFilter filter,
+        out IReadOnlyList<AlarmView> views)
+    {
+        views = Array.Empty<AlarmView>();
+        var disabledVanillaOverrideIds =
+            GetDisabledVanillaOverrideIds();
+        if (!TryCaptureAlarmAreaProjection(
+                filter,
+                disabledVanillaOverrideIds,
+                out var normalizedFilter,
+                out var dashboard,
+                out var panels,
+                out var vanillaRules))
+        {
+            return false;
+        }
+
+        if (normalizedFilter.Kind == AlarmAreaFilterKind.All)
+        {
+            views = GetViews(dashboard);
+            return true;
+        }
+
+        AlarmView[] activeCandidates;
+        lock (m_gate)
+        {
+            activeCandidates = m_alarms.Values
+                .Where(state => state.View.IsActive)
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+        views = ProjectActiveDashboardArea(activeCandidates.Where(candidate =>
+            panels.Any(panel => IsAlarmVisibleOnAreaPanel(
+                candidate,
+                panel,
+                vanillaRules))));
+        return true;
+    }
+
+    private bool TryCaptureAlarmAreaProjection(
+        AlarmAreaFilter filter,
+        ISet<string> disabledVanillaOverrideIds,
+        out AlarmAreaFilter normalizedFilter,
+        out PanelDefinition dashboard,
+        out AlarmAreaPanelSnapshot[] panels,
+        out VanillaNotificationRule[] vanillaRules)
+    {
+        normalizedFilter = AlarmAreaFilter.All;
+        dashboard = null;
+        panels = Array.Empty<AlarmAreaPanelSnapshot>();
+        vanillaRules = Array.Empty<VanillaNotificationRule>();
+        lock (m_configurationGate)
+        {
+            normalizedFilter = AlarmAreaPolicy.NormalizeFilter(
+                filter,
+                Configuration.AlarmAreas);
+            if (!IsExactAlarmAreaFilter(filter, normalizedFilter))
+            {
+                return false;
+            }
+
+            dashboard = Configuration.Panels.FirstOrDefault(panel =>
+                panel != null && panel.IsDashboard);
+            if (dashboard == null)
+            {
+                return false;
+            }
+            if (normalizedFilter.Kind == AlarmAreaFilterKind.All)
+            {
+                return true;
+            }
+
+            vanillaRules = Configuration.VanillaNotificationRules
+                .Where(rule => rule != null)
+                .Select(CloneVanillaNotificationRule)
+                .ToArray();
+            panels = AlarmAreaPolicy.SelectGlobalPanels(
+                    Configuration.Panels,
+                    normalizedFilter)
+                .Select(panel => CreateAlarmAreaPanelSnapshotLocked(
+                    panel,
+                    disabledVanillaOverrideIds))
+                .ToArray();
+            return true;
+        }
+    }
+
+    private AlarmAreaPanelSnapshot CreateAlarmAreaPanelSnapshotLocked(
+        PanelDefinition panel,
+        ISet<string> disabledVanillaOverrideIds)
+    {
+        return new AlarmAreaPanelSnapshot
+        {
+            Panel = new PanelDefinition
+            {
+                Id = panel.Id,
+                Name = panel.Name,
+                Columns = panel.Columns,
+                IncludeVanilla = panel.IncludeVanilla,
+                IncludeSystem = panel.IncludeSystem,
+                NotificationFilter = panel.NotificationFilter,
+                IsDashboard = panel.IsDashboard,
+                OwnerEntityId = panel.OwnerEntityId,
+                OwnerEntityTitle = panel.OwnerEntityTitle,
+                OwnerEntityPrototypeId = panel.OwnerEntityPrototypeId,
+                OwnerEntityType = panel.OwnerEntityType,
+                AreaId = panel.AreaId,
+            },
+            SlotIds = new HashSet<string>(
+                (panel.Slots ?? new List<PanelSlotDefinition>())
+                .Where(slot =>
+                    slot != null &&
+                    !string.IsNullOrWhiteSpace(slot.AlarmId) &&
+                    IsPersistedSlotAllowedOnPanelLocked(panel, slot) &&
+                    !VanillaNotificationSuppressionPolicy.IsSlotSuppressed(
+                        slot,
+                        disabledVanillaOverrideIds))
+                .Select(slot => slot.AlarmId.Trim()),
+                StringComparer.Ordinal),
+        };
+    }
+
+    private bool IsAlarmVisibleOnAreaPanel(
+        AlarmView view,
+        AlarmAreaPanelSnapshot panel,
+        IEnumerable<VanillaNotificationRule> vanillaRules)
+    {
+        if (view == null || panel?.Panel == null ||
+            panel.SlotIds == null ||
+            !panel.SlotIds.Contains(
+                PanelSlotProjection.StableAlarmId(view)))
+        {
+            return false;
+        }
+        return !IsVanillaAlarmHiddenOnPanel(
+            view,
+            vanillaRules,
+            panel.Panel,
+            Array.Empty<int>());
+    }
+
+    private static bool IsExactAlarmAreaFilter(
+        AlarmAreaFilter requested,
+        AlarmAreaFilter normalized)
+    {
+        if (requested.Kind != normalized.Kind)
+        {
+            return false;
+        }
+        return requested.Kind switch
+        {
+            AlarmAreaFilterKind.All => true,
+            AlarmAreaFilterKind.Unassigned => true,
+            AlarmAreaFilterKind.Area =>
+                !string.IsNullOrWhiteSpace(requested.AreaId) &&
+                string.Equals(
+                    requested.AreaId.Trim(),
+                    normalized.AreaId,
+                    StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
+    private static IReadOnlyList<AlarmView> ProjectActiveDashboardArea(
+        IEnumerable<AlarmView> candidates)
+    {
+        return PanelSlotProjection.ProjectActive(
+            (candidates ?? Enumerable.Empty<AlarmView>())
+            .Where(candidate => candidate != null && candidate.IsActive));
+    }
+
     private static AlarmView ProjectAlarmForPanel(
         AlarmView view,
         PanelDefinition panel,
@@ -2040,6 +2224,174 @@ public sealed class UnmaRuntime : IDisposable
         return panel == null
             ? 0
             : AcknowledgeProjectedSlots(panel, targets);
+    }
+
+    public bool TryAcknowledgeDashboard(
+        AlarmAreaFilter filter,
+        IEnumerable<string> slotIds,
+        out int count)
+    {
+        count = 0;
+        HashSet<string> targetSlotIds = null;
+        if (slotIds != null)
+        {
+            targetSlotIds = new HashSet<string>(
+                slotIds
+                    .Where(slotId => !string.IsNullOrWhiteSpace(slotId))
+                    .Select(slotId => slotId.Trim()),
+                StringComparer.Ordinal);
+        }
+
+        if (filter.Kind == AlarmAreaFilterKind.All)
+        {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
+            if (!TryCaptureAlarmAreaProjection(
+                    filter,
+                    disabledVanillaOverrideIds,
+                    out var normalizedFilter,
+                    out var dashboard,
+                    out _,
+                    out _) ||
+                normalizedFilter.Kind != AlarmAreaFilterKind.All)
+            {
+                return false;
+            }
+            count = targetSlotIds == null
+                ? AcknowledgePanel(dashboard.Id)
+                : AcknowledgeVisible(dashboard.Id, targetSlotIds);
+            return true;
+        }
+
+        lock (m_persistenceGate)
+        {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
+            if (!TryCaptureAlarmAreaProjection(
+                    filter,
+                    disabledVanillaOverrideIds,
+                    out var normalizedFilter,
+                    out _,
+                    out var panels,
+                    out var vanillaRules) ||
+                normalizedFilter.Kind == AlarmAreaFilterKind.All)
+            {
+                return false;
+            }
+            if (targetSlotIds?.Count == 0)
+            {
+                return true;
+            }
+
+            AlarmView[] candidates;
+            lock (m_gate)
+            {
+                candidates = m_alarms.Values
+                    .Where(state =>
+                        CanAcknowledgeFilteredDashboardAlarm(
+                            state.View))
+                    .Select(state => Clone(state.View, state.Sequence))
+                    .ToArray();
+            }
+            var targets = candidates
+                .Where(candidate =>
+                    (targetSlotIds == null || targetSlotIds.Contains(
+                        PanelSlotProjection.StableAlarmId(candidate))) &&
+                    panels.Any(panel => IsAlarmVisibleOnAreaPanel(
+                        candidate,
+                        panel,
+                        vanillaRules)))
+                .Where(candidate =>
+                    !string.IsNullOrWhiteSpace(candidate.Key))
+                .Select(candidate => new AlarmAreaAcknowledgementTarget
+                {
+                    Key = candidate.Key,
+                    Sequence = candidate.Sequence,
+                })
+                .ToArray();
+
+            if (targets.Length == 0)
+            {
+                return true;
+            }
+            lock (m_gate)
+            {
+                foreach (var target in targets)
+                {
+                    if (!m_alarms.TryGetValue(target.Key, out var alarm) ||
+                        alarm.Sequence != target.Sequence ||
+                        !CanAcknowledgeFilteredDashboardAlarm(alarm.View))
+                    {
+                        continue;
+                    }
+                    if (AcknowledgeAlarmStateLocked(alarm))
+                    {
+                        count++;
+                    }
+                }
+                if (count > 0)
+                {
+                    m_alarmHistoryRevision++;
+                }
+            }
+            if (count > 0)
+            {
+                PersistAlarmState();
+            }
+            return true;
+        }
+    }
+
+    private static bool CanAcknowledgeFilteredDashboardAlarm(
+        AlarmView view)
+    {
+        return view != null &&
+               view.IsActive &&
+               view.RequiresAcknowledgement;
+    }
+
+    public bool TryGetNextDashboardUnacknowledged(
+        AlarmAreaFilter filter,
+        string afterSlotId,
+        out AlarmView view)
+    {
+        view = null;
+        if (!TryGetDashboardViews(filter, out var views))
+        {
+            return false;
+        }
+        if (views.Count == 0)
+        {
+            return true;
+        }
+
+        var startIndex = -1;
+        if (!string.IsNullOrWhiteSpace(afterSlotId))
+        {
+            var normalizedAfterSlotId = afterSlotId.Trim();
+            for (var index = 0; index < views.Count; index++)
+            {
+                if (string.Equals(
+                        PanelSlotProjection.StableAlarmId(views[index]),
+                        normalizedAfterSlotId,
+                        StringComparison.Ordinal))
+                {
+                    startIndex = index;
+                    break;
+                }
+            }
+        }
+
+        for (var offset = 1; offset <= views.Count; offset++)
+        {
+            var candidate = views[(startIndex + offset) % views.Count];
+            if (candidate.RequiresAcknowledgement)
+            {
+                view = candidate;
+                break;
+            }
+        }
+        return true;
     }
 
     public AlarmView GetNextUnacknowledged(
@@ -3317,6 +3669,85 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public bool ReplaceAlarmAreas(
+        IReadOnlyList<AlarmAreaDefinition> draft,
+        out int unassignedPanelCount)
+    {
+        unassignedPanelCount = 0;
+        if (!AlarmAreaPolicy.ValidateReplacement(
+                draft,
+                out var replacement,
+                out var failure))
+        {
+            LastPersistenceError =
+                "Alarm area replacement is invalid: " + failure + ".";
+            return false;
+        }
+
+        lock (m_persistenceGate)
+        {
+            UnmaConfiguration configurationSnapshot;
+            var pendingUnassignedPanelCount = 0;
+            lock (m_configurationGate)
+            {
+                try
+                {
+                    configurationSnapshot = CloneConfiguration(Configuration);
+                }
+                catch (Exception exception)
+                {
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Configuration snapshot could not be created.");
+                    return false;
+                }
+
+                var previouslyAssignedPanels = Configuration.Panels
+                    .Where(panel =>
+                        panel != null &&
+                        !string.IsNullOrWhiteSpace(panel.AreaId))
+                    .ToArray();
+                Configuration.AlarmAreas = replacement;
+                AlarmAreaPolicy.NormalizePanelAssignments(
+                    Configuration.Panels,
+                    Configuration.AlarmAreas);
+                pendingUnassignedPanelCount = previouslyAssignedPanels.Count(
+                    panel => string.IsNullOrWhiteSpace(panel.AreaId));
+            }
+
+            var saved = false;
+            try
+            {
+                saved = SaveConfiguration();
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration could not be saved.");
+            }
+            if (saved)
+            {
+                unassignedPanelCount = pendingUnassignedPanelCount;
+                return true;
+            }
+
+            lock (m_configurationGate)
+            {
+                RestoreConfiguration(
+                    Configuration,
+                    configurationSnapshot);
+            }
+            RestoreConfigurationAlarmSnapshots();
+            if (string.IsNullOrWhiteSpace(LastPersistenceError))
+            {
+                LastPersistenceError =
+                    "Configuration could not be saved.";
+            }
+            return false;
+        }
+    }
+
     public bool TryCloneGlobalPanel(
         string sourcePanelId,
         string requestedName,
@@ -3495,6 +3926,7 @@ public sealed class UnmaRuntime : IDisposable
             snapshot.VanillaNotificationRules;
         target.Instruments = snapshot.Instruments;
         target.InstrumentPanels = snapshot.InstrumentPanels;
+        target.AlarmAreas = snapshot.AlarmAreas;
     }
 
     private static string ExceptionDetail(
@@ -3514,6 +3946,25 @@ public sealed class UnmaRuntime : IDisposable
         bool includeSystem,
         string notificationFilter)
     {
+        return UpdatePanelSettings(
+            panelId,
+            name,
+            columns,
+            includeVanilla,
+            includeSystem,
+            notificationFilter,
+            null);
+    }
+
+    public bool UpdatePanelSettings(
+        string panelId,
+        string name,
+        int columns,
+        bool includeVanilla,
+        bool includeSystem,
+        string notificationFilter,
+        string areaId)
+    {
         panelId = panelId?.Trim() ?? "";
         if (panelId.Length == 0)
         {
@@ -3522,17 +3973,10 @@ public sealed class UnmaRuntime : IDisposable
 
         lock (m_persistenceGate)
         {
-            PanelDefinition panel;
-            string previousName;
-            int previousColumns;
-            bool previousIncludeVanilla;
-            bool previousIncludeSystem;
-            string previousFilter;
-            Dictionary<PanelDefinition, List<PanelSlotDefinition>>
-                previousPanelSlots;
+            UnmaConfiguration configurationSnapshot;
             lock (m_configurationGate)
             {
-                panel = Configuration.Panels.FirstOrDefault(candidate =>
+                var panel = Configuration.Panels.FirstOrDefault(candidate =>
                     string.Equals(
                         candidate?.Id,
                         panelId,
@@ -3542,17 +3986,43 @@ public sealed class UnmaRuntime : IDisposable
                     return false;
                 }
 
-                previousName = panel.Name;
-                previousColumns = panel.Columns;
-                previousIncludeVanilla = panel.IncludeVanilla;
-                previousIncludeSystem = panel.IncludeSystem;
-                previousFilter = panel.NotificationFilter;
-                previousPanelSlots = Configuration.Panels.ToDictionary(
-                    candidate => candidate,
-                    candidate => (candidate.Slots ??
-                            new List<PanelSlotDefinition>())
-                        .Select(PanelSlotProjection.CloneSlot)
-                        .ToList());
+                try
+                {
+                    configurationSnapshot = CloneConfiguration(Configuration);
+                }
+                catch (Exception exception)
+                {
+                    LastPersistenceError = ExceptionDetail(
+                        exception,
+                        "Configuration snapshot could not be created.");
+                    return false;
+                }
+                if (areaId != null && panel.IsDashboard)
+                {
+                    if (!string.IsNullOrWhiteSpace(areaId))
+                    {
+                        LastPersistenceError =
+                            "The dashboard cannot be assigned to an alarm area.";
+                        return false;
+                    }
+                    panel.AreaId = "";
+                }
+                else if (areaId != null)
+                {
+                    if (!AlarmAreaPolicy.TryAssign(
+                            Configuration.Panels,
+                            Configuration.AlarmAreas,
+                            panelId,
+                            areaId,
+                            out panel,
+                            out var assignmentFailure))
+                    {
+                        LastPersistenceError =
+                            "Alarm area assignment is invalid: " +
+                            assignmentFailure + ".";
+                        return false;
+                    }
+                }
 
                 panel.Name = string.IsNullOrWhiteSpace(name)
                     ? UnmaText.Get("default.panel", "PANEL")
@@ -3566,22 +4036,33 @@ public sealed class UnmaRuntime : IDisposable
                 }
             }
 
-            if (SaveConfiguration())
+            var saved = false;
+            try
+            {
+                saved = SaveConfiguration();
+            }
+            catch (Exception exception)
+            {
+                LastPersistenceError = ExceptionDetail(
+                    exception,
+                    "Configuration could not be saved.");
+            }
+            if (saved)
             {
                 return true;
             }
 
             lock (m_configurationGate)
             {
-                panel.Name = previousName;
-                panel.Columns = previousColumns;
-                panel.IncludeVanilla = previousIncludeVanilla;
-                panel.IncludeSystem = previousIncludeSystem;
-                panel.NotificationFilter = previousFilter;
-                foreach (var slotSnapshot in previousPanelSlots)
-                {
-                    slotSnapshot.Key.Slots = slotSnapshot.Value;
-                }
+                RestoreConfiguration(
+                    Configuration,
+                    configurationSnapshot);
+            }
+            RestoreConfigurationAlarmSnapshots();
+            if (string.IsNullOrWhiteSpace(LastPersistenceError))
+            {
+                LastPersistenceError =
+                    "Configuration could not be saved.";
             }
             return false;
         }

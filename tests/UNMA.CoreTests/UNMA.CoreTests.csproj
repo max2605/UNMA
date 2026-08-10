@@ -33,6 +33,8 @@
              Link="Domain\PanelSlotProjection.cs" />
     <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
              Link="Domain\PanelTopologyPolicy.cs" />
+    <Compile Include="..\..\source\Domain\AlarmAreaPolicy.cs"
+             Link="Domain\AlarmAreaPolicy.cs" />
     <Compile Include="..\..\source\Domain\PanelClonePolicy.cs"
              Link="Domain\PanelClonePolicy.cs" />
     <Compile Include="..\..\source\Domain\EntityVanillaSlotPolicy.cs"

@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.24** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.25** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -34,7 +34,8 @@ UNMA can be added to or removed from an existing save.
 
 1. Press **F8** to open or close the main UNMA window.
 2. Alternatively, use the floating launcher, which starts near the left edge.
-3. Open **ANNUNCIATOR** to see HOME and your permanent panels.
+3. Open **ANNUNCIATOR** to see HOME and your permanent panels. Select **ALL**,
+   **UNASSIGNED**, or an operational area to filter that board.
 4. Use the **Q** button on one slot, **PANEL ACK** for the displayed panel, or
    **MASTER ACK** for every new and cleared-but-unacknowledged alarm.
 5. Press **NEXT ALARM** or **Left Shift + F8** to cycle through the panel's
@@ -119,8 +120,40 @@ change any history entry.
 ### HOME
 
 HOME is a live overview of alarms that are currently active. It shows `K` and
-`KQ` alarms from all sources but does not own permanent slots. Inactive,
-cleared, and empty slots are hidden from HOME.
+`KQ` alarms from all sources under **ALL** but does not own permanent slots.
+Inactive, cleared, and empty slots are hidden from HOME.
+
+### Operational areas
+
+Operational areas organize global panels without creating another alarm,
+history event, historian stream, or audio state. The filter row offers
+**ALL**, **UNASSIGNED**, and every user-defined area:
+
+- **ALL** preserves the complete board and HOME behavior.
+- **UNASSIGNED** shows global panels that do not belong to an area.
+- A concrete area shows only its member panels. Its HOME collects their active
+  alarms and deduplicates them into one tile per underlying alarm.
+
+The selected area chip shows its panel, active-alarm, and unacknowledged-alarm
+counts. **AREA ACK** and **AREA NEXT** operate only on alarms visible through
+the selected area or **UNASSIGNED** view. **MASTER ACK** always remains the
+explicit global action.
+
+Acknowledgement still belongs to the underlying alarm occurrence, not to an
+area view. If the same alarm is visible through panels in several areas,
+acknowledging it in one area acknowledges it everywhere. UNMA does not create
+duplicate state or history for those views.
+
+Open **⚙ AREAS** to create, rename, reorder, or mark areas for deletion. These
+changes stay in one draft and are applied atomically only when saved. Deleting
+an area never deletes its panels, slots, rules, or alarm states; its panels
+become **UNASSIGNED**. Save, discard, or return to the draft when UNMA warns
+about unsaved area or panel settings.
+
+Assign a global panel from its gear-button settings. A duplicated panel keeps
+the source panel's area. A new panel inherits the currently selected concrete
+area; when created under **ALL** or **UNASSIGNED**, it starts unassigned.
+Object panels and HOME are not assigned to areas.
 
 ### Global panels
 
@@ -134,7 +167,7 @@ system, provider, and custom alarms.
 - **DUPLICATE PANEL** creates an independent copy of that configuration,
   including its slot order, filters, and custom alarms. Cloned custom alarms
   receive new IDs and start disabled for safety; live alarm state and history
-  are not copied.
+  are not copied. The new panel retains the source panel's area assignment.
 - Add known alarms to free slots and move slots up or down.
 - Newly discovered alarms that match an automatic source or filter are added
   without moving existing slots.
@@ -405,7 +438,8 @@ content scale.
 - Scale the content inside the main, editor, and detached windows from 75 to
   200 percent in 25-percent steps, or reset it to 100 percent. Native COI
   frames, navigation chrome, and the launcher continue to follow the game's
-  own UI scale.
+  own UI scale. Panel and area settings stack their controls in narrow windows
+  and at 200 percent so required actions remain reachable by scrolling.
 - Edit and save the Warning, Critical, and Emergency colors.
 - View the custom-sound directory and re-read supported WAV and Ogg files
   without restarting the game.
@@ -465,7 +499,7 @@ UNMA stores world-specific data in
 `Mods/UNMA/unma-world-<GameId>.json`. These files are not part of a release
 archive. The following survive saving and reloading:
 
-- panel definitions and slot order;
+- panel definitions, slot order, operational areas, and area assignments;
 - custom rules and linked panels;
 - acknowledged active alarms;
 - cleared but unacknowledged alarms;
@@ -473,6 +507,10 @@ archive. The following survive saving and reloading:
 - instrument panels, instruments, sources, calculations, and display scales;
 - customized system-alarm stages plus Vanilla behavior and sound overrides;
 - content scale, launcher position, and main-window/editor sizes.
+
+Schema 20 migrates configurations from earlier UNMA versions with every
+existing panel unassigned. Their previous **ALL** board behavior therefore
+remains unchanged until areas are deliberately created and assigned.
 
 If a configuration file is damaged, UNMA creates a backup and replaces it with
 safe defaults.
