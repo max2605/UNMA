@@ -336,7 +336,25 @@ try {
     }
 
     if (Test-Path -LiteralPath $outputPath) {
-        [IO.File]::Replace($temporaryPath, $outputPath, $null, $true)
+        $replacementBackupPath = Join-Path `
+            $resolvedOutputDirectory `
+            (".$packageName." + [guid]::NewGuid().ToString("N") + ".bak")
+        try {
+            [IO.File]::Replace(
+                $temporaryPath,
+                $outputPath,
+                $replacementBackupPath,
+                $true)
+        } catch {
+            if (-not (Test-Path -LiteralPath $outputPath) -and
+                (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)) {
+                [IO.File]::Move($replacementBackupPath, $outputPath)
+            }
+            throw
+        }
+        if (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf) {
+            [IO.File]::Delete($replacementBackupPath)
+        }
     } else {
         [IO.File]::Move($temporaryPath, $outputPath)
     }

@@ -298,6 +298,9 @@ public sealed class AlarmHistoryDefinition
     [DataMember(Order = 7)] public AlarmSeverity Severity;
     [DataMember(Order = 8)] public bool IsGone;
     [DataMember(Order = 9)] public bool IsAcknowledged;
+    [DataMember(Order = 10)] public double RaisedAtTicks;
+    [DataMember(Order = 11)] public double ClearedAtTicks;
+    [DataMember(Order = 12)] public double AcknowledgedAtTicks;
 
     public string StateCode => IsGone
         ? IsAcknowledged ? "KGQ" : "KG"
@@ -312,6 +315,35 @@ public sealed class AlarmHistoryDefinition
                       IsAcknowledged != nextAcknowledged;
         IsGone = isGone;
         IsAcknowledged = nextAcknowledged;
+        return changed;
+    }
+
+    public bool SetState(
+        bool isGone,
+        bool isAcknowledged,
+        double currentGameTicks)
+    {
+        var changed = SetState(isGone, isAcknowledged);
+        if (isGone)
+        {
+            if (ClearedAtTicks <= 0d && currentGameTicks > 0d)
+            {
+                ClearedAtTicks = currentGameTicks;
+                changed = true;
+            }
+        }
+        else if (ClearedAtTicks > 0d)
+        {
+            ClearedAtTicks = 0d;
+            changed = true;
+        }
+        if (isAcknowledged &&
+            AcknowledgedAtTicks <= 0d &&
+            currentGameTicks > 0d)
+        {
+            AcknowledgedAtTicks = currentGameTicks;
+            changed = true;
+        }
         return changed;
     }
 }
@@ -974,6 +1006,24 @@ public sealed class UnmaConfiguration
             item.Detail ??= "";
             item.Source ??= "";
             item.PanelId ??= "";
+            if (double.IsNaN(item.RaisedAtTicks) ||
+                double.IsInfinity(item.RaisedAtTicks) ||
+                item.RaisedAtTicks < 0d)
+            {
+                item.RaisedAtTicks = 0d;
+            }
+            if (double.IsNaN(item.ClearedAtTicks) ||
+                double.IsInfinity(item.ClearedAtTicks) ||
+                item.ClearedAtTicks < 0d)
+            {
+                item.ClearedAtTicks = 0d;
+            }
+            if (double.IsNaN(item.AcknowledgedAtTicks) ||
+                double.IsInfinity(item.AcknowledgedAtTicks) ||
+                item.AcknowledgedAtTicks < 0d)
+            {
+                item.AcknowledgedAtTicks = 0d;
+            }
         }
 
         if (loadedSchemaVersion < 6)

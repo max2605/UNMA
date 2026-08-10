@@ -795,5 +795,18 @@
     "keybind.next_unacknowledged.label": "Next unacknowledged alarm",
     "keybind.next_unacknowledged.tooltip": "Selects the next unacknowledged alarm.",
     "keybind.mute_audio_five_minutes.label": "Mute alarm audio for 5 minutes",
-    "keybind.mute_audio_five_minutes.tooltip": "Silences UNMA alarm audio for five real-time minutes."
+    "keybind.mute_audio_five_minutes.tooltip": "Silences UNMA alarm audio for five real-time minutes.",
+    "ui.history.filtered_count": "{0} OF {1} EVENTS",
+    "ui.history.search": "SEARCH",
+    "ui.history.state_all": "ALL STATES",
+    "ui.history.state_open": "OPEN",
+    "ui.history.state_completed": "COMPLETED",
+    "ui.history.severity_all": "ALL LEVELS",
+    "ui.history.export_csv": "CSV",
+    "ui.history.export_json": "JSON",
+    "ui.history.exported": "History exported: {0}",
+    "ui.history.export_failed": "History export failed: {0}",
+    "ui.history.time": "GAME TIME",
+    "ui.history.time_unknown": "—",
+    "ui.history.game_date": "Y{0} M{1} D{2}"
 }

@@ -13,10 +13,16 @@
              CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\..\source\Domain\AlarmModels.cs"
              Link="Domain\AlarmModels.cs" />
+    <Compile Include="..\..\source\Domain\AlarmHistoryQuery.cs"
+             Link="Domain\AlarmHistoryQuery.cs" />
     <Compile Include="..\..\source\Domain\InstrumentValuePolicy.cs"
              Link="Domain\InstrumentValuePolicy.cs" />
     <Compile Include="..\..\source\Domain\GameTimeWindowPolicy.cs"
              Link="Domain\GameTimeWindowPolicy.cs" />
+    <Compile Include="..\..\source\Domain\GameTimeStampPolicy.cs"
+             Link="Domain\GameTimeStampPolicy.cs" />
+    <Compile Include="..\..\source\Domain\AlarmTimingPolicy.cs"
+             Link="Domain\AlarmTimingPolicy.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
              Link="Domain\PanelSlotProjection.cs" />
     <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"

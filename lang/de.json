@@ -795,5 +795,18 @@
     "keybind.next_unacknowledged.label": "Nächster unquittierter Alarm",
     "keybind.next_unacknowledged.tooltip": "Wählt den nächsten unquittierten Alarm aus.",
     "keybind.mute_audio_five_minutes.label": "Alarmton für 5 Minuten stummschalten",
-    "keybind.mute_audio_five_minutes.tooltip": "Schaltet UNMAs Alarmton für fünf Echtzeitminuten stumm."
+    "keybind.mute_audio_five_minutes.tooltip": "Schaltet UNMAs Alarmton für fünf Echtzeitminuten stumm.",
+    "ui.history.filtered_count": "{0} VON {1} EREIGNISSEN",
+    "ui.history.search": "SUCHE",
+    "ui.history.state_all": "ALLE ZUSTÄNDE",
+    "ui.history.state_open": "OFFEN",
+    "ui.history.state_completed": "ABGESCHLOSSEN",
+    "ui.history.severity_all": "ALLE STUFEN",
+    "ui.history.export_csv": "CSV",
+    "ui.history.export_json": "JSON",
+    "ui.history.exported": "Verlauf exportiert: {0}",
+    "ui.history.export_failed": "Verlaufsexport fehlgeschlagen: {0}",
+    "ui.history.time": "SPIELZEIT",
+    "ui.history.time_unknown": "—",
+    "ui.history.game_date": "J{0} M{1} T{2}"
 }

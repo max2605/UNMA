@@ -1,3 +1,14 @@
+v0.9.20 | 2026-08-10
+History 2.0
+* Added free-text search across message, detail, source, panel, and alarm ID.
+* Added combinable state and severity filters with stable newest-first ordering.
+* Added game-time stamps for alarm raise, clear, and acknowledgement events.
+* Added filtered RFC 4180 CSV and JSON export to the local UNMA exports folder.
+
+Compatibility and groundwork
+* Kept legacy history entries readable and normalized malformed time values.
+* Added a tested game-tick timing policy with legacy-compatible immediate defaults.
+
 v0.9.19 | 2026-08-10
 Operator controls
 * Added per-slot, per-panel, and global acknowledgement without mutating projected UI copies.

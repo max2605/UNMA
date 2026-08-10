@@ -128,6 +128,9 @@ public sealed class UnmaRuntime : IDisposable
         public AlarmHistoryDefinition History;
         public bool WasGone;
         public bool WasAcknowledged;
+        public double WasRaisedAtTicks;
+        public double WasClearedAtTicks;
+        public double WasAcknowledgedAtTicks;
     }
 
     private sealed class ExternalEntityEvaluation
@@ -397,7 +400,8 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     closedSuppressedHistory |= history.SetState(
                         isGone: true,
-                        isAcknowledged: true);
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                 }
                 continue;
             }
@@ -1766,7 +1770,10 @@ public sealed class UnmaRuntime : IDisposable
             {
                 if (!item.IsAcknowledged)
                 {
-                    item.IsAcknowledged = true;
+                    item.SetState(
+                        item.IsGone,
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                     changed = true;
                 }
             }
@@ -3060,10 +3067,15 @@ public sealed class UnmaRuntime : IDisposable
                         History = history,
                         WasGone = history.IsGone,
                         WasAcknowledged = history.IsAcknowledged,
+                        WasRaisedAtTicks = history.RaisedAtTicks,
+                        WasClearedAtTicks = history.ClearedAtTicks,
+                        WasAcknowledgedAtTicks =
+                            history.AcknowledgedAtTicks,
                     });
                     history.SetState(
                         isGone: true,
-                        isAcknowledged: true);
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                 }
                 m_alarms.Remove(pair.Key);
             }
@@ -3094,6 +3106,12 @@ public sealed class UnmaRuntime : IDisposable
                     closedHistoryState.WasGone;
                 closedHistoryState.History.IsAcknowledged =
                     closedHistoryState.WasAcknowledged;
+                closedHistoryState.History.RaisedAtTicks =
+                    closedHistoryState.WasRaisedAtTicks;
+                closedHistoryState.History.ClearedAtTicks =
+                    closedHistoryState.WasClearedAtTicks;
+                closedHistoryState.History.AcknowledgedAtTicks =
+                    closedHistoryState.WasAcknowledgedAtTicks;
             }
             m_alarmHistoryRevision = previousHistoryRevision;
         }
@@ -3823,8 +3841,10 @@ public sealed class UnmaRuntime : IDisposable
                     var history = FindHistoryLocked(state.Sequence);
                     if (history != null)
                     {
-                        history.IsGone = true;
-                        history.IsAcknowledged = true;
+                        history.SetState(
+                            isGone: true,
+                            isAcknowledged: true,
+                            currentGameTicks: CurrentGameTicks);
                     }
                     state.View.IsGoneUnacknowledged = false;
                     state.View.IsAcknowledged = false;
@@ -4357,7 +4377,10 @@ public sealed class UnmaRuntime : IDisposable
             m_sequence = Math.Max(m_sequence, history.Sequence);
 
             history.AlarmKey = key;
-            history.IsGone = false;
+            history.SetState(
+                isGone: false,
+                isAcknowledged: history.IsAcknowledged,
+                currentGameTicks: CurrentGameTicks);
             m_alarmHistoryRevision++;
             slotCandidate = Clone(state.View, state.Sequence);
         }
@@ -6009,7 +6032,10 @@ public sealed class UnmaRuntime : IDisposable
                 var history = FindHistoryLocked(alarm.Sequence);
                 if (history != null && !history.IsGone)
                 {
-                    history.IsAcknowledged = true;
+                    history.SetState(
+                        isGone: false,
+                        isAcknowledged: true,
+                        currentGameTicks: CurrentGameTicks);
                 }
                 if (changed)
                 {
@@ -6452,7 +6478,10 @@ public sealed class UnmaRuntime : IDisposable
         {
             return false;
         }
-        return history.SetState(true, acknowledged);
+        return history.SetState(
+            isGone: true,
+            isAcknowledged: acknowledged,
+            currentGameTicks: CurrentGameTicks);
     }
 
     private bool UpdateHistoryFromStateLocked(
@@ -6495,12 +6524,19 @@ public sealed class UnmaRuntime : IDisposable
         history.Source = state.View.Source;
         history.PanelId = state.View.PanelId;
         history.Severity = state.View.Severity;
-        return history.SetState(isGone, isAcknowledged) || changed;
+        return history.SetState(
+                   isGone,
+                   isAcknowledged,
+                   CurrentGameTicks) || changed;
     }
 
-    private static AlarmHistoryDefinition CreateHistoryFromState(
+    private AlarmHistoryDefinition CreateHistoryFromState(
         AlarmState state)
     {
+        var currentGameTicks = CurrentGameTicks;
+        var isGone = !state.View.IsActive;
+        var isAcknowledged = state.View.IsActive &&
+                             state.View.IsAcknowledged;
         return new AlarmHistoryDefinition
         {
             Sequence = state.Sequence,
@@ -6510,9 +6546,13 @@ public sealed class UnmaRuntime : IDisposable
             Source = state.View.Source,
             PanelId = state.View.PanelId,
             Severity = state.View.Severity,
-            IsGone = !state.View.IsActive,
-            IsAcknowledged = state.View.IsActive &&
-                             state.View.IsAcknowledged,
+            IsGone = isGone,
+            IsAcknowledged = isAcknowledged,
+            RaisedAtTicks = currentGameTicks,
+            ClearedAtTicks = isGone ? currentGameTicks : 0d,
+            AcknowledgedAtTicks = isAcknowledged
+                ? currentGameTicks
+                : 0d,
         };
     }
 
@@ -6530,8 +6570,13 @@ public sealed class UnmaRuntime : IDisposable
             Severity = source.Severity,
             IsGone = source.IsGone,
             IsAcknowledged = source.IsAcknowledged,
+            RaisedAtTicks = source.RaisedAtTicks,
+            ClearedAtTicks = source.ClearedAtTicks,
+            AcknowledgedAtTicks = source.AcknowledgedAtTicks,
         };
     }
+
+    private double CurrentGameTicks => (double)m_calendar.RealTime.Ticks;
 
     private AlarmSeverity ClassifyNotification(INotification notification)
     {

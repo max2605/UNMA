@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.20 – 2026-08-10
+
+- Der Verlauf besitzt jetzt eine Freitextsuche über Meldung, Detail, Quelle,
+  Panel und Alarmkennung sowie kombinierbare Zustands- und Stufenfilter.
+- Jede neue Verlaufszeile speichert Spielzeitmarken für Kommen, Gehen und
+  Quittieren; die Oberfläche zeigt das jeweils jüngste Ereignis als
+  Spieljahr, -monat und -tag.
+- Die aktuell gefilterte Ansicht lässt sich als RFC-4180-CSV oder als JSON nach
+  `%LOCALAPPDATA%\UNMA\exports` exportieren. Tickwerte und Unicode-Texte bleiben
+  vollständig erhalten.
+- Alte Spielstände ohne Zeitmarken bleiben lesbar; beschädigte oder ungültige
+  Zeitwerte werden beim Laden sicher normalisiert.
+- Eine vollständig getestete, spielzeitbasierte Timing-Policy bereitet
+  Aktivierungs-/Rücksetzverzögerung, Mindestaktivzeit und Hysterese vor, ohne
+  das bisherige Sofortverhalten bestehender Regeln zu verändern.
+
 ## 0.9.19 – 2026-08-10
 
 - Meldungen lassen sich jetzt einzeln am Schlitz, panelweise oder weiterhin

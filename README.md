@@ -116,7 +116,10 @@ Zielversion: Captain of Industry **0.8.6c**.
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
   (gekommen, gegangen und quittiert). `K` blinkt rot, `KG` blinkt mit
   schwarzer Schrift auf weißem Hintergrund; `KQ` und `KGQ` stehen schwarz auf
-  weiß. Nur abgeschlossene `KGQ`-Einträge lassen sich ausdrücklich löschen.
+  weiß. Suche, Zustands- und Stufenfilter grenzen den Verlauf ein; neue
+  Ereignisse führen Spielzeitmarken für Kommen, Gehen und Quittieren. Die
+  gefilterte Ansicht lässt sich als RFC-4180-CSV oder JSON exportieren. Nur
+  abgeschlossene `KGQ`-Einträge lassen sich ausdrücklich löschen.
 - Spielstandsbezogene Persistenz in `unma-world-<GameId>.json`; Entity-Regeln
   werden zusätzlich gegen Typ, Prototyp und gegebenenfalls Produkt geprüft.
   Auch `STEHT`-Quittierungen und `GEGANGEN · UNQUITTIERT` überleben Speichern

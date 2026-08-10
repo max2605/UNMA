@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Mafi.Core.Entities;
 using Mafi;
 using Mafi.Unity;
@@ -58,6 +60,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
         GameTimeWindowPolicy.SimTicksPerYear * 10,
         GameTimeWindowPolicy.SimTicksPerYear * 100,
         0,
+    };
+    private static readonly AlarmHistoryStateFilter[] s_historyStateFilters =
+    {
+        AlarmHistoryStateFilter.All,
+        AlarmHistoryStateFilter.Open,
+        AlarmHistoryStateFilter.Completed,
+        AlarmHistoryStateFilter.K,
+        AlarmHistoryStateFilter.KQ,
+        AlarmHistoryStateFilter.KG,
+        AlarmHistoryStateFilter.KGQ,
+    };
+    private static readonly AlarmSeverity?[] s_historySeverityFilters =
+    {
+        null,
+        AlarmSeverity.Notice,
+        AlarmSeverity.Warning,
+        AlarmSeverity.Critical,
+        AlarmSeverity.Emergency,
     };
     private enum EditorWindowMode
     {
@@ -249,6 +269,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private long m_historyCacheRevision = -1;
     private IReadOnlyList<AlarmHistoryDefinition> m_historyCache =
         Array.Empty<AlarmHistoryDefinition>();
+    private string m_historySearchText = "";
+    private AlarmHistoryStateFilter m_historyStateFilter =
+        AlarmHistoryStateFilter.All;
+    private AlarmSeverity? m_historySeverityFilter;
 
     private GUIStyle m_panelStyle;
     private GUIStyle m_headerStyle;
@@ -2449,11 +2473,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawHistory()
     {
-        var entries = GetHistoryEntries();
+        var allEntries = GetHistoryEntries();
+        var entries = new AlarmHistoryQuery
+        {
+            SearchText = m_historySearchText,
+            StateFilter = m_historyStateFilter,
+            SeverityFilter = m_historySeverityFilter,
+        }.Apply(allEntries);
 
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
-            UnmaText.Get("auto.2cf87f46efd8") + entries.Count + UnmaText.Get("auto.79c82a039536"),
+            UnmaText.Format(
+                "ui.history.filtered_count",
+                "{0} OF {1} EVENTS",
+                entries.Count,
+                allEntries.Count),
             m_sectionStyle,
             NativeGUILayout.Height(34f));
         var confirmingDelete =
@@ -2492,6 +2526,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         NativeGUILayout.EndHorizontal();
 
+        DrawHistoryFilters(entries);
+
         NativeGUILayout.Label(
             UnmaText.Get("auto.546f06f29ca0"),
             m_smallLabelStyle);
@@ -2499,7 +2535,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawHistoryHeader();
 
         var historyViewportHeight =
-            Math.Max(180f, m_windowRect.height - 210f);
+            Math.Max(180f, m_windowRect.height - 258f);
         m_historyScroll.y = Mathf.Min(
             m_historyScroll.y,
             Math.Max(
@@ -2526,6 +2562,144 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndScrollView();
     }
 
+    private void DrawHistoryFilters(
+        IReadOnlyList<AlarmHistoryDefinition> filteredEntries)
+    {
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("ui.history.search", "SEARCH"),
+            m_smallLabelStyle,
+            NativeGUILayout.Width(62f));
+        var searchText = NativeGUILayout.TextField(
+            m_historySearchText,
+            256,
+            m_textFieldStyle,
+            NativeGUILayout.Width(165f),
+            NativeGUILayout.Height(30f));
+        if (!string.Equals(
+                searchText,
+                m_historySearchText,
+                StringComparison.Ordinal))
+        {
+            m_historySearchText = searchText;
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                "×",
+                m_buttonStyle,
+                NativeGUILayout.Width(34f),
+                NativeGUILayout.Height(30f)))
+        {
+            m_historySearchText = "";
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                HistoryStateFilterLabel(m_historyStateFilter),
+                m_buttonStyle,
+                NativeGUILayout.Width(112f),
+                NativeGUILayout.Height(30f)))
+        {
+            var index = Array.IndexOf(
+                s_historyStateFilters,
+                m_historyStateFilter);
+            m_historyStateFilter = s_historyStateFilters[
+                Wrap(index + 1, s_historyStateFilters.Length)];
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                HistorySeverityFilterLabel(m_historySeverityFilter),
+                m_buttonStyle,
+                NativeGUILayout.Width(112f),
+                NativeGUILayout.Height(30f)))
+        {
+            var index = Array.IndexOf(
+                s_historySeverityFilters,
+                m_historySeverityFilter);
+            m_historySeverityFilter = s_historySeverityFilters[
+                Wrap(index + 1, s_historySeverityFilters.Length)];
+            m_historyScroll = Vector2.zero;
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.history.export_csv", "CSV"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(58f),
+                NativeGUILayout.Height(30f)))
+        {
+            ExportHistory(filteredEntries, json: false);
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.history.export_json", "JSON"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(58f),
+                NativeGUILayout.Height(30f)))
+        {
+            ExportHistory(filteredEntries, json: true);
+        }
+        NativeGUILayout.EndHorizontal();
+    }
+
+    private static string HistoryStateFilterLabel(
+        AlarmHistoryStateFilter filter)
+    {
+        return filter switch
+        {
+            AlarmHistoryStateFilter.Open => UnmaText.Get(
+                "ui.history.state_open",
+                "OPEN"),
+            AlarmHistoryStateFilter.Completed => UnmaText.Get(
+                "ui.history.state_completed",
+                "COMPLETED"),
+            AlarmHistoryStateFilter.K => "K",
+            AlarmHistoryStateFilter.KQ => "KQ",
+            AlarmHistoryStateFilter.KG => "KG",
+            AlarmHistoryStateFilter.KGQ => "KGQ",
+            _ => UnmaText.Get("ui.history.state_all", "ALL STATES"),
+        };
+    }
+
+    private string HistorySeverityFilterLabel(AlarmSeverity? severity)
+    {
+        return severity.HasValue
+            ? SeverityLabel(severity.Value)
+            : UnmaText.Get("ui.history.severity_all", "ALL LEVELS");
+    }
+
+    private void ExportHistory(
+        IReadOnlyList<AlarmHistoryDefinition> entries,
+        bool json)
+    {
+        try
+        {
+            var directory = Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                "UNMA",
+                "exports");
+            Directory.CreateDirectory(directory);
+            var extension = json ? "json" : "csv";
+            var path = Path.Combine(
+                directory,
+                "history-" + DateTime.UtcNow.ToString(
+                    "yyyyMMdd-HHmmss-fff",
+                    CultureInfo.InvariantCulture) + "." + extension);
+            var content = json
+                ? AlarmHistoryExport.ToJson(entries)
+                : AlarmHistoryExport.ToCsv(entries);
+            File.WriteAllText(path, content, new UTF8Encoding(false));
+            SetStatus(UnmaText.Format(
+                "ui.history.exported",
+                "History exported: {0}",
+                path));
+        }
+        catch (Exception exception)
+        {
+            SetStatus(UnmaText.Format(
+                "ui.history.export_failed",
+                "History export failed: {0}",
+                exception.Message));
+        }
+    }
+
     private IReadOnlyList<AlarmHistoryDefinition> GetHistoryEntries()
     {
         var revision = m_runtime.AlarmHistoryRevision;
@@ -2547,11 +2721,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
         DrawPanelRect(rect, CoiUiPalette.SurfaceRaised);
         var actionWidth = 98f;
         var stateWidth = 92f;
+        var timeWidth = 128f;
         NativeGUI.Label(
             new Rect(
                 rect.x + 10f,
                 rect.y,
-                rect.width - actionWidth - stateWidth - 20f,
+                timeWidth - 10f,
+                rect.height),
+            UnmaText.Get("ui.history.time", "GAME TIME"),
+            m_historyHeaderStyle);
+        NativeGUI.Label(
+            new Rect(
+                rect.x + timeWidth,
+                rect.y,
+                rect.width - actionWidth - stateWidth - timeWidth - 10f,
                 rect.height),
             UnmaText.Get("ui.history.message", "MESSAGE"),
             m_historyHeaderStyle);
@@ -2642,11 +2825,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         var actionWidth = 96f;
         var stateWidth = 90f;
+        var timeWidth = 126f;
         NativeGUI.Label(
             new Rect(
                 inner.x + 9f,
                 inner.y,
-                inner.width - actionWidth - stateWidth - 14f,
+                timeWidth - 9f,
+                inner.height),
+            FormatHistoryTime(entry),
+            textStyle);
+        NativeGUI.Label(
+            new Rect(
+                inner.x + timeWidth,
+                inner.y,
+                inner.width - actionWidth - stateWidth - timeWidth - 5f,
                 inner.height),
             string.IsNullOrWhiteSpace(entry.Message)
                 ? entry.AlarmKey
@@ -2683,6 +2875,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     m_runtime.LastPersistenceError);
             }
         }
+    }
+
+    private static string FormatHistoryTime(AlarmHistoryDefinition entry)
+    {
+        if (!GameTimeStampPolicy.TryGetDate(
+                GameTimeStampPolicy.LatestEventTicks(entry),
+                out var date))
+        {
+            return UnmaText.Get("ui.history.time_unknown", "—");
+        }
+        return UnmaText.Format(
+            "ui.history.game_date",
+            "Y{0} M{1} D{2}",
+            date.Year,
+            date.Month,
+            date.Day);
     }
 
     private void DrawEditor()

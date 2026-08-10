@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.9.19** und
+Diese Anleitung gilt für **UNMA 0.9.20** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -115,6 +115,18 @@ Abgeschlossene `KGQ`-Einträge bleiben im Verlauf gespeichert, bis sie dort
 ausdrücklich gelöscht werden. Nur abgeschlossene Einträge können gelöscht
 werden. Das Löschen aller abgeschlossenen Ereignisse muss innerhalb von fünf
 Sekunden durch einen zweiten Druck bestätigt werden.
+
+Die Werkzeugzeile unter **VERLAUF** durchsucht Meldung, Detail, Quelle,
+Panel-ID und Alarmkennung gleichzeitig. Die Zustands- und Stufentasten
+durchlaufen ihre Filter; beide Filter werden mit der Suche kombiniert. Neue
+Ereignisse zeigen das Spieldatum ihres jüngsten Kommen-, Gehen- oder
+Quittierübergangs. Einträge älterer UNMA-Versionen bleiben mit unbekanntem
+Datum sichtbar.
+
+**CSV** und **JSON** exportieren genau die aktuell gefilterten Zeilen nach
+`%LOCALAPPDATA%\UNMA\exports`. CSV verwendet RFC-4180-Zeichenregeln; JSON
+behält die rohen Spielzeit-Ticks für weitere Auswertungen. Ein Export verändert
+oder löscht keinen Verlaufseintrag.
 
 ## Panels und Meldeschlitze
 

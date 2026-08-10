@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.9.19** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.9.20** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -102,6 +102,17 @@ remains until the monitored condition returns to normal.
 Completed `KGQ` history entries remain stored until you delete them. Only
 completed entries can be deleted. Deleting all completed events requires a
 second press within five seconds.
+
+The **HISTORY** toolbar searches message, detail, source, panel ID, and alarm
+ID at the same time. Repeatedly press the state and severity buttons to cycle
+their filters; both filters combine with the search. New events show the game
+date of their latest raise, clear, or acknowledgement transition. Entries from
+older UNMA versions remain visible with an unknown date.
+
+**CSV** and **JSON** export exactly the currently filtered rows to
+`%LOCALAPPDATA%\UNMA\exports`. CSV uses RFC 4180 quoting and JSON preserves the
+raw game-tick timestamps for further analysis. Export does not remove or
+change any history entry.
 
 ## Panels and alarm slots
 
