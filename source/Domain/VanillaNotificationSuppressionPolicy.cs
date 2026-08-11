@@ -86,6 +86,32 @@ public static class VanillaNotificationSuppressionPolicy
         return false;
     }
 
+    public static bool MatchesHistoryForOverride(
+        AlarmHistoryDefinition history,
+        string alarmId)
+    {
+        if (history == null ||
+            !string.Equals(
+                history.Source,
+                "vanilla",
+                StringComparison.Ordinal) ||
+            !IsVanillaOverrideId(alarmId))
+        {
+            return false;
+        }
+
+        alarmId = alarmId.Trim();
+        var notificationType = alarmId.Substring(VanillaPrefix.Length);
+        var detail = history.Detail?.Trim() ?? "";
+        return string.Equals(
+                   detail,
+                   notificationType,
+                   StringComparison.Ordinal) ||
+               detail.StartsWith(
+                   notificationType + " ",
+                   StringComparison.Ordinal);
+    }
+
     public static VanillaNotificationBehavior ResolveBehavior(
         IEnumerable<VanillaNotificationRule> rules,
         string alarmId,

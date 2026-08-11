@@ -1,3 +1,16 @@
+v0.10.1 | 2026-08-11
+Cross-save default profile
+* Added a selectable cross-save default profile under OPTIONS for notification rules, system alarms, alarm colors/UI scale, and window positions.
+* Added the built-in UNMA Recommended Quiet profile, created and persisted only when default.json is genuinely absent. Exactly recognized, unchanged earlier built-ins with six Silent rules or with six Silent and two Hidden rules are upgraded in memory only; their seed files, divergent profiles, and custom profiles remain unchanged. Import still requires preview and explicit confirmation.
+* Set UpgradeInProgress, DowngradeInProgress, VehicleGoalStruggling, VehicleNoReachableDesignations, NoTreesToHarvest, and ExcavatorHasNoValidTruck to Silent. This disables only UNMA sound while retaining the Captain of Industry notification, HOME visibility, and history.
+* Set TruckCannotDeliver and TruckCannotDeliverMixedCargo to Ignored because CoI withdraws and re-emits them with transient NotificationIds. UNMA discards new events before SetAlarm, history creation, and persistence; confirmed import and normalization remove matching active states and memories plus older global history when no more-specific non-ignored rule applies. This reduces Incident Lens and save-processing load while leaving the original CoI notification unchanged. CannotDeliverFromMineTower, VehicleGoalUnreachable, and VehicleNoFuel remain audible.
+* Added an import preview that classifies new, changed, unchanged, and skipped values before atomically merging the selected categories into the target world; unrelated target settings remain intact.
+* Made Vanilla rules keyed by stable NotificationType and entity prototype portable, while safely skipping world-bound entity-instance rules and reporting them in the result.
+* Added semantic validation for edited or damaged profiles; invalid values are skipped without changing the target, and unavailable sounds are reported in the preview.
+* Excluded history, active alarms, acknowledgements, timers, and all other runtime memories from export and import.
+* Kept imported ignore rules scoped to UNMA; the original Captain of Industry notification remains unchanged.
+* Stored the default profile atomically at %LOCALAPPDATA%\UNMA\profiles\default.json while retaining public API and assembly binding V1 and persistence schema 20.
+
 v0.10.0 | 2026-08-11
 Consolidated operations release
 * Consolidated and stabilized the complete 0.9.19 through 0.9.26 feature line: operator keybinds, history search/export, atomic panel cloning, persistent timing and hysteresis, per-slot audio snooze, escalation and safe operator attention, Historian forecasting, operational areas, and the read-only Incident Lens.

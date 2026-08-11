@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.10.0** und
+Diese Anleitung gilt für **UNMA 0.10.1** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -100,7 +100,7 @@ die Spieltastatur wieder frei.
 | **VERLAUF** | Aktuelle und abgeschlossene Meldungsereignisse |
 | **SYSTEM** | Eingebaute Überwachung für Gesundheit, Nahrung und Arbeiter |
 | **MELDUNGSOPTIONEN** | Ton, Sichtbarkeit, Protokollierung und Vanilla-Verhalten je Meldungsart |
-| **OPTIONEN** | Inhaltsskalierung, Alarmfarben, Ton-Neueinlesen und Integrationsdiagnose |
+| **OPTIONEN** | Inhaltsskalierung, Alarmfarben, spielstandsübergreifendes Profil, Ton-Neueinlesen und Integrationsdiagnose |
 
 ## Meldungszustände
 
@@ -221,7 +221,7 @@ verändert weder Verlauf noch Audiostatus.
 
 Incident-Snapshots sind vorübergehende, aus den aktuellen Alarm- und
 Verlaufssnapshots abgeleitete Ergebnisse. Sie fügen keine Speicherfelder
-hinzu und benötigen in 0.10.0 keine neue Schema-Migration. Für sichere
+hinzu und benötigen in 0.10.1 keine neue Schema-Migration. Für sichere
 Performance fragt die UI höchstens einmal je Frame und Filter ab. Der
 Laufzeitverlauf wird nur bei geänderter Revision neu kopiert, der globale
 Druck ist auf die neuesten 8.192 Vorkommen begrenzt, und Sortierung sowie
@@ -457,8 +457,8 @@ Meldungszustände.
 ## Vanilla-Spielmeldungen
 
 Unter **MELDUNGSOPTIONEN** werden bekannte Vanilla-Meldungsarten eingestellt.
-Objektbezogene Meldungen lassen sich für genau ein Objekt oder für alle Objekte
-desselben Prototyps konfigurieren.
+Sie lassen sich global nach Meldungstyp, für genau ein Objekt oder für alle
+Objekte desselben Prototyps konfigurieren.
 
 | Modus | UNMA-Ton | HOME / Zähler | Verlauf |
 | --- | --- | --- | --- |
@@ -467,7 +467,8 @@ desselben Prototyps konfigurieren.
 | **LOGGEN · TON AUS · AUSBLENDEN** | Aus | Ausgeblendet | Wird gespeichert |
 | **NICHT LOGGEN · KOMPLETT IGNORIEREN** | Aus | Ausgeblendet | Wird nicht angelegt |
 
-Objektregeln haben Vorrang vor Prototypregeln. Beim vollständigen Ignorieren
+Objektregeln haben Vorrang vor Prototypregeln; diese wiederum haben Vorrang vor
+globalen Meldungstypregeln. Beim vollständigen Ignorieren
 entfernt UNMA außerdem passende aktive und jüngere Ereignisse, die noch sicher
 zugeordnet werden können.
 
@@ -563,6 +564,96 @@ Die Startvorgaben in `config.json` lauten:
 | `pollIntervalMs` | `500` | Eigene Regeln alle 500 ms auswerten |
 | `enableSystemAlarms` | `true` | Gesundheit, Nahrung und Arbeiter überwachen |
 
+### Spielstandsübergreifendes Standardprofil
+
+Unter **OPTIONEN** kann die aktuelle Konfiguration in einem Standardprofil
+gespeichert und in einem anderen Spielstand importiert werden. Das Profil liegt
+außerhalb der Weltdateien unter:
+
+```text
+%LOCALAPPDATA%\UNMA\profiles\default.json
+```
+
+Nur wenn diese Datei tatsächlich fehlt, erzeugt und persistiert UNMA das
+eingebaute Profil **UNMA Recommended Quiet**. Exakt erkannte, unveränderte
+frühere Built-ins – **UNMA Recommended Silent** mit sechs Silent-Regeln sowie
+der Quiet-Zwischenstand mit zwei zusätzlichen Hidden-Regeln – werden beim Laden
+nur im Speicher auf das aktuelle Quiet-Profil gebracht; ihre Seed-Dateien
+bleiben unverändert. Abweichende und benutzerdefinierte Profile werden weder
+ergänzt noch überschrieben. Das eingebaute Profil wird nicht automatisch in
+einen Spielstand importiert: Auch dafür müssen zuerst die Vorschau geprüft und
+der Import ausdrücklich bestätigt werden.
+
+Das empfohlene Profil setzt ausschließlich diese globalen Meldungsarten auf
+**SILENT** beziehungsweise **LOGGEN · TON AUS**:
+
+- `UpgradeInProgress`;
+- `DowngradeInProgress`;
+- `VehicleGoalStruggling`;
+- `VehicleNoReachableDesignations`;
+- `NoTreesToHarvest`;
+- `ExcavatorHasNoValidTruck`.
+
+**SILENT** schaltet nur den UNMA-Ton dieser Meldungen aus. Die ursprüngliche
+Captain-of-Industry-Meldung bleibt unverändert; UNMA zeigt und protokolliert
+sie weiterhin in HOME und im Verlauf.
+
+Zusätzlich setzt das Profil diese Meldungsarten auf **IGNORED** beziehungsweise
+**NICHT LOGGEN · KOMPLETT IGNORIEREN**:
+
+- `TruckCannotDeliver`;
+- `TruckCannotDeliverMixedCargo`.
+
+CoI nimmt diese Fahrzeugmeldungen häufig zurück und sendet sie mit einer neuen,
+flüchtigen `NotificationId` erneut. **IGNORED** verwirft jedes neue Ereignis in
+UNMA noch vor `SetAlarm`, Verlaufserzeugung und Persistenz. Dadurch wachsen
+weder der UNMA-Verlauf noch die Incident-Linse und die Spielstand-Persistenz
+mit jedem Flackern weiter. Beim bestätigten Import und beim Normalisieren der
+Konfiguration bereinigt UNMA passende aktive Zustände und Memories. Ältere
+globale Verlaufseinträge werden ebenfalls entfernt, sofern keine spezifischere,
+nicht ignorierende Entity- oder Prototypregel erhalten bleiben muss. Die
+ursprüngliche Captain-of-Industry-Meldung bleibt sichtbar und unverändert.
+`CannotDeliverFromMineTower`, `VehicleGoalUnreachable` und `VehicleNoFuel` sind
+bewusst nicht Teil dieser Empfehlung und bleiben normal sowie hörbar.
+
+Beim Speichern und Importieren sind folgende Kategorien einzeln auswählbar:
+
+- Meldungsregeln einschließlich Tonzuordnung und automatischer Quittierung;
+- Systemalarm-Konfiguration;
+- Alarmfarben und UI-Skalierung;
+- Fensterpositionen und -größen; diese Kategorie ist standardmäßig abgewählt.
+
+Die globalen Startoptionen aus `config.json`, einschließlich globaler
+Audio-Aktivierung und Lautstärke, gelten bereits unabhängig vom Spielstand und
+werden nicht in das Profil dupliziert.
+
+Zum Übertragen zuerst im Quellspielstand die gewünschten Kategorien wählen und
+das Standardprofil speichern. Im Zielspielstand den Import öffnen und die
+Vorschau prüfen. Sie unterscheidet neue, geänderte, unveränderte und
+übersprungene Werte. Erst die Bestätigung führt die ausgewählten Werte atomar
+mit der Zielkonfiguration zusammen. Gleiche Schlüssel werden durch den
+Profilwert ersetzt; andere Zielwerte und nicht ausgewählte Kategorien bleiben
+erhalten. Schlägt die Prüfung oder der erste atomare Konfigurationsschreibvorgang
+fehl, bleibt die Zielkonfiguration vollständig unverändert. Ein seltener Fehler
+beim anschließenden Speichern des abgeglichenen Live-Alarmzustands wird als
+Teilfehler gemeldet; die bereits erfolgreich importierten Einstellungen bleiben
+dabei bestehen.
+
+Vanilla-Regeln sind portabel, wenn sie nach stabiler Meldungsart
+(`NotificationType`) oder nach Meldungsart plus Entity-Prototyp gespeichert
+sind. Regeln für eine konkrete Entity-ID gehören zu genau einer Welt und werden
+sicher übersprungen; Vorschau und Ergebnis weisen sie aus. Dadurch kann etwa
+`UpgradeInProgress` für alle Objekte eines Förderband-Prototyps weiterhin
+vollständig in UNMA ignoriert werden, ohne eine zufällig gleich nummerierte
+Entity im neuen Spielstand zu treffen.
+
+Verlauf, aktive Alarme, Quittierungen, laufende Verzögerungen, Eskalationen,
+Snooze-Zustände und andere zeitliche Memories werden niemals in das Profil
+geschrieben oder daraus importiert. Eine übertragene Ignore-Regel beeinflusst
+nur UNMA. Die ursprüngliche Captain-of-Industry-Meldung wird weder deaktiviert
+noch verändert. Die Profildatei wird atomar mit temporärer Datei und Sicherung
+geschrieben.
+
 ## Meldungen anderer Mods
 
 Aktive Mods können UNMA um Alarmdefinitionen, Entity-Messwerte, Vorlagen und
@@ -610,8 +701,9 @@ Schema 20 übernimmt Konfigurationen früherer UNMA-Versionen mit allen
 vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
 **ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
 zugewiesen werden.
-Die Incident-Linse speichert weder Konfiguration noch Ergebnis; 0.10.0 bleibt
-daher bei Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
+Die Incident-Linse speichert weder Konfiguration noch Ergebnis. Auch das
+separate Standardprofil erweitert die Weltdatei nicht; 0.10.1 bleibt daher bei
+Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
 UNMA-Schema, lässt sie Hauptdatei und Sicherungsartefakte bytegenau unangetastet,
 verwendet sichere Vorgaben und sperrt Konfigurationsschreibvorgänge für die
 laufende Sitzung, statt unbekannte Zukunftsfelder zu verwerfen.

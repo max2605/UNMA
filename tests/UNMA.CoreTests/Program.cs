@@ -33,6 +33,7 @@ internal static class Program
         TestAlarmAudioSnoozePolicy();
         TestSustainedVanillaAlarmPolicy();
         TestVanillaNotificationSuppressionPolicy();
+        TestIgnoredVanillaPersistenceCleanup();
         TestAlarmHistoryState();
         TestAlarmHistoryQueryAndExport();
         TestSystemAlarmSelection();
@@ -49,6 +50,13 @@ internal static class Program
         TestConfigurationRoundTrip();
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
+        TestRecommendedQuietTransferProfile();
+        TestTransferProfileRoundTripAndFilter();
+        TestConfigurationTransferMerge();
+        TestTransferProfileSemanticValidation();
+        TestTransferProfileSchemaOneSystemAlarmContract();
+        TestTransferProfileStoreRoundTripAndAtomicSave();
+        TestTransferProfileStoreFutureAndCorruptProtection();
         TestStateStoreFutureSchemaProtection();
         TestMechanicalSiren();
         TestLocalizationCoverage();
@@ -5367,6 +5375,45 @@ internal static class Program
             new PanelSlotDefinition { AlarmId = entitySlotId },
             null));
 
+        var truckHistory = new AlarmHistoryDefinition
+        {
+            Source = "vanilla",
+            Detail = "TruckCannotDeliver · Truck 42",
+        };
+        IsTrue(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(
+                truckHistory,
+                "vanilla:TruckCannotDeliver"));
+        truckHistory.Detail = "TruckCannotDeliver";
+        IsTrue(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(
+                truckHistory,
+                "vanilla:TruckCannotDeliver"));
+        truckHistory.Detail = "TruckCannotDeliverMixedCargo · Truck 42";
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(
+                truckHistory,
+                "vanilla:TruckCannotDeliver"));
+        IsTrue(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(
+                truckHistory,
+                "vanilla:TruckCannotDeliverMixedCargo"));
+        truckHistory.Source = "external";
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(
+                truckHistory,
+                "vanilla:TruckCannotDeliverMixedCargo"));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(null, overrideId));
+        IsFalse(VanillaNotificationSuppressionPolicy
+            .MatchesHistoryForOverride(
+                new AlarmHistoryDefinition
+                {
+                    Source = "vanilla",
+                    Detail = "NoRecipeSelected · Machine",
+                },
+                "system:NoRecipeSelected"));
+
         var rules = new[]
         {
             new VanillaNotificationRule
@@ -5459,6 +5506,179 @@ internal static class Program
             VanillaNotificationSuppressionPolicy.ResolveBehavior(
                 legacyConfig.VanillaNotificationRules,
                 overrideId));
+    }
+
+    private static void TestIgnoredVanillaPersistenceCleanup()
+    {
+        var configuration = UnmaConfiguration.CreateDefault();
+        configuration.VanillaNotificationRules.AddRange(new[]
+        {
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:TruckCannotDeliver",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:TruckCannotDeliverMixedCargo",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+        });
+        configuration.AlarmMemories.AddRange(new[]
+        {
+            new AlarmMemoryDefinition
+            {
+                Key = "truck-current",
+                Sequence = 10,
+                Source = "vanilla",
+                OverrideId = "vanilla:TruckCannotDeliver",
+                Detail = "TruckCannotDeliver · Truck 10",
+                IsActive = true,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "mixed-current",
+                Sequence = 11,
+                Source = "vanilla",
+                OverrideId = "vanilla:TruckCannotDeliverMixedCargo",
+                Detail = "TruckCannotDeliverMixedCargo · Truck 11",
+                IsActive = true,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "fuel-current",
+                Sequence = 12,
+                Source = "vanilla",
+                OverrideId = "vanilla:VehicleNoFuel",
+                Detail = "VehicleNoFuel · Truck 12",
+                IsActive = true,
+            },
+        });
+        configuration.AlarmHistory.AddRange(new[]
+        {
+            new AlarmHistoryDefinition
+            {
+                Sequence = 10,
+                AlarmKey = "truck-current",
+                Source = "vanilla",
+                Detail = "TruckCannotDeliver · Truck 10",
+            },
+            new AlarmHistoryDefinition
+            {
+                Sequence = 20,
+                AlarmKey = "truck-old-pruned-state",
+                Source = "vanilla",
+                Detail = "TruckCannotDeliver · Truck 20",
+            },
+            new AlarmHistoryDefinition
+            {
+                Sequence = 21,
+                AlarmKey = "mixed-old-pruned-state",
+                Source = "vanilla",
+                Detail = "TruckCannotDeliverMixedCargo · Truck 21",
+            },
+            new AlarmHistoryDefinition
+            {
+                Sequence = 12,
+                AlarmKey = "fuel-current",
+                Source = "vanilla",
+                Detail = "VehicleNoFuel · Truck 12",
+            },
+            new AlarmHistoryDefinition
+            {
+                Sequence = 22,
+                AlarmKey = "external-same-detail",
+                Source = "external",
+                Detail = "TruckCannotDeliver · External",
+            },
+        });
+
+        configuration.Normalize();
+
+        AreEqual(1, configuration.AlarmMemories.Count);
+        AreEqual("fuel-current", configuration.AlarmMemories[0].Key);
+        AreEqual(2, configuration.AlarmHistory.Count);
+        IsTrue(configuration.AlarmHistory.Any(history =>
+            history.AlarmKey == "fuel-current"));
+        IsTrue(configuration.AlarmHistory.Any(history =>
+            history.AlarmKey == "external-same-detail"));
+
+        var exceptionConfiguration = UnmaConfiguration.CreateDefault();
+        exceptionConfiguration.VanillaNotificationRules.AddRange(new[]
+        {
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:TruckCannotDeliver",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+            new VanillaNotificationRule
+            {
+                AlarmId = "vanilla:TruckCannotDeliver",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "TruckT2",
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+        });
+        exceptionConfiguration.AlarmMemories.AddRange(new[]
+        {
+            new AlarmMemoryDefinition
+            {
+                Key = "allowed-truck",
+                Sequence = 30,
+                Source = "vanilla",
+                OverrideId = "vanilla:TruckCannotDeliver",
+                EntityPrototypeId = "TruckT2",
+                IsActive = true,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "ignored-truck",
+                Sequence = 31,
+                Source = "vanilla",
+                OverrideId = "vanilla:TruckCannotDeliver",
+                EntityPrototypeId = "TruckT3",
+                IsActive = true,
+            },
+        });
+        exceptionConfiguration.AlarmHistory.AddRange(new[]
+        {
+            new AlarmHistoryDefinition
+            {
+                Sequence = 30,
+                AlarmKey = "allowed-truck",
+                Source = "vanilla",
+                Detail = "TruckCannotDeliver · Allowed T2",
+            },
+            new AlarmHistoryDefinition
+            {
+                Sequence = 31,
+                AlarmKey = "ignored-truck",
+                Source = "vanilla",
+                Detail = "TruckCannotDeliver · Ignored T3",
+            },
+            new AlarmHistoryDefinition
+            {
+                Sequence = 32,
+                AlarmKey = "unattributed-old-truck",
+                Source = "vanilla",
+                Detail = "TruckCannotDeliver · Unknown",
+            },
+        });
+
+        exceptionConfiguration.Normalize();
+
+        AreEqual(1, exceptionConfiguration.AlarmMemories.Count);
+        AreEqual(
+            "allowed-truck",
+            exceptionConfiguration.AlarmMemories[0].Key);
+        AreEqual(2, exceptionConfiguration.AlarmHistory.Count);
+        IsTrue(exceptionConfiguration.AlarmHistory.Any(history =>
+            history.AlarmKey == "allowed-truck"));
+        IsTrue(exceptionConfiguration.AlarmHistory.Any(history =>
+            history.AlarmKey == "unattributed-old-truck"));
     }
 
     private static void TestSystemAlarmSelection()
@@ -5852,6 +6072,40 @@ internal static class Program
             entity18.AlarmId,
             slots[2].AlarmId,
             StringComparison.Ordinal));
+
+        var entityCard17 = new AlarmView
+        {
+            Source = "vanilla",
+            OverrideId = "vanilla:NotEnoughWorkers",
+            SlotId = "vanilla:NotEnoughWorkers:entity:17",
+            EntityId = 17,
+            EntityPrototypeId = "AirStorageT3",
+        };
+        var entityCard18 = new AlarmView
+        {
+            Source = "vanilla",
+            OverrideId = "vanilla:NotEnoughWorkers",
+            SlotId = "vanilla:NotEnoughWorkers:entity:18",
+            EntityId = 18,
+            EntityPrototypeId = "AirStorageT3",
+        };
+        var entityCard17Clone = new AlarmView
+        {
+            Source = " vanilla ",
+            OverrideId = " vanilla:NotEnoughWorkers ",
+            SlotId = " vanilla:NotEnoughWorkers:entity:17 ",
+            EntityId = 17,
+            EntityPrototypeId = " AirStorageT3 ",
+        };
+        var entityCard17Identity =
+            PanelSlotProjection.StableViewIdentity(entityCard17);
+        IsFalse(string.Equals(
+            entityCard17Identity,
+            PanelSlotProjection.StableViewIdentity(entityCard18),
+            StringComparison.Ordinal));
+        AreEqual(
+            entityCard17Identity,
+            PanelSlotProjection.StableViewIdentity(entityCard17Clone));
 
         var sameNameDifferentId = PanelSlotProjection.Project(
             new[]
@@ -7086,6 +7340,1107 @@ internal static class Program
             .LegacySustainedAlarmReconciliationPending);
     }
 
+    private static void TestRecommendedQuietTransferProfile()
+    {
+        IsTrue(ConfigurationTransferPolicy
+            .ShouldInitializeRecommendedProfile(null, "", false));
+        IsTrue(ConfigurationTransferPolicy
+            .ShouldInitializeRecommendedProfile(null, "  ", false));
+        IsFalse(ConfigurationTransferPolicy
+            .ShouldInitializeRecommendedProfile(
+                new UnmaTransferProfile(),
+                "",
+                false));
+        IsFalse(ConfigurationTransferPolicy
+            .ShouldInitializeRecommendedProfile(null, "corrupt", false));
+        IsFalse(ConfigurationTransferPolicy
+            .ShouldInitializeRecommendedProfile(null, "", true));
+
+        var expectedBehaviors = new Dictionary<
+            string,
+            VanillaNotificationBehavior>(StringComparer.Ordinal)
+        {
+            ["vanilla:UpgradeInProgress"] =
+                VanillaNotificationBehavior.Silent,
+            ["vanilla:DowngradeInProgress"] =
+                VanillaNotificationBehavior.Silent,
+            ["vanilla:VehicleGoalStruggling"] =
+                VanillaNotificationBehavior.Silent,
+            ["vanilla:VehicleNoReachableDesignations"] =
+                VanillaNotificationBehavior.Silent,
+            ["vanilla:NoTreesToHarvest"] =
+                VanillaNotificationBehavior.Silent,
+            ["vanilla:ExcavatorHasNoValidTruck"] =
+                VanillaNotificationBehavior.Silent,
+            ["vanilla:TruckCannotDeliver"] =
+                VanillaNotificationBehavior.Ignored,
+            ["vanilla:TruckCannotDeliverMixedCargo"] =
+                VanillaNotificationBehavior.Ignored,
+        };
+        var profile = ConfigurationTransferPolicy
+            .CreateRecommendedQuietProfile("0.10.1");
+
+        AreEqual(
+            UnmaTransferProfile.CurrentProfileSchemaVersion,
+            profile.ProfileSchemaVersion);
+        AreEqual("UNMA Recommended Quiet", profile.Metadata.Name);
+        AreEqual("0.10.1", profile.Metadata.SourceVersion);
+        IsTrue(DateTime.TryParse(
+            profile.Metadata.CreatedUtc,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind,
+            out _));
+        AreEqual(0, profile.Metadata.SkippedItems);
+        AreEqual(0, profile.Metadata.Diagnostics.Count);
+        IsTrue(profile.Selection.NotificationBehaviors);
+        IsFalse(profile.Selection.SoundSettings);
+        IsFalse(profile.Selection.Appearance);
+        IsFalse(profile.Selection.SystemAlarms);
+        IsFalse(profile.Selection.WindowLayout);
+        AreEqual(expectedBehaviors.Count, profile.NotificationRules.Count);
+        IsTrue(expectedBehaviors.Keys.ToHashSet(StringComparer.Ordinal)
+            .SetEquals(profile.NotificationRules.Select(rule => rule.AlarmId)));
+        IsTrue(profile.NotificationRules.All(rule =>
+            rule.Scope == VanillaNotificationScope.NotificationType &&
+            expectedBehaviors.TryGetValue(
+                rule.AlarmId,
+                out var expectedBehavior) &&
+            rule.Behavior == expectedBehavior &&
+            string.IsNullOrEmpty(rule.EntityPrototypeId)));
+        AreEqual(
+            6,
+            profile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Silent));
+        AreEqual(
+            2,
+            profile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Ignored));
+        AreEqual(
+            0,
+            profile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Hidden));
+        IsTrue(profile.Selection.NotificationRuleIdentities != null);
+        AreEqual(
+            profile.NotificationRules.Count,
+            profile.Selection.NotificationRuleIdentities.Count);
+        IsTrue(new HashSet<string>(
+                profile.Selection.NotificationRuleIdentities,
+                StringComparer.Ordinal)
+            .SetEquals(profile.NotificationRules.Select(
+                ConfigurationTransferPolicy.RuleIdentity)));
+        AreEqual(0, profile.SoundSettings.Count);
+        IsTrue(profile.Appearance == null);
+        AreEqual(0, profile.SystemAlarms.Count);
+        IsTrue(profile.WindowLayout == null);
+
+        var legacyProfile = ConfigurationTransferPolicy.CloneProfile(profile);
+        legacyProfile.Metadata.Name = "UNMA Recommended Silent";
+        legacyProfile.Metadata.CreatedUtc = "legacy-created-utc";
+        legacyProfile.NotificationRules.RemoveAll(rule =>
+            rule.Behavior == VanillaNotificationBehavior.Ignored);
+        legacyProfile.Selection.NotificationRuleIdentities =
+            legacyProfile.NotificationRules
+                .Select(ConfigurationTransferPolicy.RuleIdentity)
+                .ToList();
+        IsTrue(ConfigurationTransferPolicy
+            .TryRefreshPreviousRecommendedProfile(
+                legacyProfile,
+                "0.10.1",
+                out var upgradedLegacyProfile));
+        IsFalse(ReferenceEquals(legacyProfile, upgradedLegacyProfile));
+        AreEqual("UNMA Recommended Silent", legacyProfile.Metadata.Name);
+        AreEqual(6, legacyProfile.NotificationRules.Count);
+        AreEqual(
+            "UNMA Recommended Quiet",
+            upgradedLegacyProfile.Metadata.Name);
+        AreEqual(
+            "legacy-created-utc",
+            upgradedLegacyProfile.Metadata.CreatedUtc);
+        AreEqual(
+            expectedBehaviors.Count,
+            upgradedLegacyProfile.NotificationRules.Count);
+        AreEqual(
+            2,
+            upgradedLegacyProfile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Ignored));
+
+        var previousQuietProfile =
+            ConfigurationTransferPolicy.CloneProfile(profile);
+        previousQuietProfile.Metadata.CreatedUtc = "quiet-created-utc";
+        foreach (var rule in previousQuietProfile.NotificationRules.Where(
+                     rule => rule.Behavior ==
+                         VanillaNotificationBehavior.Ignored))
+        {
+            rule.Behavior = VanillaNotificationBehavior.Hidden;
+        }
+        IsTrue(ConfigurationTransferPolicy
+            .TryRefreshPreviousRecommendedProfile(
+                previousQuietProfile,
+                "0.10.1",
+                out var refreshedQuietProfile));
+        AreEqual(
+            2,
+            previousQuietProfile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Hidden));
+        AreEqual(
+            2,
+            refreshedQuietProfile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Ignored));
+        AreEqual(
+            "quiet-created-utc",
+            refreshedQuietProfile.Metadata.CreatedUtc);
+
+        var customProfile = ConfigurationTransferPolicy.CloneProfile(
+            legacyProfile);
+        customProfile.Metadata.Name = "My quiet profile";
+        IsFalse(ConfigurationTransferPolicy
+            .TryRefreshPreviousRecommendedProfile(
+                customProfile,
+                "0.10.1",
+                out var unchangedCustomProfile));
+        IsTrue(ReferenceEquals(customProfile, unchangedCustomProfile));
+
+        var divergentQuietProfile =
+            ConfigurationTransferPolicy.CloneProfile(previousQuietProfile);
+        divergentQuietProfile.NotificationRules.Single(rule =>
+            rule.AlarmId == "vanilla:TruckCannotDeliver").Behavior =
+                VanillaNotificationBehavior.Silent;
+        IsFalse(ConfigurationTransferPolicy
+            .TryRefreshPreviousRecommendedProfile(
+                divergentQuietProfile,
+                "0.10.1",
+                out var unchangedDivergentProfile));
+        IsTrue(ReferenceEquals(
+            divergentQuietProfile,
+            unchangedDivergentProfile));
+
+        var criticalAlarmIds = new[]
+        {
+            "vanilla:VehicleGoalUnreachable",
+            "vanilla:VehicleNoFuel",
+            "vanilla:NotEnoughPower",
+            "vanilla:NotEnoughWorkers",
+            "vanilla:LowFoodSupply",
+            "vanilla:MachineIsBroken",
+            "vanilla:TrainCannotFindPath",
+            "vanilla:NuclearReactorInMeltdown",
+            "vanilla:CannotDeliverFromMineTower",
+        };
+        IsFalse(profile.NotificationRules.Any(rule =>
+            criticalAlarmIds.Contains(rule.AlarmId, StringComparer.Ordinal)));
+
+        var target = UnmaConfiguration.CreateDefault();
+        target.VanillaNotificationRules = new List<VanillaNotificationRule>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "LooseMaterialConveyorT3",
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+            new()
+            {
+                AlarmId = "vanilla:VehicleNoFuel",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+        };
+        target.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            AlarmKey = "preserved-history",
+        });
+
+        var result = ConfigurationTransferPolicy.Merge(target, profile);
+        AreEqual(7, result.Preview.Added);
+        AreEqual(1, result.Preview.Changed);
+        AreEqual(0, result.Preview.Skipped);
+        AreEqual(
+            VanillaNotificationBehavior.Silent,
+            result.Configuration.VanillaNotificationRules.Single(rule =>
+                rule.AlarmId == "vanilla:UpgradeInProgress" &&
+                rule.Scope == VanillaNotificationScope.NotificationType)
+                .Behavior);
+        AreEqual(
+            VanillaNotificationBehavior.Ignored,
+            result.Configuration.VanillaNotificationRules.Single(rule =>
+                rule.AlarmId == "vanilla:UpgradeInProgress" &&
+                rule.Scope == VanillaNotificationScope.EntityPrototype)
+                .Behavior);
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            result.Configuration.VanillaNotificationRules.Single(rule =>
+                rule.AlarmId == "vanilla:VehicleNoFuel" &&
+                rule.Scope == VanillaNotificationScope.NotificationType)
+                .Behavior);
+        AreEqual(
+            VanillaNotificationBehavior.Ignored,
+            result.Configuration.VanillaNotificationRules.Single(rule =>
+                rule.AlarmId == "vanilla:TruckCannotDeliver" &&
+                rule.Scope == VanillaNotificationScope.NotificationType)
+                .Behavior);
+        AreEqual("preserved-history", result.Configuration.AlarmHistory[0].AlarmKey);
+
+        var repeated = ConfigurationTransferPolicy.PreviewImport(
+            result.Configuration,
+            profile);
+        AreEqual(0, repeated.Added);
+        AreEqual(0, repeated.Changed);
+        AreEqual(expectedBehaviors.Count, repeated.Unchanged);
+        AreEqual(0, repeated.Skipped);
+    }
+
+    private static void TestTransferProfileRoundTripAndFilter()
+    {
+        var source = UnmaConfiguration.CreateDefault();
+        source.VanillaNotificationRules = new List<VanillaNotificationRule>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "LooseMaterialConveyorT3",
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.Entity,
+                EntityId = 42,
+                Behavior = VanillaNotificationBehavior.Hidden,
+            },
+            new()
+            {
+                AlarmId = "vanilla:CannotFindPath",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Silent,
+            },
+        };
+        source.SoundOverrides = new List<AlarmSoundOverride>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                SoundId = "horn",
+                AutoAcknowledgeOnClear = true,
+                IsGloballyDisabled = true,
+            },
+            new()
+            {
+                AlarmId = "rule:world-specific-guid",
+                SoundId = "must-not-transfer",
+                AutoAcknowledgeOnClear = true,
+            },
+        };
+        source.WarningColor = "#112233";
+        source.CriticalColor = "#445566";
+        source.EmergencyColor = "#778899";
+        source.UiScalePercent = 175;
+        source.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            AlarmKey = "must-not-transfer",
+        });
+        source.AlarmMemories.Add(new AlarmMemoryDefinition
+        {
+            Key = "must-not-transfer",
+            EntityId = 99,
+        });
+        source.AlarmTimingMemories.Add(new AlarmTimingMemoryDefinition
+        {
+            OwnerKey = "must-not-transfer",
+        });
+        source.Instruments.Add(new InstrumentDefinition
+        {
+            Id = "must-not-transfer",
+            MetricPath = "value",
+            EntityId = 99,
+        });
+
+        var selection = new TransferProfileSelection
+        {
+            NotificationBehaviors = true,
+            SoundSettings = true,
+            Appearance = true,
+            SystemAlarms = true,
+            WindowLayout = false,
+            NotificationRuleIdentities = new List<string>
+            {
+                VanillaNotificationSuppressionPolicy.RuleIdentity(
+                    source.VanillaNotificationRules[0]),
+                VanillaNotificationSuppressionPolicy.RuleIdentity(
+                    source.VanillaNotificationRules[1]),
+                VanillaNotificationSuppressionPolicy.RuleIdentity(
+                    source.VanillaNotificationRules[2]),
+                "vanilla:Missing|0|",
+            },
+        };
+        var profile = ConfigurationTransferPolicy.CreateProfile(
+            source,
+            selection,
+            "  Test profile  ",
+            "0.10.1");
+
+        AreEqual(1, profile.ProfileSchemaVersion);
+        AreEqual("Test profile", profile.Metadata.Name);
+        AreEqual("0.10.1", profile.Metadata.SourceVersion);
+        IsTrue(DateTime.TryParse(
+            profile.Metadata.CreatedUtc,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind,
+            out _));
+        AreEqual(2, profile.NotificationRules.Count);
+        AreEqual(2, profile.Selection.NotificationRuleIdentities.Count);
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            profile.NotificationRules[0].Behavior);
+        AreEqual(
+            VanillaNotificationScope.EntityPrototype,
+            profile.NotificationRules[1].Scope);
+        AreEqual(
+            "LooseMaterialConveyorT3",
+            profile.NotificationRules[1].EntityPrototypeId);
+        AreEqual(3, profile.Metadata.SkippedItems);
+        AreEqual(3, profile.Metadata.Diagnostics.Count);
+        AreEqual(1, profile.SoundSettings.Count);
+        AreEqual("horn", profile.SoundSettings[0].SoundId);
+        IsTrue(profile.SoundSettings[0].AutoAcknowledgeOnClear);
+        AreEqual("#112233", profile.Appearance.WarningColor);
+        AreEqual(175, profile.Appearance.UiScalePercent);
+        IsTrue(profile.WindowLayout == null);
+        AreEqual(source.SystemAlarms.Count, profile.SystemAlarms.Count);
+
+        var originalProfileMessage =
+            profile.SystemAlarms[0].Stages[0].Message;
+        source.SystemAlarms[0].Stages[0].Message = "SOURCE MUTATED";
+        AreEqual(
+            originalProfileMessage,
+            profile.SystemAlarms[0].Stages[0].Message);
+
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaTransferProfile));
+        string json;
+        using (var stream = new MemoryStream())
+        {
+            serializer.WriteObject(stream, profile);
+            stream.Position = 0;
+            using var reader = new StreamReader(stream);
+            json = reader.ReadToEnd();
+        }
+        IsFalse(json.Contains("\"EntityId\"", StringComparison.Ordinal));
+        IsFalse(json.Contains("|42", StringComparison.Ordinal));
+        IsFalse(json.Contains(
+            "\"IsGloballyDisabled\"",
+            StringComparison.Ordinal));
+        IsFalse(json.Contains(
+            "must-not-transfer",
+            StringComparison.Ordinal));
+        IsFalse(json.Contains("\"Panels\"", StringComparison.Ordinal));
+        IsFalse(json.Contains("\"Rules\"", StringComparison.Ordinal));
+        IsFalse(json.Contains("\"Instruments\"", StringComparison.Ordinal));
+        IsFalse(json.Contains("\"AlarmHistory\"", StringComparison.Ordinal));
+        IsFalse(json.Contains("\"AlarmMemories\"", StringComparison.Ordinal));
+        IsFalse(json.Contains(
+            "\"AlarmTimingMemories\"",
+            StringComparison.Ordinal));
+
+        UnmaTransferProfile restored;
+        using (var stream = new MemoryStream(
+                   System.Text.Encoding.UTF8.GetBytes(json)))
+        {
+            restored = (UnmaTransferProfile)serializer.ReadObject(stream);
+        }
+        restored.Normalize();
+        AreEqual(2, restored.NotificationRules.Count);
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            restored.NotificationRules[0].Behavior);
+        AreEqual("horn", restored.SoundSettings[0].SoundId);
+        AreEqual("#112233", restored.Appearance.WarningColor);
+        AreEqual(source.SystemAlarms.Count, restored.SystemAlarms.Count);
+    }
+
+    private static void TestConfigurationTransferMerge()
+    {
+        var source = UnmaConfiguration.CreateDefault();
+        source.VanillaNotificationRules = new List<VanillaNotificationRule>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+            new()
+            {
+                AlarmId = "vanilla:CannotFindPath",
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "TruckT2",
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.Entity,
+                EntityId = 123,
+                Behavior = VanillaNotificationBehavior.Hidden,
+            },
+        };
+        source.SoundOverrides = new List<AlarmSoundOverride>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                SoundId = "triangle",
+                AutoAcknowledgeOnClear = true,
+                IsGloballyDisabled = false,
+            },
+            new()
+            {
+                AlarmId = "vanilla:CannotFindPath",
+                SoundId = "horn",
+                IsGloballyDisabled = true,
+            },
+        };
+        source.WarningColor = "#010203";
+        source.CriticalColor = "red";
+        source.EmergencyColor = "#070809";
+        source.UiScalePercent = 150;
+        source.WindowX = 301f;
+        source.WindowY = 302f;
+        source.WindowWidth = 1001f;
+        source.WindowHeight = 701f;
+        source.LauncherX = 303f;
+        source.LauncherY = 304f;
+        source.EditorWindowX = 305f;
+        source.EditorWindowY = 306f;
+        source.EditorWindowWidth = 1101f;
+        source.EditorWindowHeight = 801f;
+        source.SystemAlarms.Find(alarm => alarm.Id == "system:health")
+            .Stages[0].Message = "TRANSFERRED HEALTH";
+        source.Rules.Add(new AlarmRuleDefinition
+        {
+            Id = "source-only-rule",
+            PanelId = "supply",
+        });
+        source.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            AlarmKey = "source-only-history",
+        });
+
+        var profile = ConfigurationTransferPolicy.CreateProfile(
+            source,
+            new TransferProfileSelection
+            {
+                NotificationBehaviors = true,
+                SoundSettings = true,
+                Appearance = true,
+                SystemAlarms = true,
+                WindowLayout = true,
+            },
+            "Merge",
+            "0.10.1");
+        profile.SoundSettings.Add(new TransferSoundSetting
+        {
+            AlarmId = "rule:world-specific-guid",
+            SoundId = "must-not-import",
+        });
+
+        var target = UnmaConfiguration.CreateDefault();
+        target.VanillaNotificationRules = new List<VanillaNotificationRule>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Silent,
+            },
+            new()
+            {
+                AlarmId = "vanilla:TargetOnly",
+                Scope = VanillaNotificationScope.Entity,
+                EntityId = 777,
+                Behavior = VanillaNotificationBehavior.Hidden,
+            },
+        };
+        target.SoundOverrides = new List<AlarmSoundOverride>
+        {
+            new()
+            {
+                AlarmId = "vanilla:UpgradeInProgress",
+                SoundId = "beep",
+                IsGloballyDisabled = true,
+            },
+            new()
+            {
+                AlarmId = "vanilla:TargetOnly",
+                SoundId = "target",
+            },
+        };
+        target.SystemAlarms.Add(new SystemAlarmDefinition
+        {
+            Id = "system:target-only",
+            DisplayName = "TARGET ONLY",
+        });
+        target.Rules.Add(new AlarmRuleDefinition
+        {
+            Id = "target-only-rule",
+            PanelId = "supply",
+        });
+        target.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            AlarmKey = "target-only-history",
+        });
+        var originalTargetPanels = target.Panels;
+
+        var preview = ConfigurationTransferPolicy.PreviewImport(
+            target,
+            profile);
+        IsTrue(preview.Added > 0);
+        IsTrue(preview.Changed > 0);
+        IsTrue(preview.Unchanged > 0);
+        IsTrue(preview.Skipped > 0);
+        IsTrue(preview.Diagnostics.Any(item => item.Contains(
+            "world-specific",
+            StringComparison.Ordinal)));
+        IsTrue(preview.Diagnostics.Any(item => item.Contains(
+            "not stable",
+            StringComparison.Ordinal)));
+
+        var result = ConfigurationTransferPolicy.Merge(target, profile);
+        var merged = result.Configuration;
+        IsFalse(ReferenceEquals(target, merged));
+        IsFalse(ReferenceEquals(originalTargetPanels, merged.Panels));
+        AreEqual(
+            VanillaNotificationBehavior.Silent,
+            target.VanillaNotificationRules[0].Behavior);
+        var importedNormal = merged.VanillaNotificationRules.Find(rule =>
+            rule.AlarmId == "vanilla:UpgradeInProgress" &&
+            rule.Scope == VanillaNotificationScope.NotificationType);
+        AreEqual(VanillaNotificationBehavior.Normal, importedNormal.Behavior);
+        IsTrue(merged.VanillaNotificationRules.Any(rule =>
+            rule.Scope == VanillaNotificationScope.Entity &&
+            rule.EntityId == 777));
+        IsFalse(merged.VanillaNotificationRules.Any(rule =>
+            rule.Scope == VanillaNotificationScope.Entity &&
+            rule.EntityId == 123));
+
+        var mergedSound = merged.SoundOverrides.Find(item =>
+            item.AlarmId == "vanilla:UpgradeInProgress");
+        AreEqual("triangle", mergedSound.SoundId);
+        IsTrue(mergedSound.AutoAcknowledgeOnClear);
+        IsTrue(mergedSound.IsGloballyDisabled);
+        var addedSound = merged.SoundOverrides.Find(item =>
+            item.AlarmId == "vanilla:CannotFindPath");
+        AreEqual("horn", addedSound.SoundId);
+        IsFalse(addedSound.IsGloballyDisabled);
+        IsTrue(merged.SoundOverrides.Any(item =>
+            item.AlarmId == "vanilla:TargetOnly"));
+        IsFalse(merged.SoundOverrides.Any(item =>
+            item.AlarmId == "rule:world-specific-guid"));
+
+        AreEqual("#010203", merged.WarningColor);
+        AreEqual(150, merged.UiScalePercent);
+        AreEqual(301f, merged.WindowX);
+        AreEqual(801f, merged.EditorWindowHeight);
+        AreEqual(
+            "TRANSFERRED HEALTH",
+            merged.SystemAlarms.Find(alarm => alarm.Id == "system:health")
+                .Stages[0].Message);
+        IsTrue(merged.SystemAlarms.Any(alarm =>
+            alarm.Id == "system:target-only"));
+        IsTrue(merged.Rules.Any(rule => rule.Id == "target-only-rule"));
+        IsFalse(merged.Rules.Any(rule => rule.Id == "source-only-rule"));
+        IsTrue(merged.AlarmHistory.Any(item =>
+            item.AlarmKey == "target-only-history"));
+        IsFalse(merged.AlarmHistory.Any(item =>
+            item.AlarmKey == "source-only-history"));
+
+        var secondResult = ConfigurationTransferPolicy.Merge(merged, profile);
+        AreEqual(0, secondResult.Preview.Added);
+        AreEqual(0, secondResult.Preview.Changed);
+        IsTrue(secondResult.Preview.Unchanged > 0);
+        AreEqual(
+            merged.VanillaNotificationRules.Count,
+            secondResult.Configuration.VanillaNotificationRules.Count);
+        AreEqual(
+            merged.SoundOverrides.Count,
+            secondResult.Configuration.SoundOverrides.Count);
+        AreEqual(
+            merged.SystemAlarms.Count,
+            secondResult.Configuration.SystemAlarms.Count);
+
+        profile.NotificationRules[0].Behavior =
+            VanillaNotificationBehavior.Ignored;
+        AreEqual(VanillaNotificationBehavior.Normal, importedNormal.Behavior);
+    }
+
+    private static void TestTransferProfileSemanticValidation()
+    {
+        var target = UnmaConfiguration.CreateDefault();
+        target.WarningColor = "#AABBCC";
+        target.CriticalColor = "#BBCCDD";
+        target.EmergencyColor = "#CCDDEE";
+        target.UiScalePercent = 125;
+
+        var source = UnmaConfiguration.CreateDefault();
+        source.WarningColor = "#010203";
+        source.CriticalColor = "red";
+        source.EmergencyColor = "#070809";
+        source.UiScalePercent = 150;
+        source.WindowX = 301f;
+        source.WindowY = 302f;
+        source.WindowWidth = 1001f;
+        source.WindowHeight = 701f;
+        source.LauncherX = 303f;
+        source.LauncherY = 304f;
+        source.EditorWindowX = 305f;
+        source.EditorWindowY = 306f;
+        source.EditorWindowWidth = 1101f;
+        source.EditorWindowHeight = 801f;
+        var sourceFoodStage = source.SystemAlarms
+            .Find(alarm => alarm.Id == "system:food").Stages[0];
+        sourceFoodStage.Message = "VALID IMPORTED FOOD";
+        sourceFoodStage.ActiveColor = "#abc";
+
+        var selection = new TransferProfileSelection
+        {
+            NotificationBehaviors = false,
+            SoundSettings = false,
+            Appearance = true,
+            SystemAlarms = true,
+            WindowLayout = true,
+        };
+        var profile = ConfigurationTransferPolicy.CreateProfile(
+            source,
+            selection,
+            "Semantic validation",
+            "0.10.1");
+        profile.Appearance.WarningColor = "not-a-color";
+        profile.Appearance.EmergencyColor = null;
+        profile.Appearance.UiScalePercent = 999;
+        profile.WindowLayout.WindowX = float.NaN;
+        profile.WindowLayout.WindowWidth = 699f;
+        profile.WindowLayout.LauncherX = float.PositiveInfinity;
+        profile.WindowLayout.EditorWindowWidth = 699f;
+        profile.SystemAlarms.Find(alarm => alarm.Id == "system:health")
+            .Stages[0].Conditions[0].Threshold = double.NaN;
+
+        var preview = ConfigurationTransferPolicy.PreviewImport(
+            target,
+            profile);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.Appearance,
+                "warning-color").Kind);
+        AreEqual(
+            TransferImportChangeKind.Changed,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.Appearance,
+                "critical-color").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.Appearance,
+                "emergency-color").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.Appearance,
+                "ui-scale-percent").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.WindowLayout,
+                "window-x").Kind);
+        AreEqual(
+            TransferImportChangeKind.Changed,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.WindowLayout,
+                "window-y").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.WindowLayout,
+                "window-width").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.WindowLayout,
+                "launcher-x").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.WindowLayout,
+                "editor-window-width").Kind);
+        AreEqual(
+            TransferImportChangeKind.Skipped,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.SystemAlarms,
+                "system:health").Kind);
+        AreEqual(
+            TransferImportChangeKind.Changed,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.SystemAlarms,
+                "system:food").Kind);
+
+        var result = ConfigurationTransferPolicy.Merge(target, profile);
+        var merged = result.Configuration;
+        AreEqual("#AABBCC", merged.WarningColor);
+        AreEqual("red", merged.CriticalColor);
+        AreEqual("#CCDDEE", merged.EmergencyColor);
+        AreEqual(125, merged.UiScalePercent);
+        AreEqual(target.WindowX, merged.WindowX);
+        AreEqual(302f, merged.WindowY);
+        AreEqual(target.WindowWidth, merged.WindowWidth);
+        AreEqual(701f, merged.WindowHeight);
+        AreEqual(target.LauncherX, merged.LauncherX);
+        AreEqual(304f, merged.LauncherY);
+        AreEqual(target.EditorWindowWidth, merged.EditorWindowWidth);
+        AreEqual(801f, merged.EditorWindowHeight);
+        AreEqual(
+            target.SystemAlarms.Find(alarm => alarm.Id == "system:health")
+                .Stages[0].Conditions[0].Threshold,
+            merged.SystemAlarms.Find(alarm => alarm.Id == "system:health")
+                .Stages[0].Conditions[0].Threshold);
+        AreEqual(
+            "VALID IMPORTED FOOD",
+            merged.SystemAlarms.Find(alarm => alarm.Id == "system:food")
+                .Stages[0].Message);
+        AreEqual(
+            "#abc",
+            merged.SystemAlarms.Find(alarm => alarm.Id == "system:food")
+                .Stages[0].ActiveColor);
+
+        merged.Normalize();
+        AreEqual("#AABBCC", merged.WarningColor);
+        AreEqual("red", merged.CriticalColor);
+        AreEqual(125, merged.UiScalePercent);
+        AreEqual(target.WindowX, merged.WindowX);
+        AreEqual(target.WindowWidth, merged.WindowWidth);
+        AreEqual(target.EditorWindowWidth, merged.EditorWindowWidth);
+        AreEqual(
+            "VALID IMPORTED FOOD",
+            merged.SystemAlarms.Find(alarm => alarm.Id == "system:food")
+                .Stages[0].Message);
+
+        var normalizedPreview = ConfigurationTransferPolicy.PreviewImport(
+            merged,
+            profile);
+        AreEqual(0, normalizedPreview.Added);
+        AreEqual(0, normalizedPreview.Changed);
+        AreEqual(preview.Skipped, normalizedPreview.Skipped);
+
+        var invalidSystemAlarmMutations =
+            new Action<SystemAlarmDefinition>[]
+            {
+                alarm => alarm.Stages = null,
+                alarm => alarm.Stages[0].Severity = (AlarmSeverity)999,
+                alarm => alarm.Stages[0].ActiveColor = "invalid",
+                alarm => alarm.Stages[0].ActivationDelayTicks =
+                    AlarmTimingPolicy.MaximumTimingTicks + 1,
+                alarm => alarm.Stages[0].Conditions[0].Comparison =
+                    (ComparisonOperator)999,
+                alarm => alarm.Stages[0].Conditions[0].Threshold =
+                    double.PositiveInfinity,
+                alarm => alarm.Stages[0].Conditions[0].Hysteresis = -1d,
+                alarm => alarm.Stages.RemoveAt(alarm.Stages.Count - 1),
+            };
+        var expectedHealthJson = SerializeDataContractJson(
+            target.SystemAlarms.Find(alarm => alarm.Id == "system:health"));
+        foreach (var mutate in invalidSystemAlarmMutations)
+        {
+            var invalidProfile = ConfigurationTransferPolicy.CreateProfile(
+                target,
+                new TransferProfileSelection
+                {
+                    NotificationBehaviors = false,
+                    SoundSettings = false,
+                    Appearance = false,
+                    SystemAlarms = true,
+                    WindowLayout = false,
+                },
+                "Invalid system alarm",
+                "0.10.1");
+            var invalidHealth = invalidProfile.SystemAlarms.Find(alarm =>
+                alarm.Id == "system:health");
+            invalidProfile.SystemAlarms =
+                new List<SystemAlarmDefinition> { invalidHealth };
+            mutate(invalidHealth);
+
+            var invalidPreview = ConfigurationTransferPolicy.PreviewImport(
+                target,
+                invalidProfile);
+            AreEqual(0, invalidPreview.Added);
+            AreEqual(0, invalidPreview.Changed);
+            AreEqual(0, invalidPreview.Unchanged);
+            AreEqual(1, invalidPreview.Skipped);
+            AreEqual(
+                TransferProfileCategory.SystemAlarms,
+                invalidPreview.Changes[0].Category);
+            IsTrue(invalidPreview.Diagnostics[0].Contains(
+                "System alarm",
+                StringComparison.Ordinal));
+
+            var invalidResult = ConfigurationTransferPolicy.Merge(
+                target,
+                invalidProfile);
+            invalidResult.Configuration.Normalize();
+            AreEqual(
+                expectedHealthJson,
+                SerializeDataContractJson(
+                    invalidResult.Configuration.SystemAlarms.Find(alarm =>
+                        alarm.Id == "system:health")));
+        }
+    }
+
+    private static void TestTransferProfileSchemaOneSystemAlarmContract()
+    {
+        var profile = ConfigurationTransferPolicy.CreateProfile(
+            UnmaConfiguration.CreateDefault(),
+            new TransferProfileSelection
+            {
+                NotificationBehaviors = false,
+                SoundSettings = false,
+                Appearance = false,
+                SystemAlarms = true,
+                WindowLayout = false,
+            },
+            "Schema contract",
+            "0.10.1");
+        using var document = JsonDocument.Parse(
+            SerializeDataContractJson(profile));
+        var root = document.RootElement;
+        AreEqual(
+            UnmaTransferProfile.CurrentProfileSchemaVersion,
+            root.GetProperty("ProfileSchemaVersion").GetInt32());
+        var alarm = root.GetProperty("SystemAlarms")[0];
+        AssertJsonPropertyNames(
+            alarm,
+            "AutoAcknowledgeOnClear",
+            "DisplayName",
+            "Enabled",
+            "Id",
+            "Stages");
+        var stage = alarm.GetProperty("Stages")[0];
+        AssertJsonPropertyNames(
+            stage,
+            "ActivationDelayTicks",
+            "ActiveColor",
+            "Conditions",
+            "Enabled",
+            "Id",
+            "Logic",
+            "Message",
+            "MinimumActiveTicks",
+            "OperatorAction",
+            "Priority",
+            "ResetDelayTicks",
+            "Severity",
+            "SoundId");
+        AssertJsonPropertyNames(
+            stage.GetProperty("Conditions")[0],
+            "Comparison",
+            "Hysteresis",
+            "MetricId",
+            "Threshold");
+    }
+
+    private static void TestTransferProfileStoreRoundTripAndAtomicSave()
+    {
+        var testDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "UNMA-CoreTests-TransferStore-" + Guid.NewGuid().ToString("N"));
+        var profilePath = Path.Combine(
+            testDirectory,
+            "nested",
+            "default.json");
+        try
+        {
+            var store = new UnmaTransferProfileStore(profilePath);
+            IsTrue(store.Load(out var missingError) == null);
+            AreEqual("", missingError);
+            AreEqual(Path.GetFullPath(profilePath), store.Path);
+
+            var source = UnmaConfiguration.CreateDefault();
+            source.WarningColor = "#111111";
+            var profile = ConfigurationTransferPolicy.CreateProfile(
+                source,
+                new TransferProfileSelection
+                {
+                    NotificationBehaviors = false,
+                    SoundSettings = false,
+                    Appearance = true,
+                    SystemAlarms = false,
+                    WindowLayout = false,
+                },
+                "First",
+                "0.10.1");
+            IsTrue(store.SaveIfMissing(
+                profile,
+                out var alreadyExists,
+                out var saveError));
+            IsFalse(alreadyExists);
+            AreEqual("", saveError);
+            IsTrue(File.Exists(profilePath));
+            IsFalse(File.Exists(profilePath + ".tmp"));
+            var firstBytes = File.ReadAllBytes(profilePath);
+
+            var competingProfile = ConfigurationTransferPolicy.CloneProfile(
+                profile);
+            competingProfile.Metadata.Name = "Must not overwrite";
+            IsFalse(store.SaveIfMissing(
+                competingProfile,
+                out alreadyExists,
+                out saveError));
+            IsTrue(alreadyExists);
+            AreEqual("", saveError);
+            IsTrue(firstBytes.SequenceEqual(File.ReadAllBytes(profilePath)));
+            AreEqual(
+                0,
+                Directory.GetFiles(
+                    Path.GetDirectoryName(profilePath),
+                    "default.json.create-*.tmp").Length);
+
+            profile.Metadata.Name = "  Second  ";
+            profile.Appearance.WarningColor = "#222222";
+            IsTrue(store.Save(profile, out saveError));
+            AreEqual("", saveError);
+            AreEqual("  Second  ", profile.Metadata.Name);
+            IsTrue(File.Exists(profilePath + ".bak"));
+            IsFalse(File.Exists(profilePath + ".tmp"));
+            IsTrue(firstBytes.SequenceEqual(
+                File.ReadAllBytes(profilePath + ".bak")));
+
+            var restored = store.Load(out var loadError);
+            AreEqual("", loadError);
+            AreEqual("Second", restored.Metadata.Name);
+            AreEqual("#222222", restored.Appearance.WarningColor);
+            AreEqual(1, restored.ProfileSchemaVersion);
+
+            var backupStore = new UnmaTransferProfileStore(
+                profilePath + ".bak");
+            var backup = backupStore.Load(out loadError);
+            AreEqual("", loadError);
+            AreEqual("First", backup.Metadata.Name);
+            AreEqual("#111111", backup.Appearance.WarningColor);
+        }
+        finally
+        {
+            DeleteTemporaryTestDirectory(testDirectory);
+        }
+    }
+
+    private static void TestTransferProfileStoreFutureAndCorruptProtection()
+    {
+        var testDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "UNMA-CoreTests-TransferProtection-" +
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDirectory);
+        try
+        {
+            var futurePath = Path.Combine(testDirectory, "future.json");
+            File.WriteAllText(
+                futurePath,
+                "{\"ProfileSchemaVersion\":2," +
+                "\"FutureOnly\":\"KEEP-ME\"}");
+            File.WriteAllText(futurePath + ".bak", "KEEP-BACKUP");
+            File.WriteAllText(futurePath + ".tmp", "KEEP-TEMP");
+            var beforeFiles = Directory.GetFiles(testDirectory)
+                .ToDictionary(
+                    Path.GetFileName,
+                    File.ReadAllBytes,
+                    StringComparer.Ordinal);
+
+            var futureStore = new UnmaTransferProfileStore(futurePath);
+            IsTrue(futureStore.Load(out var futureError) == null);
+            IsTrue(futureStore.IsWriteBlocked);
+            IsTrue(futureError.Contains("schema 2", StringComparison.Ordinal));
+            IsTrue(futureError.Contains("schema 1", StringComparison.Ordinal));
+            var safeProfile = new UnmaTransferProfile();
+            IsFalse(futureStore.Save(safeProfile, out var saveError));
+            AreEqual(futureStore.WriteBlockReason, saveError);
+            AssertDirectoryBytesEqual(testDirectory, beforeFiles);
+
+            var directPath = Path.Combine(testDirectory, "direct.json");
+            var directStore = new UnmaTransferProfileStore(directPath);
+            var directFuture = new UnmaTransferProfile
+            {
+                ProfileSchemaVersion = 2,
+            };
+            IsFalse(directStore.Save(directFuture, out var directError));
+            IsTrue(directStore.IsWriteBlocked);
+            IsTrue(directError.Contains("schema 2", StringComparison.Ordinal));
+            IsFalse(File.Exists(directPath));
+
+            var corruptPath = Path.Combine(testDirectory, "corrupt.json");
+            const string corruptContents = "{ definitely not json";
+            File.WriteAllText(corruptPath, corruptContents);
+            var corruptStore = new UnmaTransferProfileStore(corruptPath);
+            IsTrue(corruptStore.Load(out var corruptError) == null);
+            IsFalse(corruptStore.IsWriteBlocked);
+            IsTrue(corruptError.Contains(
+                "could not be loaded",
+                StringComparison.Ordinal));
+            var brokenFiles = Directory.GetFiles(
+                testDirectory,
+                "corrupt.json.broken-*");
+            AreEqual(1, brokenFiles.Length);
+            AreEqual(corruptContents, File.ReadAllText(brokenFiles[0]));
+
+            var replacement = new UnmaTransferProfile
+            {
+                Metadata = new TransferProfileMetadata
+                {
+                    Name = "Recovered",
+                },
+                Selection = new TransferProfileSelection
+                {
+                    NotificationBehaviors = false,
+                    SoundSettings = false,
+                    Appearance = false,
+                    SystemAlarms = false,
+                    WindowLayout = false,
+                },
+            };
+            IsTrue(corruptStore.Save(replacement, out saveError));
+            AreEqual("", saveError);
+            IsFalse(File.Exists(corruptPath + ".tmp"));
+            AreEqual(corruptContents, File.ReadAllText(corruptPath + ".bak"));
+            var recovered = corruptStore.Load(out var recoveredError);
+            AreEqual("", recoveredError);
+            AreEqual("Recovered", recovered.Metadata.Name);
+        }
+        finally
+        {
+            DeleteTemporaryTestDirectory(testDirectory);
+        }
+    }
+
     private static void TestStateStoreFutureSchemaProtection()
     {
         AreEqual(20, UnmaConfiguration.CurrentSchemaVersion);
@@ -8171,6 +9526,37 @@ internal static class Program
                 },
             },
         };
+    }
+
+    private static TransferImportChange FindTransferChange(
+        TransferImportPreview preview,
+        TransferProfileCategory category,
+        string key)
+    {
+        return preview.Changes.Single(change =>
+            change.Category == category &&
+            string.Equals(change.Key, key, StringComparison.Ordinal));
+    }
+
+    private static string SerializeDataContractJson<T>(T value)
+    {
+        using var stream = new MemoryStream();
+        new DataContractJsonSerializer(typeof(T)).WriteObject(stream, value);
+        stream.Position = 0;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private static void AssertJsonPropertyNames(
+        JsonElement element,
+        params string[] expectedNames)
+    {
+        var expected = expectedNames
+            .OrderBy(name => name, StringComparer.Ordinal);
+        var actual = element.EnumerateObject()
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal);
+        AreEqual(string.Join("|", expected), string.Join("|", actual));
     }
 
     private static Dictionary<string, double> BaseSystemMetrics()

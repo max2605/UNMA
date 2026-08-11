@@ -1,50 +1,69 @@
-# UNMA v0.10.0 – Consolidated operations release
+# UNMA v0.10.1 – Cross-save configuration profiles
 
-UNMA v0.10.0 is the stable consolidation of the operator-focused 0.9.19
-through 0.9.26 development line. It brings the complete workflow together in
-one release while retaining public API V1 and persistence schema 20.
+Released: **2026-08-11**
 
-## Included workflows
+UNMA v0.10.1 adds a controlled way to carry selected operator preferences from
+one Captain of Industry save to another without copying world state.
 
-- Optional Keybind Framework 2.0.2+ integration for primary and secondary
-  shortcuts, with safe built-in fallbacks and text-field focus protection.
-- Per-slot, panel, and global acknowledgement plus cyclic alarm navigation.
-- Searchable alarm history with state/severity filters, game-time timestamps,
-  RFC 4180 CSV export, and JSON export.
-- Atomic global-panel duplication with deep-copied, deliberately disabled
-  custom rules.
-- Game-time activation/reset delays, minimum active time, per-condition
-  hysteresis, persisted timing state, and per-slot audio snooze.
-- One-shot escalation and bounded operator attention that only opens and
-  focuses UNMA state.
-- A shared instrument Historian with statistics, linear trend quality, and
-  directed ETA.
-- Operational alarm areas with scoped dashboard, acknowledgement, and next
-  navigation while the underlying acknowledgement state stays global.
-- A read-only Incident Lens with scoped temporal clusters and separately
-  labeled global alarm pressure.
+## Recommended quiet baseline
 
-## Final stabilization
+Only when `%LOCALAPPDATA%\UNMA\profiles\default.json` is genuinely absent does
+UNMA create and persist **UNMA Recommended Quiet**. Exactly recognized,
+unchanged earlier built-ins – **UNMA Recommended Silent** with six Silent rules
+and the intermediate Quiet profile with two additional Hidden rules – are
+upgraded to the current Quiet profile in memory only; their seed files remain
+unchanged. Divergent and custom profiles are neither supplemented nor
+overwritten. The built-in profile is never imported automatically: players
+still inspect the preview and explicitly confirm the merge.
 
-- Native text-field focus suppresses all UNMA shortcut actions, including
-  rebound letter keys.
-- Scale-aware minimum sizes preserve the logical workspace of the main window,
-  editor, and detached panels up to 200 percent within the available viewport.
-- Configuration schema 21 or newer is detected before full deserialization.
-  UNMA leaves the original configuration and backup artifacts untouched and
-  blocks writes for that session rather than dropping unknown future fields.
-- Public extension API and assembly binding remain V1; schema remains 20 and
-  no migration is required from 0.9.26.
-- Release build: zero warnings and zero errors.
-- Automated verification: 125,569 core assertions plus all IL/reflection,
-  localization, rollback, and deterministic-package checks.
-- The release sequence intentionally moves directly from 0.9.26 to 0.10.0;
-  no 0.9.27 package was published.
+The recommended profile sets `UpgradeInProgress`, `DowngradeInProgress`,
+`VehicleGoalStruggling`, `VehicleNoReachableDesignations`,
+`NoTreesToHarvest`, and `ExcavatorHasNoValidTruck` to Silent. Silent disables
+only UNMA's sound. The original Captain of Industry notification remains
+unchanged, while HOME visibility and history are retained.
+
+It sets `TruckCannotDeliver` and `TruckCannotDeliverMixedCargo` to Ignored.
+CoI withdraws and re-emits these vehicle notifications with transient
+`NotificationId` values. UNMA now discards every new event before `SetAlarm`,
+history creation, and persistence, reducing Incident Lens and save-processing
+load. Confirmed import and configuration normalization remove matching active
+states and memories, plus older global history when no more-specific
+non-ignored entity or prototype rule applies. The original Captain of Industry
+notification remains visible and unchanged. `CannotDeliverFromMineTower`,
+`VehicleGoalUnreachable`, and `VehicleNoFuel` remain normal and audible.
+
+## Cross-save workflow
+
+- Save one default profile under **OPTIONS**, selecting notification rules,
+  system-alarm configuration, alarm colors/UI scale, and optionally window
+  positions and sizes. Window layout starts unselected.
+- Preview an import before applying it. UNMA reports new, changed, unchanged,
+  and skipped values, then atomically merges only the selected categories into
+  the target world. Unrelated target settings remain intact.
+- Transfer Vanilla rules keyed by stable `NotificationType` and entity
+  prototype, including their sound assignment and automatic acknowledgement.
+- Safely skip exact-entity rules because entity IDs belong to one world. Both
+  preview and result report those skipped rules.
+- Validate edited or damaged profile values before merging them and report
+  unavailable sounds in the preview instead of hiding compatibility problems.
+- Keep history, active alarm and acknowledgement state, running timers,
+  escalation and snooze state, and every other runtime memory out of the
+  profile.
+- Keep imported ignore rules scoped to UNMA. They do not disable or alter the
+  original Captain of Industry notification.
+
+The atomically written profile is stored separately from world configurations
+at `%LOCALAPPDATA%\UNMA\profiles\default.json`. Global startup settings from
+`config.json`, including master audio enablement and volume, already apply
+across saves and are not duplicated in the profile.
+
+Public extension API and assembly binding remain V1. World persistence remains
+on schema 20; no world migration is required for v0.10.1.
 
 ## Compatibility
 
 - Captain of Industry: **0.8.6c**
-- UNMA: **0.10.0**
+- UNMA: **0.10.1**
 - Required dependency: **MultiLangLib 0.1.0 or newer**
 - Optional dependency: **Keybind Framework 2.0.2 or newer**
 - Can be added to or removed from existing saves.

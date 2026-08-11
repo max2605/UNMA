@@ -39,6 +39,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
         public IReadOnlyList<AlarmView> Views = Array.Empty<AlarmView>();
     }
 
+    private sealed class TransferRuleRow
+    {
+        public string Identity = "";
+        public VanillaNotificationRule CurrentRule;
+        public TransferNotificationRule ProfileRule;
+        public VanillaNotificationRule ProfileDisplayRule;
+
+        public VanillaNotificationRule DisplayRule =>
+            CurrentRule ?? ProfileDisplayRule;
+    }
+
     private const int TabBoard = 0;
     private const int TabHistory = 1;
     private const int TabSystem = 2;
@@ -177,6 +188,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_soundOverrideScroll;
     private Vector2 m_systemAlarmScroll;
     private Vector2 m_optionsScroll;
+    private string m_transferProfileName = "";
+    private bool m_transferProfileUiInitialized;
+    private bool m_transferNotificationBehaviors = true;
+    private bool m_transferSoundSettings = true;
+    private bool m_transferAppearance = true;
+    private bool m_transferSystemAlarms = true;
+    private bool m_transferWindowLayout;
+    private readonly HashSet<string> m_transferSelectedRuleIdentities =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<string> m_transferKnownRuleIdentities =
+        new(StringComparer.Ordinal);
+    private TransferImportPreview m_transferImportPreview;
     private Vector2 m_instrumentScroll;
     private Vector2 m_instrumentPanelTabsScroll;
     private Vector2 m_instrumentMetricScroll;
@@ -8019,7 +8042,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 StringComparison.Ordinal);
 
             NativeGUILayout.BeginVertical(
-                "sound-override:" + candidate.OverrideId,
+                "sound-override:" +
+                PanelSlotProjection.StableViewIdentity(candidate),
                 m_panelStyle,
                 NativeGUILayout.ExpandWidth(true));
             NativeGUILayout.Label(
@@ -8150,15 +8174,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     "ALLE GLEICHEN OBJEKTE ({0})",
                     candidate.EntityPrototypeId));
         }
-        else if (candidate.EntityId < 0)
-        {
-            DrawVanillaBehaviorRow(
-                candidate,
-                VanillaNotificationScope.NotificationType,
-                UnmaText.Get(
-                    "sounds.override.scope_notification",
-                    "DIESER MELDUNGSTYP"));
-        }
+        DrawVanillaBehaviorRow(
+            candidate,
+            VanillaNotificationScope.NotificationType,
+            UnmaText.Get(
+                "sounds.override.scope_notification",
+                "DIESER MELDUNGSTYP"));
     }
 
     private void DrawVanillaBehaviorRow(
@@ -8475,6 +8496,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.ExpandWidth(true));
 
         NativeGUILayout.Space(10f);
+        DrawTransferProfileOptions();
+
+        NativeGUILayout.Space(10f);
         NativeGUILayout.Label(
             UnmaText.Get("options.integration.title", "FREMDMOD-API"),
             m_sectionStyle);
@@ -8532,6 +8556,810 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         DrawStatusMessage();
         NativeGUILayout.EndScrollView();
+    }
+
+    private void DrawTransferProfileOptions()
+    {
+        var profile = m_runtime.GetTransferProfile();
+        var ruleRows = BuildTransferRuleRows(profile);
+        InitializeTransferProfileUi(profile, ruleRows);
+        TrackNewTransferRules(ruleRows);
+
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.title",
+                "SPIELSTANDSÜBERGREIFENDES PROFIL"),
+            m_sectionStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.description",
+                "Ausgewählte Einstellungen global speichern und in andere " +
+                "Spielstände übernehmen."),
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
+
+        NativeGUILayout.BeginHorizontal();
+        NativeGUILayout.Label(
+            UnmaText.Get("options.transfer.profile_name", "Profilname"),
+            m_labelStyle,
+            NativeGUILayout.Width(150f));
+        m_transferProfileName = NativeGUILayout.TextField(
+            m_transferProfileName,
+            80,
+            m_textFieldStyle,
+            NativeGUILayout.ExpandWidth(true),
+            NativeGUILayout.Height(30f));
+        NativeGUILayout.EndHorizontal();
+
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.categories",
+                "ÜBERTRAGBARE BEREICHE"),
+            m_headerStyle);
+        DrawTransferCategory(
+            ref m_transferNotificationBehaviors,
+            "options.transfer.category.notifications",
+            "Meldungsverhalten",
+            "options.transfer.category.notifications_hint",
+            "Portable Meldungsregeln übertragen.");
+        DrawTransferCategory(
+            ref m_transferSoundSettings,
+            "options.transfer.category.sounds",
+            "Töne und Auto-Quittierung",
+            "options.transfer.category.sounds_hint",
+            "Tonzuordnungen und Auto-Quittierung übertragen.");
+        DrawTransferCategory(
+            ref m_transferAppearance,
+            "options.transfer.category.appearance",
+            "Farben und UI-Skalierung",
+            "options.transfer.category.appearance_hint",
+            "Farben und Skalierung übertragen.");
+        DrawTransferCategory(
+            ref m_transferSystemAlarms,
+            "options.transfer.category.system_alarms",
+            "Systemalarme",
+            "options.transfer.category.system_alarms_hint",
+            "Systemalarm-Konfiguration übertragen.");
+        DrawTransferCategory(
+            ref m_transferWindowLayout,
+            "options.transfer.category.window_layout",
+            "Fensterlayout",
+            "options.transfer.category.window_layout_hint",
+            "Fensterpositionen und -größen übertragen.");
+
+        NativeGUILayout.Space(6f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.rules_title",
+                "MELDUNGSREGELN EINZELN AUSWÄHLEN"),
+            m_headerStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.rules_hint",
+                "Einzelobjekt-Regeln sind spielstandsgebunden und werden " +
+                "übersprungen."),
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
+
+        NativeGUILayout.BeginHorizontal();
+        var previousEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = previousEnabled &&
+                            m_transferNotificationBehaviors;
+        if (NativeGUILayout.Button(
+                UnmaText.Get(
+                    "options.transfer.rules_select_all",
+                    "ALLE PORTABLEN AUSWÄHLEN"),
+                m_buttonStyle,
+                NativeGUILayout.Width(220f)))
+        {
+            foreach (var row in ruleRows.Where(IsPortableTransferRule))
+            {
+                m_transferSelectedRuleIdentities.Add(row.Identity);
+            }
+            InvalidateTransferPreview();
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get(
+                    "options.transfer.rules_clear",
+                    "AUSWAHL AUFHEBEN"),
+                m_buttonStyle,
+                NativeGUILayout.Width(190f)))
+        {
+            m_transferSelectedRuleIdentities.Clear();
+            InvalidateTransferPreview();
+        }
+        NativeGUI.enabled = previousEnabled;
+        NativeGUILayout.EndHorizontal();
+
+        if (ruleRows.Count == 0)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "options.transfer.rules_empty",
+                    "Noch keine Meldungsregeln vorhanden."),
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true));
+        }
+        else
+        {
+            foreach (var row in ruleRows)
+            {
+                DrawTransferRuleRow(row);
+            }
+        }
+
+        NativeGUILayout.Space(6f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.existing_title",
+                "VORHANDENES STANDARDPROFIL"),
+            m_headerStyle);
+        if (profile == null)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "options.transfer.existing_none",
+                    "Noch kein Profil gespeichert."),
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true));
+        }
+        else
+        {
+            var profileName = profile.Metadata?.Name;
+            if (string.IsNullOrWhiteSpace(profileName))
+            {
+                profileName = UnmaText.Get(
+                    "options.transfer.default_name",
+                    "Standard");
+            }
+            NativeGUILayout.Label(
+                UnmaText.Format(
+                    "options.transfer.existing_summary",
+                    "{0} · Schema {1} · {2} Meldungsregeln",
+                    profileName,
+                    profile.ProfileSchemaVersion,
+                    profile.NotificationRules?.Count ?? 0),
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true));
+            if (!string.IsNullOrWhiteSpace(profile.Metadata?.SourceVersion))
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "options.transfer.source_version",
+                        "UNMA-Quellversion: {0}",
+                        profile.Metadata.SourceVersion),
+                    m_smallLabelStyle,
+                    NativeGUILayout.ExpandWidth(true));
+            }
+            if (!string.IsNullOrWhiteSpace(profile.Metadata?.CreatedUtc))
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "options.transfer.created_utc",
+                        "Gespeichert (UTC): {0}",
+                        profile.Metadata.CreatedUtc),
+                    m_smallLabelStyle,
+                    NativeGUILayout.ExpandWidth(true));
+            }
+            if ((profile.Metadata?.SkippedItems ?? 0) > 0)
+            {
+                NativeGUILayout.Label(
+                    UnmaText.Format(
+                        "options.transfer.export_skipped",
+                        "Beim Speichern übersprungen: {0}",
+                        profile.Metadata.SkippedItems),
+                    m_warningBannerStyle,
+                    NativeGUILayout.ExpandWidth(true));
+            }
+            foreach (var diagnostic in
+                     (profile.Metadata?.Diagnostics ?? new List<string>())
+                     .Where(item => !string.IsNullOrWhiteSpace(item))
+                     .Take(3))
+            {
+                NativeGUILayout.Label(
+                    diagnostic,
+                    m_smallLabelStyle,
+                    NativeGUILayout.ExpandWidth(true));
+            }
+        }
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "options.transfer.path",
+                "Ablage: {0}",
+                m_runtime.TransferProfilePath),
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
+        if (!string.IsNullOrWhiteSpace(m_runtime.LastTransferProfileError))
+        {
+            NativeGUILayout.Label(
+                UnmaText.Format(
+                    "options.transfer.last_error",
+                    "Letzter Profilfehler: {0}",
+                    m_runtime.LastTransferProfileError),
+                m_warningBannerStyle,
+                NativeGUILayout.ExpandWidth(true));
+        }
+
+        NativeGUILayout.BeginHorizontal();
+        if (NativeGUILayout.Button(
+                UnmaText.Get(
+                    profile == null
+                        ? "options.transfer.save"
+                        : "options.transfer.update",
+                    profile == null
+                        ? "PROFIL SPEICHERN"
+                        : "PROFIL AKTUALISIEREN"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(220f),
+                NativeGUILayout.Height(30f)))
+        {
+            SaveTransferProfileFromOptions();
+        }
+
+        previousEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = previousEnabled && profile != null;
+        if (NativeGUILayout.Button(
+                UnmaText.Get(
+                    "options.transfer.preview",
+                    "IMPORT-VORSCHAU"),
+                m_buttonStyle,
+                NativeGUILayout.Width(220f),
+                NativeGUILayout.Height(30f)))
+        {
+            PreviewTransferProfileFromOptions();
+        }
+        NativeGUI.enabled = previousEnabled;
+        NativeGUILayout.EndHorizontal();
+
+        DrawTransferImportPreview();
+    }
+
+    private void DrawTransferCategory(
+        ref bool enabled,
+        string labelKey,
+        string fallbackLabel,
+        string hintKey,
+        string fallbackHint)
+    {
+        var updated = NativeGUILayout.Toggle(
+            enabled,
+            UnmaText.Get(labelKey, fallbackLabel));
+        if (updated != enabled)
+        {
+            enabled = updated;
+            InvalidateTransferPreview();
+        }
+        NativeGUILayout.Label(
+            UnmaText.Get(hintKey, fallbackHint),
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
+    }
+
+    private List<TransferRuleRow> BuildTransferRuleRows(
+        UnmaTransferProfile profile)
+    {
+        var rows = new Dictionary<string, TransferRuleRow>(
+            StringComparer.Ordinal);
+        AddCurrentTransferRuleRows(
+            rows,
+            m_runtime.Configuration.VanillaNotificationRules);
+        AddProfileTransferRuleRows(
+            rows,
+            profile?.NotificationRules);
+        return rows.Values
+            .OrderBy(row =>
+                row.DisplayRule?.Scope == VanillaNotificationScope.Entity
+                    ? 1
+                    : 0)
+            .ThenBy(
+                row => row.DisplayRule?.AlarmId ?? "",
+                StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(row => row.Identity, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static void AddCurrentTransferRuleRows(
+        IDictionary<string, TransferRuleRow> rows,
+        IEnumerable<VanillaNotificationRule> rules)
+    {
+        if (rules == null)
+        {
+            return;
+        }
+        foreach (var rule in rules.Where(rule => rule != null))
+        {
+            var identity = VanillaNotificationSuppressionPolicy.RuleIdentity(
+                rule);
+            if (string.IsNullOrWhiteSpace(identity))
+            {
+                continue;
+            }
+            if (!rows.TryGetValue(identity, out var row))
+            {
+                row = new TransferRuleRow
+                {
+                    Identity = identity,
+                };
+                rows.Add(identity, row);
+            }
+            row.CurrentRule = rule;
+        }
+    }
+
+    private static void AddProfileTransferRuleRows(
+        IDictionary<string, TransferRuleRow> rows,
+        IEnumerable<TransferNotificationRule> rules)
+    {
+        if (rules == null)
+        {
+            return;
+        }
+        foreach (var rule in rules.Where(rule => rule != null))
+        {
+            var displayRule = new VanillaNotificationRule
+            {
+                AlarmId = rule.AlarmId,
+                Scope = rule.Scope,
+                Behavior = rule.Behavior,
+                EntityPrototypeId = rule.EntityPrototypeId,
+            };
+            var identity = VanillaNotificationSuppressionPolicy.RuleIdentity(
+                displayRule);
+            if (string.IsNullOrWhiteSpace(identity))
+            {
+                continue;
+            }
+            if (!rows.TryGetValue(identity, out var row))
+            {
+                row = new TransferRuleRow
+                {
+                    Identity = identity,
+                };
+                rows.Add(identity, row);
+            }
+            row.ProfileRule = rule;
+            row.ProfileDisplayRule = displayRule;
+        }
+    }
+
+    private void InitializeTransferProfileUi(
+        UnmaTransferProfile profile,
+        IReadOnlyList<TransferRuleRow> ruleRows)
+    {
+        if (m_transferProfileUiInitialized)
+        {
+            return;
+        }
+
+        m_transferProfileUiInitialized = true;
+        m_transferProfileName = profile?.Metadata?.Name;
+        if (string.IsNullOrWhiteSpace(m_transferProfileName))
+        {
+            m_transferProfileName = UnmaText.Get(
+                "options.transfer.default_name",
+                "Standard");
+        }
+
+        var storedSelection = profile?.Selection;
+        if (storedSelection != null)
+        {
+            m_transferNotificationBehaviors =
+                storedSelection.NotificationBehaviors;
+            m_transferSoundSettings = storedSelection.SoundSettings;
+            m_transferAppearance = storedSelection.Appearance;
+            m_transferSystemAlarms = storedSelection.SystemAlarms;
+            m_transferWindowLayout = storedSelection.WindowLayout;
+        }
+
+        var exactRuleSelection = storedSelection?.NotificationRuleIdentities;
+        foreach (var row in ruleRows)
+        {
+            m_transferKnownRuleIdentities.Add(row.Identity);
+            if (IsPortableTransferRule(row) &&
+                (exactRuleSelection == null ||
+                 exactRuleSelection.Contains(row.Identity)))
+            {
+                m_transferSelectedRuleIdentities.Add(row.Identity);
+            }
+        }
+    }
+
+    private void TrackNewTransferRules(
+        IReadOnlyList<TransferRuleRow> ruleRows)
+    {
+        foreach (var row in ruleRows)
+        {
+            if (!m_transferKnownRuleIdentities.Add(row.Identity) ||
+                !IsPortableTransferRule(row))
+            {
+                continue;
+            }
+            m_transferSelectedRuleIdentities.Add(row.Identity);
+            InvalidateTransferPreview();
+        }
+    }
+
+    private void DrawTransferRuleRow(TransferRuleRow row)
+    {
+        var rule = row.DisplayRule;
+        if (rule == null)
+        {
+            return;
+        }
+        var portable = IsPortableTransferRule(row);
+        NativeGUILayout.BeginVertical(
+            "transfer-rule:" + row.Identity,
+            m_panelStyle,
+            NativeGUILayout.ExpandWidth(true));
+        if (portable)
+        {
+            var previousEnabled = NativeGUI.enabled;
+            NativeGUI.enabled = previousEnabled &&
+                                m_transferNotificationBehaviors;
+            var selected = m_transferSelectedRuleIdentities.Contains(
+                row.Identity);
+            var updated = NativeGUILayout.Toggle(
+                selected,
+                string.IsNullOrWhiteSpace(rule.AlarmId)
+                    ? row.Identity
+                    : rule.AlarmId);
+            NativeGUI.enabled = previousEnabled;
+            if (updated != selected)
+            {
+                if (updated)
+                {
+                    m_transferSelectedRuleIdentities.Add(row.Identity);
+                }
+                else
+                {
+                    m_transferSelectedRuleIdentities.Remove(row.Identity);
+                }
+                InvalidateTransferPreview();
+            }
+        }
+        else
+        {
+            NativeGUILayout.Label(
+                string.IsNullOrWhiteSpace(rule.AlarmId)
+                    ? row.Identity
+                    : rule.AlarmId,
+                m_headerStyle,
+                NativeGUILayout.ExpandWidth(true));
+        }
+
+        NativeGUILayout.Label(
+            TransferRuleScopeLabel(rule) + " · " +
+            (portable
+                ? UnmaText.Get(
+                    "options.transfer.rule_portable",
+                    "ÜBERTRAGBAR")
+                : UnmaText.Get(
+                    "options.transfer.rule_not_portable",
+                    "NICHT ÜBERTRAGBAR · WIRD ÜBERSPRUNGEN")),
+            portable ? m_smallLabelStyle : m_warningBannerStyle,
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.Label(
+            TransferRuleSourceAndBehaviorLabel(row),
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.EndVertical();
+        NativeGUILayout.Space(3f);
+    }
+
+    private static bool IsPortableTransferRule(TransferRuleRow row)
+    {
+        return row?.DisplayRule != null &&
+               row.DisplayRule.Scope != VanillaNotificationScope.Entity;
+    }
+
+    private static string TransferRuleScopeLabel(
+        VanillaNotificationRule rule)
+    {
+        return rule.Scope switch
+        {
+            VanillaNotificationScope.EntityPrototype => UnmaText.Format(
+                "options.transfer.rule_scope_prototype",
+                "OBJEKTTYP · {0}",
+                rule.EntityPrototypeId),
+            VanillaNotificationScope.Entity => UnmaText.Format(
+                "options.transfer.rule_scope_entity",
+                "EINZELOBJEKT · ENTITY {0}",
+                rule.EntityId),
+            _ => UnmaText.Get(
+                "options.transfer.rule_scope_notification",
+                "MELDUNGSTYP"),
+        };
+    }
+
+    private static string TransferRuleSourceAndBehaviorLabel(
+        TransferRuleRow row)
+    {
+        var parts = new List<string>();
+        if (row.CurrentRule != null)
+        {
+            parts.Add(
+                UnmaText.Get(
+                    "options.transfer.rule_from_current_save",
+                    "AKTUELLER SPIELSTAND") + " · " +
+                VanillaBehaviorLabel(row.CurrentRule.Behavior));
+        }
+        if (row.ProfileRule != null)
+        {
+            parts.Add(
+                UnmaText.Get(
+                    "options.transfer.rule_from_profile",
+                    "IM PROFIL") + " · " +
+                VanillaBehaviorLabel(row.ProfileRule.Behavior));
+        }
+        return string.Join(" · ", parts);
+    }
+
+    private TransferProfileSelection BuildTransferProfileSelection()
+    {
+        var notificationRuleIdentities = new HashSet<string>(
+            m_transferSelectedRuleIdentities,
+            StringComparer.Ordinal);
+        if (m_transferNotificationBehaviors)
+        {
+            foreach (var rule in m_runtime.Configuration
+                         .VanillaNotificationRules ??
+                     Enumerable.Empty<VanillaNotificationRule>())
+            {
+                if (rule?.Scope != VanillaNotificationScope.Entity)
+                {
+                    continue;
+                }
+                var identity =
+                    VanillaNotificationSuppressionPolicy.RuleIdentity(rule);
+                if (identity.Length > 0)
+                {
+                    notificationRuleIdentities.Add(identity);
+                }
+            }
+        }
+
+        return new TransferProfileSelection
+        {
+            NotificationBehaviors = m_transferNotificationBehaviors,
+            SoundSettings = m_transferSoundSettings,
+            Appearance = m_transferAppearance,
+            SystemAlarms = m_transferSystemAlarms,
+            WindowLayout = m_transferWindowLayout,
+            NotificationRuleIdentities = notificationRuleIdentities
+                .OrderBy(identity => identity, StringComparer.Ordinal)
+                .ToList(),
+        };
+    }
+
+    private void SaveTransferProfileFromOptions()
+    {
+        var name = m_transferProfileName?.Trim() ?? "";
+        if (name.Length == 0)
+        {
+            SetStatus(UnmaText.Get(
+                "options.transfer.name_required",
+                "Gib einen Profilnamen ein."));
+            return;
+        }
+        if (m_runtime.SaveTransferProfile(
+                name,
+                BuildTransferProfileSelection()))
+        {
+            m_transferProfileName = name;
+            m_transferImportPreview = null;
+            var savedProfile = m_runtime.GetTransferProfile();
+            var skipped = savedProfile?.Metadata?.SkippedItems ?? 0;
+            SetStatus(skipped > 0
+                ? UnmaText.Format(
+                    "options.transfer.save_ok_skipped",
+                    "Profil '{0}' gespeichert; {1} nicht übertragbare " +
+                    "Einträge übersprungen.",
+                    name,
+                    skipped)
+                : UnmaText.Format(
+                    "options.transfer.save_ok",
+                    "Profil '{0}' wurde spielstandsübergreifend gespeichert.",
+                    name));
+            return;
+        }
+        SetStatus(UnmaText.Format(
+            "options.transfer.save_failed",
+            "Profil konnte nicht gespeichert werden: {0}",
+            TransferProfileError()));
+    }
+
+    private void PreviewTransferProfileFromOptions()
+    {
+        if (m_runtime.GetTransferProfile() == null)
+        {
+            SetStatus(UnmaText.Get(
+                "options.transfer.no_profile",
+                "Speichere zuerst ein Profil."));
+            return;
+        }
+        var selection = BuildTransferProfileSelection();
+        var preview = m_runtime.PreviewTransferProfile(selection);
+        if (preview == null)
+        {
+            SetStatus(UnmaText.Format(
+                "options.transfer.preview_failed",
+                "Import-Vorschau konnte nicht erstellt werden: {0}",
+                TransferProfileError()));
+            return;
+        }
+        AppendMissingTransferSoundDiagnostics(
+            preview,
+            m_runtime.GetTransferProfile(),
+            selection);
+        m_transferImportPreview = preview;
+    }
+
+    private void DrawTransferImportPreview()
+    {
+        if (m_transferImportPreview == null)
+        {
+            return;
+        }
+        NativeGUILayout.BeginVertical(
+            "transfer-import-preview",
+            m_panelStyle,
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.preview_title",
+                "IMPORT-VORSCHAU · NOCH NICHT ANGEWENDET"),
+            m_headerStyle,
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.Label(
+            TransferPreviewSummary(m_transferImportPreview),
+            m_warningBannerStyle,
+            NativeGUILayout.ExpandWidth(true));
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "options.transfer.preview_hint",
+                "Bilanz prüfen und den Merge-Import anschließend bestätigen."),
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
+        foreach (var diagnostic in
+                 (m_transferImportPreview.Diagnostics ?? new List<string>())
+                 .Where(item => !string.IsNullOrWhiteSpace(item))
+                 .Take(5))
+        {
+            NativeGUILayout.Label(
+                diagnostic,
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true));
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get(
+                    "options.transfer.import_confirm",
+                    "MERGE-IMPORT BESTÄTIGEN"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Width(260f),
+                NativeGUILayout.Height(32f)))
+        {
+            ImportTransferProfileFromOptions();
+        }
+        NativeGUILayout.EndVertical();
+    }
+
+    private void ImportTransferProfileFromOptions()
+    {
+        if (m_runtime.ImportTransferProfile(
+                BuildTransferProfileSelection(),
+                out var appliedPreview))
+        {
+            appliedPreview ??= m_transferImportPreview;
+            SetStatus(UnmaText.Format(
+                "options.transfer.import_ok",
+                "Profil importiert: {0} neu, {1} geändert, " +
+                "{2} unverändert, {3} übersprungen.",
+                appliedPreview?.Added ?? 0,
+                appliedPreview?.Changed ?? 0,
+                appliedPreview?.Unchanged ?? 0,
+                appliedPreview?.Skipped ?? 0));
+            m_transferImportPreview = null;
+            return;
+        }
+        SetStatus(UnmaText.Format(
+            "options.transfer.import_failed",
+            "Profil konnte nicht importiert werden: {0}",
+            TransferProfileError()));
+    }
+
+    private static string TransferPreviewSummary(
+        TransferImportPreview preview)
+    {
+        return UnmaText.Format(
+            "options.transfer.preview_summary",
+            "{0} neu · {1} geändert · {2} unverändert · " +
+            "{3} übersprungen",
+            preview.Added,
+            preview.Changed,
+            preview.Unchanged,
+            preview.Skipped);
+    }
+
+    private void AppendMissingTransferSoundDiagnostics(
+        TransferImportPreview preview,
+        UnmaTransferProfile profile,
+        TransferProfileSelection selection)
+    {
+        if (preview == null || profile == null || selection == null)
+        {
+            return;
+        }
+        var availableSoundIds = new HashSet<string>(
+            (m_audio?.GetSoundOptions() ?? Array.Empty<SoundOption>())
+            .Where(option => option != null &&
+                             !string.IsNullOrWhiteSpace(option.Id))
+            .Select(option => option.Id),
+            StringComparer.OrdinalIgnoreCase);
+        var requestedSoundIds = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        if (selection.SoundSettings)
+        {
+            foreach (var soundId in (profile.SoundSettings ??
+                         new List<TransferSoundSetting>())
+                     .Select(setting => setting?.SoundId))
+            {
+                if (!string.IsNullOrWhiteSpace(soundId))
+                {
+                    requestedSoundIds.Add(soundId.Trim());
+                }
+            }
+        }
+        if (selection.SystemAlarms)
+        {
+            foreach (var soundId in (profile.SystemAlarms ??
+                         new List<SystemAlarmDefinition>())
+                     .Where(alarm => alarm != null)
+                     .SelectMany(alarm => alarm.Stages ??
+                         new List<SystemAlarmStageDefinition>())
+                     .Where(stage => stage != null)
+                     .Select(stage => stage.SoundId))
+            {
+                if (!string.IsNullOrWhiteSpace(soundId))
+                {
+                    requestedSoundIds.Add(soundId.Trim());
+                }
+            }
+        }
+        foreach (var soundId in requestedSoundIds
+                     .Where(soundId => !availableSoundIds.Contains(soundId))
+                     .OrderBy(soundId => soundId, StringComparer.OrdinalIgnoreCase))
+        {
+            var diagnostic = UnmaText.Format(
+                "options.transfer.sound_missing",
+                "Sound '{0}' is unavailable; UNMA will use its normal " +
+                "fallback until the sound is installed.",
+                soundId);
+            if (!preview.Diagnostics.Contains(diagnostic))
+            {
+                preview.Diagnostics.Add(diagnostic);
+            }
+        }
+    }
+
+    private string TransferProfileError()
+    {
+        return string.IsNullOrWhiteSpace(m_runtime.LastTransferProfileError)
+            ? UnmaText.Get(
+                "options.transfer.unknown_error",
+                "Unbekannter Fehler")
+            : m_runtime.LastTransferProfileError;
+    }
+
+    private void InvalidateTransferPreview()
+    {
+        if (m_transferImportPreview == null)
+        {
+            return;
+        }
+        m_transferImportPreview = null;
+        SetStatus(UnmaText.Get(
+            "options.transfer.preview_invalidated",
+            "Auswahl geändert. Bitte Vorschau erneut erstellen."));
     }
 
     private string DrawOptionsColorField(
