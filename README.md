@@ -16,14 +16,23 @@ Zielversion: Captain of Industry **0.8.6c**.
 
 - Spiegelung aller aktiven Vanilla-Benachrichtigungen über den
   `INotificationsManager`.
-- Jeder bekannte Vanilla-Meldungstyp kann im **TÖNE**-Tab für genau ein Objekt
-  oder für alle Objekte desselben Prototyps auf `NORMAL`, `LOGGEN · TON AUS`
+- Jeder bekannte Vanilla-Meldungstyp kann im **TÖNE**-Tab global, für genau ein
+  Objekt oder für alle Objekte desselben Prototyps auf `NORMAL`,
+  `LOGGEN · TON AUS`
   oder `LOGGEN · TON AUS · AUSBLENDEN` gestellt oder mit
   `NICHT LOGGEN · KOMPLETT IGNORIEREN` vollständig verworfen werden.
-  Objektregeln haben Vorrang vor Prototypregeln. Ausgeblendete Ereignisse
+  Objektregeln haben Vorrang vor Prototyp- und Meldungstypregeln. Ausgeblendete Ereignisse
   fehlen in HOME und den aktiven Zählern, bleiben aber im Verlauf; vollständig
   ignorierte Ereignisse werden gar nicht erst angelegt. Die Benachrichtigung
   des Spiels selbst wird nicht verändert.
+- Unter **OPTIONEN** lässt sich ein spielstandsübergreifendes Standardprofil
+  mit einzeln auswählbaren Kategorien speichern und mit Vorschau atomar in
+  eine andere Welt einspielen. Meldungsart- und Prototypregeln sind portabel;
+  weltgebundene Entity-Regeln werden nachvollziehbar übersprungen. Verlauf,
+  aktive Alarmzustände und zeitliche Memories gelangen nie in das Profil.
+  Nur wenn die Profildatei tatsächlich fehlt, legt UNMA das eingebaute Profil
+  **UNMA Recommended Quiet** an. Ein exakt erkanntes früheres Built-in wird nur
+  im Speicher erweitert; Profildateien werden dabei nicht überschrieben.
 - Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
   `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
   vollständig ausgeblendet.
@@ -176,7 +185,7 @@ Zielversion: Captain of Industry **0.8.6c**.
   und Neuladen. Schema 20 übernimmt ältere Konfigurationen mit unzugeordneten
   Panels und unverändertem **ALLE**-Verhalten. Die Incident-Linse bleibt ein
   vorübergehender, aus aktuellen Alarm- und Verlaufssnapshots abgeleiteter
-  Zustand und benötigt in 0.10.0 weder neue Speicherfelder noch eine weitere
+  Zustand und benötigt in 0.10.1 weder neue Speicherfelder noch eine weitere
   Schema-Migration. Eine erkannte Konfiguration aus einem neueren Schema bleibt
   bytegenau unangetastet; UNMA arbeitet dann mit sicheren Vorgaben und sperrt
   Schreibvorgänge für die Sitzung. Ein revisionsgebundener
@@ -239,6 +248,61 @@ Zielversion: Captain of Industry **0.8.6c**.
     200 Prozent skalieren. `+ PANEL` legt eine globale Tafel an; das Zahnrad
     daneben öffnet deren getrennte Einstellungen samt Bereichszuordnung. Über
     **⚙ BEREICHE** werden Betriebsbereiche gemeinsam verwaltet.
+12. Ebenfalls unter **OPTIONEN** ein Standardprofil aus den gewünschten
+    Kategorien speichern oder, solange noch kein eigenes Profil vorhanden ist,
+    **UNMA Recommended Quiet** verwenden. In einem anderen
+    Spielstand zuerst die Importvorschau prüfen und danach zusammenführen. Ein
+    Profil wird nie automatisch importiert; der Vorgang übernimmt nur die
+    ausgewählten Einstellungen und verändert keine CoI-Meldung.
+
+### Spielstandsübergreifendes Standardprofil
+
+Das Profil kann Meldungsregeln einschließlich Tonzuordnung und automatischer
+Quittierung, Systemalarm-Konfiguration, Alarmfarben/UI-Skalierung und optional
+Fensterpositionen enthalten. Vor dem Import zeigt UNMA neue, geänderte,
+unveränderte und übersprungene Werte. Erst die Bestätigung führt die gewählten
+Kategorien atomar mit der Zielwelt zusammen; nicht ausgewählte und nur in der
+Zielwelt vorhandene Werte bleiben bestehen.
+
+Vanilla-Regeln werden anhand der stabilen Meldungsart (`NotificationType`) und,
+falls vorhanden, des Entity-Prototyps übertragen. Regeln für eine konkrete
+Entity-ID sind nicht zwischen Welten portabel und werden mit Ergebnisangabe
+übersprungen. Verlauf, aktive Alarmzustände, Quittierungen, laufende Timer und
+sonstige Laufzeit-Memories sind grundsätzlich ausgeschlossen. Eine importierte
+Ignore-Regel unterdrückt deshalb nur die UNMA-Verarbeitung; die ursprüngliche
+Captain-of-Industry-Meldung bleibt sichtbar und unverändert. Das atomar
+geschriebene Profil liegt in
+`%LOCALAPPDATA%\UNMA\profiles\default.json` und ist von den weltbezogenen
+`unma-world-<GameId>.json`-Dateien getrennt.
+
+Nur wenn `default.json` tatsächlich fehlt, erzeugt und persistiert UNMA das
+eingebaute Profil **UNMA Recommended Quiet**. Exakt erkannte, unveränderte
+frühere Built-ins – **UNMA Recommended Silent** mit sechs Silent-Regeln sowie
+der Quiet-Zwischenstand mit zwei zusätzlichen Hidden-Regeln – werden beim Laden
+nur im Speicher auf das aktuelle Quiet-Profil gebracht; ihre Dateien bleiben
+unverändert. Abweichende und benutzerdefinierte Profile werden weder ergänzt
+noch überschrieben. Das empfohlene Profil setzt die globalen Meldungsarten
+`UpgradeInProgress`,
+`DowngradeInProgress`, `VehicleGoalStruggling`,
+`VehicleNoReachableDesignations`, `NoTreesToHarvest` und
+`ExcavatorHasNoValidTruck` auf `SILENT`. Damit wird nur der UNMA-Ton
+abgeschaltet; die Captain-of-Industry-Meldung sowie ihre Anzeige in UNMA HOME
+und im Verlauf bleiben erhalten.
+
+`TruckCannotDeliver` und `TruckCannotDeliverMixedCargo` stehen im selben
+Profil auf `IGNORED`: UNMA verwirft neue Ereignisse dieser Arten noch vor
+`SetAlarm`, Verlaufserzeugung und Persistenz. CoI vergibt beim Zurücknehmen und
+erneuten Senden eine flüchtige `NotificationId`; ohne vollständiges Ignorieren
+würden dadurch fortlaufend neue Zustände entstehen und Incident-Linse,
+Verlauf sowie Spielstand-Persistenz belasten. Beim bestätigten Import und beim
+Normalisieren der Konfiguration bereinigt UNMA passende aktive Zustände und
+Memories. Ältere globale Verlaufseinträge werden ebenfalls entfernt, sofern
+keine spezifischere, nicht ignorierende Entity- oder Prototypregel erhalten
+bleiben muss. Die ursprüngliche Captain-of-Industry-Meldung bleibt sichtbar
+und unverändert. `CannotDeliverFromMineTower`, `VehicleGoalUnreachable` und
+`VehicleNoFuel` gehören bewusst nicht zur Empfehlung und bleiben normal sowie
+hörbar. Auch dieses Profil wird erst nach Importvorschau und ausdrücklicher
+Bestätigung mit einer Welt zusammengeführt.
 
 Die Gesundheitsanzeige des Spiels ist keine klassische 0–100-%-Skala:
 `10` ist der neutrale Basiswert und erst unter `0` entsteht ein

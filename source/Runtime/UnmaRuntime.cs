@@ -255,6 +255,8 @@ public sealed class UnmaRuntime : IDisposable
     private readonly ICalendar m_calendar;
     private readonly ISimLoopEvents m_simLoopEvents;
     private readonly UnmaStateStore m_store;
+    private readonly UnmaTransferProfileStore m_transferProfileStore;
+    private readonly object m_transferProfileGate = new();
     private readonly ExternalDisplayNotificationWriter m_externalDisplay =
         new();
     private readonly ExternalProviderDescriptor[] m_externalProviders;
@@ -371,10 +373,14 @@ public sealed class UnmaRuntime : IDisposable
     private bool m_alarmPersistencePending;
     private bool m_disposed;
     private ExternalDefinitionLoadResult m_externalDefinitions;
+    private bool m_transferProfileLoaded;
+    private UnmaTransferProfile m_transferProfile;
 
     public UnmaConfiguration Configuration { get; }
     public UnmaSettings Settings => m_settings;
     public string LastPersistenceError { get; private set; } = "";
+    public string LastTransferProfileError { get; private set; } = "";
+    public string TransferProfilePath => m_transferProfileStore?.Path ?? "";
     public PanelCloneFailure LastPanelCloneFailure { get; private set; }
 
     public UnmaRuntime(
@@ -390,7 +396,8 @@ public sealed class UnmaRuntime : IDisposable
         ISimLoopEvents simLoopEvents,
         UnmaStateStore store,
         UnmaSettings settings,
-        IEnumerable<ExternalProviderDescriptor> externalProviders = null)
+        IEnumerable<ExternalProviderDescriptor> externalProviders = null,
+        UnmaTransferProfileStore transferProfileStore = null)
     {
         m_notificationsManager = notificationsManager;
         m_entitiesManager = entitiesManager;
@@ -406,6 +413,7 @@ public sealed class UnmaRuntime : IDisposable
         m_calendar = calendar;
         m_simLoopEvents = simLoopEvents;
         m_store = store;
+        m_transferProfileStore = transferProfileStore;
         m_externalProviders = (externalProviders ??
                 Enumerable.Empty<ExternalProviderDescriptor>())
             .Where(provider => provider != null)
@@ -437,10 +445,19 @@ public sealed class UnmaRuntime : IDisposable
 
     private void RestoreAlarmHistory()
     {
+        var globallyIgnoredOverrideIds =
+            GetGloballyIgnoredHistoryPurgeOverrideIds(
+                Configuration.VanillaNotificationRules);
         foreach (var item in Configuration.AlarmHistory)
         {
-            m_alarmHistory.Add(CloneHistory(item));
             m_sequence = Math.Max(m_sequence, item.Sequence);
+            if (globallyIgnoredOverrideIds.Any(overrideId =>
+                    VanillaNotificationSuppressionPolicy
+                        .MatchesHistoryForOverride(item, overrideId)))
+            {
+                continue;
+            }
+            m_alarmHistory.Add(CloneHistory(item));
         }
         if (m_alarmHistory.Count > 0)
         {
@@ -496,10 +513,23 @@ public sealed class UnmaRuntime : IDisposable
     {
         var disabledVanillaOverrideIds =
             GetDisabledVanillaOverrideIds();
+        var vanillaRules = Configuration.VanillaNotificationRules
+            .Select(CloneVanillaNotificationRule)
+            .ToArray();
         var closedSuppressedHistory = false;
         foreach (var memory in Configuration.AlarmMemories)
         {
-            if (IsSuppressedVanillaAlarm(
+            var ignoredVanillaMemory = string.Equals(
+                    memory.Source,
+                    "vanilla",
+                    StringComparison.Ordinal) &&
+                VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                    vanillaRules,
+                    memory.OverrideId,
+                    memory.EntityId,
+                    memory.EntityPrototypeId) ==
+                VanillaNotificationBehavior.Ignored;
+            if (ignoredVanillaMemory || IsSuppressedVanillaAlarm(
                     memory.Source,
                     memory.OverrideId,
                     disabledVanillaOverrideIds,
@@ -2898,6 +2928,309 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    public UnmaTransferProfile GetTransferProfile()
+    {
+        lock (m_transferProfileGate)
+        {
+            if (m_transferProfileLoaded)
+            {
+                return m_transferProfile;
+            }
+
+            m_transferProfileLoaded = true;
+            if (m_transferProfileStore == null)
+            {
+                LastTransferProfileError =
+                    "Transfer profile storage is unavailable.";
+                return null;
+            }
+
+            m_transferProfile = m_transferProfileStore.Load(out var error);
+            LastTransferProfileError = error ?? "";
+            if (ConfigurationTransferPolicy
+                .ShouldInitializeRecommendedProfile(
+                    m_transferProfile,
+                    LastTransferProfileError,
+                    m_transferProfileStore.IsWriteBlocked))
+            {
+                var recommendedProfile =
+                    ConfigurationTransferPolicy
+                        .CreateRecommendedQuietProfile("0.10.1");
+                if (m_transferProfileStore.SaveIfMissing(
+                        recommendedProfile,
+                        out var alreadyExists,
+                        out var saveError))
+                {
+                    m_transferProfile = recommendedProfile;
+                }
+                else if (alreadyExists)
+                {
+                    m_transferProfile = m_transferProfileStore.Load(
+                        out var concurrentLoadError);
+                    LastTransferProfileError = concurrentLoadError ?? "";
+                    if (m_transferProfile == null &&
+                        string.IsNullOrWhiteSpace(LastTransferProfileError))
+                    {
+                        LastTransferProfileError =
+                            "Transfer profile changed while the recommended " +
+                            "profile was being initialized.";
+                    }
+                }
+                else
+                {
+                    LastTransferProfileError = saveError;
+                }
+            }
+            if (ConfigurationTransferPolicy
+                .TryRefreshPreviousRecommendedProfile(
+                    m_transferProfile,
+                    "0.10.1",
+                    out var upgradedRecommendedProfile))
+            {
+                // Keep custom and on-disk profiles untouched. This refreshes
+                // only an exact earlier built-in baseline for this session.
+                m_transferProfile = upgradedRecommendedProfile;
+            }
+            if (m_transferProfileStore.IsWriteBlocked &&
+                string.IsNullOrWhiteSpace(LastTransferProfileError))
+            {
+                LastTransferProfileError =
+                    m_transferProfileStore.WriteBlockReason;
+            }
+            return m_transferProfile;
+        }
+    }
+
+    public bool SaveTransferProfile(
+        string profileName,
+        TransferProfileSelection selection)
+    {
+        if (m_transferProfileStore == null)
+        {
+            LastTransferProfileError =
+                "Transfer profile storage is unavailable.";
+            return false;
+        }
+
+        try
+        {
+            UnmaConfiguration snapshot;
+            lock (m_configurationGate)
+            {
+                snapshot = CloneConfiguration(Configuration);
+            }
+            var profile = ConfigurationTransferPolicy.CreateProfile(
+                snapshot,
+                selection ?? new TransferProfileSelection(),
+                profileName,
+                "0.10.1");
+            if (!m_transferProfileStore.Save(profile, out var error))
+            {
+                LastTransferProfileError = error;
+                return false;
+            }
+
+            lock (m_transferProfileGate)
+            {
+                m_transferProfile = profile;
+                m_transferProfileLoaded = true;
+                LastTransferProfileError = "";
+            }
+            return true;
+        }
+        catch (Exception exception)
+        {
+            LastTransferProfileError = ExceptionDetail(
+                exception,
+                "Transfer profile could not be saved.");
+            return false;
+        }
+    }
+
+    public TransferImportPreview PreviewTransferProfile(
+        TransferProfileSelection selection)
+    {
+        try
+        {
+            var profile = SelectTransferProfile(selection);
+            if (profile == null)
+            {
+                if (string.IsNullOrWhiteSpace(LastTransferProfileError))
+                {
+                    LastTransferProfileError =
+                        "No transfer profile has been saved yet.";
+                }
+                return null;
+            }
+
+            UnmaConfiguration snapshot;
+            lock (m_configurationGate)
+            {
+                snapshot = CloneConfiguration(Configuration);
+            }
+            var preview = ConfigurationTransferPolicy.PreviewImport(
+                snapshot,
+                profile);
+            LastTransferProfileError = "";
+            return preview;
+        }
+        catch (Exception exception)
+        {
+            LastTransferProfileError = ExceptionDetail(
+                exception,
+                "Transfer profile preview could not be prepared.");
+            return null;
+        }
+    }
+
+    public bool ImportTransferProfile(
+        TransferProfileSelection selection,
+        out TransferImportPreview preview)
+    {
+        preview = null;
+        UnmaTransferProfile profile;
+        try
+        {
+            profile = SelectTransferProfile(selection);
+        }
+        catch (Exception exception)
+        {
+            LastTransferProfileError = ExceptionDetail(
+                exception,
+                "Transfer profile could not be read.");
+            return false;
+        }
+        if (profile == null)
+        {
+            if (string.IsNullOrWhiteSpace(LastTransferProfileError))
+            {
+                LastTransferProfileError =
+                    "No transfer profile has been saved yet.";
+            }
+            return false;
+        }
+
+        var systemAlarmReconciliations =
+            new List<KeyValuePair<
+                SystemAlarmDefinition,
+                SystemAlarmDefinition>>();
+        lock (m_persistenceGate)
+        {
+            UnmaConfiguration snapshot;
+            TransferImportResult result;
+            try
+            {
+                lock (m_configurationGate)
+                {
+                    snapshot = CloneConfiguration(Configuration);
+                }
+                result = ConfigurationTransferPolicy.Merge(
+                    snapshot,
+                    profile);
+                if (profile.Selection?.SystemAlarms == true)
+                {
+                    foreach (var importedAlarm in profile.SystemAlarms ??
+                                 new List<SystemAlarmDefinition>())
+                    {
+                        var alarmId = importedAlarm?.Id?.Trim() ?? "";
+                        if (alarmId.Length == 0)
+                        {
+                            continue;
+                        }
+                        var previousAlarm = (snapshot.SystemAlarms ??
+                                new List<SystemAlarmDefinition>())
+                            .LastOrDefault(alarm => string.Equals(
+                                alarm?.Id?.Trim(),
+                                alarmId,
+                                StringComparison.Ordinal));
+                        var currentAlarm = (result.Configuration.SystemAlarms ??
+                                new List<SystemAlarmDefinition>())
+                            .LastOrDefault(alarm => string.Equals(
+                                alarm?.Id?.Trim(),
+                                alarmId,
+                                StringComparison.Ordinal));
+                        if (currentAlarm != null)
+                        {
+                            systemAlarmReconciliations.Add(
+                                new KeyValuePair<
+                                    SystemAlarmDefinition,
+                                    SystemAlarmDefinition>(
+                                    previousAlarm,
+                                    currentAlarm));
+                        }
+                    }
+                }
+                lock (m_configurationGate)
+                {
+                    RestoreConfiguration(
+                        Configuration,
+                        result.Configuration);
+                }
+            }
+            catch (Exception exception)
+            {
+                LastTransferProfileError = ExceptionDetail(
+                    exception,
+                    "Transfer profile could not be applied.");
+                return false;
+            }
+
+            if (!SaveConfiguration())
+            {
+                lock (m_configurationGate)
+                {
+                    RestoreConfiguration(Configuration, snapshot);
+                }
+                RestoreConfigurationAlarmSnapshots();
+                LastTransferProfileError = string.IsNullOrWhiteSpace(
+                    LastPersistenceError)
+                    ? "Imported configuration could not be saved."
+                    : LastPersistenceError;
+                return false;
+            }
+            preview = result.Preview;
+        }
+
+        LastTransferProfileError = "";
+        try
+        {
+            foreach (var reconciliation in systemAlarmReconciliations)
+            {
+                ReconcileSystemAlarmTimingDefinition(
+                    reconciliation.Key,
+                    reconciliation.Value);
+            }
+            RefreshDisabledVanillaOverrideIds();
+            var soundStateChanged = ApplyTransferredSoundSettings(profile);
+            ReconcileTransferredVanillaNotifications(
+                profile,
+                soundStateChanged);
+            Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+            if (!SaveConfiguration())
+            {
+                LastTransferProfileError =
+                    "Transfer profile settings were saved, but the " +
+                    "reconciled live alarm state could not be saved: " +
+                    (string.IsNullOrWhiteSpace(LastPersistenceError)
+                        ? "unknown persistence error"
+                        : LastPersistenceError);
+                Log.Warning("UNMA: " + LastTransferProfileError);
+                preview?.Diagnostics.Add(LastTransferProfileError);
+                return false;
+            }
+        }
+        catch (Exception exception)
+        {
+            LastTransferProfileError =
+                "Transfer profile was saved, but live state refresh failed: " +
+                ExceptionDetail(exception, "unknown error");
+            Log.Warning("UNMA: " + LastTransferProfileError);
+            preview?.Diagnostics.Add(LastTransferProfileError);
+            return false;
+        }
+        return true;
+    }
+
     public bool SaveConfiguration()
     {
         lock (m_persistenceGate)
@@ -4089,6 +4422,306 @@ public sealed class UnmaRuntime : IDisposable
         };
     }
 
+    private UnmaTransferProfile SelectTransferProfile(
+        TransferProfileSelection requestedSelection)
+    {
+        var storedProfile = GetTransferProfile();
+        if (storedProfile == null)
+        {
+            return null;
+        }
+        var profile = CloneTransferProfile(storedProfile);
+        if (requestedSelection == null)
+        {
+            return profile;
+        }
+
+        var storedSelection = profile.Selection ??
+                              new TransferProfileSelection();
+        var selected = new TransferProfileSelection
+        {
+            NotificationBehaviors =
+                storedSelection.NotificationBehaviors &&
+                requestedSelection.NotificationBehaviors,
+            SoundSettings = storedSelection.SoundSettings &&
+                            requestedSelection.SoundSettings,
+            Appearance = storedSelection.Appearance &&
+                         requestedSelection.Appearance,
+            SystemAlarms = storedSelection.SystemAlarms &&
+                           requestedSelection.SystemAlarms,
+            WindowLayout = storedSelection.WindowLayout &&
+                           requestedSelection.WindowLayout,
+            NotificationRuleIdentities = requestedSelection
+                .NotificationRuleIdentities?.ToList(),
+        };
+        profile.Selection = selected;
+
+        if (!selected.NotificationBehaviors)
+        {
+            profile.NotificationRules.Clear();
+        }
+        else if (selected.NotificationRuleIdentities != null)
+        {
+            var identities = new HashSet<string>(
+                selected.NotificationRuleIdentities
+                    .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                    .Select(identity => identity.Trim()),
+                StringComparer.Ordinal);
+            profile.NotificationRules = profile.NotificationRules
+                .Where(rule => identities.Contains(
+                    TransferNotificationRuleIdentity(rule)))
+                .ToList();
+        }
+        return profile;
+    }
+
+    private static UnmaTransferProfile CloneTransferProfile(
+        UnmaTransferProfile source)
+    {
+        using var stream = new MemoryStream();
+        var serializer = new DataContractJsonSerializer(
+            typeof(UnmaTransferProfile));
+        serializer.WriteObject(stream, source);
+        stream.Position = 0;
+        return serializer.ReadObject(stream) as UnmaTransferProfile ??
+               throw new InvalidDataException(
+                   "Transfer profile snapshot is empty.");
+    }
+
+    private bool ApplyTransferredSoundSettings(
+        UnmaTransferProfile profile)
+    {
+        if (profile?.Selection?.SoundSettings != true ||
+            profile.SoundSettings == null ||
+            profile.SoundSettings.Count == 0)
+        {
+            return false;
+        }
+        var settings = profile.SoundSettings
+            .Where(item => item != null &&
+                           !string.IsNullOrWhiteSpace(item.AlarmId))
+            .GroupBy(item => item.AlarmId.Trim(), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last(),
+                StringComparer.Ordinal);
+        var changedLatchedAlarm = false;
+        lock (m_gate)
+        {
+            foreach (var state in m_alarms.Values)
+            {
+                if (!settings.TryGetValue(
+                        state.View.OverrideId ?? "",
+                        out var setting))
+                {
+                    continue;
+                }
+                var soundId = string.IsNullOrWhiteSpace(setting.SoundId)
+                    ? "auto"
+                    : setting.SoundId;
+                var changed = !string.Equals(
+                    state.View.SoundId,
+                    soundId,
+                    StringComparison.Ordinal);
+                state.View.SoundId = soundId;
+                changedLatchedAlarm |= changed && state.View.IsLatched;
+            }
+        }
+        return changedLatchedAlarm;
+    }
+
+    private void ReconcileTransferredVanillaNotifications(
+        UnmaTransferProfile profile,
+        bool persistTransferredSoundState)
+    {
+        var affectedOverrideIds = new HashSet<string>(StringComparer.Ordinal);
+        if (profile?.Selection?.NotificationBehaviors == true)
+        {
+            foreach (var rule in profile.NotificationRules ??
+                         new List<TransferNotificationRule>())
+            {
+                if (rule != null &&
+                    VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                        rule.AlarmId))
+                {
+                    affectedOverrideIds.Add(rule.AlarmId.Trim());
+                }
+            }
+        }
+        if (profile?.Selection?.SoundSettings == true)
+        {
+            foreach (var setting in profile.SoundSettings ??
+                         new List<TransferSoundSetting>())
+            {
+                if (setting != null &&
+                    VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                        setting.AlarmId))
+                {
+                    affectedOverrideIds.Add(setting.AlarmId.Trim());
+                }
+            }
+        }
+        if (profile?.Selection?.Appearance == true)
+        {
+            lock (m_gate)
+            {
+                foreach (var overrideId in m_alarms.Values
+                             .Where(state => string.Equals(
+                                 state.View.Source,
+                                 "vanilla",
+                                 StringComparison.Ordinal))
+                             .Select(state => state.View.OverrideId)
+                             .Where(VanillaNotificationSuppressionPolicy
+                                 .IsVanillaOverrideId))
+                {
+                    affectedOverrideIds.Add(overrideId.Trim());
+                }
+            }
+        }
+
+        if (affectedOverrideIds.Count == 0)
+        {
+            if (persistTransferredSoundState)
+            {
+                PersistAlarmState();
+            }
+            return;
+        }
+
+        var rules = GetVanillaNotificationRulesSnapshot();
+        var globallyIgnoredOverrideIds =
+            GetGloballyIgnoredHistoryPurgeOverrideIds(
+                rules,
+                affectedOverrideIds);
+        var purged = false;
+        lock (m_gate)
+        {
+            var matchingStates = m_alarms
+                .Where(pair =>
+                    string.Equals(
+                        pair.Value.View.Source,
+                        "vanilla",
+                        StringComparison.Ordinal) &&
+                    affectedOverrideIds.Contains(
+                        pair.Value.View.OverrideId ?? "") &&
+                    ResolveVanillaNotificationBehavior(
+                        pair.Value.View,
+                        rules) == VanillaNotificationBehavior.Ignored)
+                .ToArray();
+            var sequences = new HashSet<long>(matchingStates
+                .Select(pair => pair.Value.Sequence)
+                .Where(sequence => sequence > 0));
+            foreach (var matchingState in matchingStates)
+            {
+                m_alarms.Remove(matchingState.Key);
+            }
+            var removedHistoryCount = m_alarmHistory.RemoveAll(history =>
+                sequences.Contains(history.Sequence) ||
+                globallyIgnoredOverrideIds.Any(overrideId =>
+                    VanillaNotificationSuppressionPolicy
+                        .MatchesHistoryForOverride(history, overrideId)));
+            if (matchingStates.Length > 0 || removedHistoryCount > 0)
+            {
+                m_alarmHistoryRevision++;
+                purged = true;
+            }
+        }
+
+        INotification[] currentNotifications;
+        try
+        {
+            currentNotifications = m_notificationsManager
+                .FetchAllNotifications()
+                .Where(notification => affectedOverrideIds.Contains(
+                    "vanilla:" + notification.Proto.Id.Value))
+                .ToArray();
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                "UNMA: transferred vanilla notifications could not be " +
+                "replayed: " + exception.Message);
+            if (purged || persistTransferredSoundState)
+            {
+                PersistAlarmState();
+            }
+            throw;
+        }
+
+        BeginAlarmPersistenceBatch();
+        var replayChangedState = false;
+        try
+        {
+            foreach (var notification in currentNotifications)
+            {
+                OnNotificationAdded(notification);
+            }
+        }
+        finally
+        {
+            replayChangedState = EndAlarmPersistenceBatch();
+        }
+        if (purged || replayChangedState || persistTransferredSoundState)
+        {
+            PersistAlarmState();
+        }
+    }
+
+    private static HashSet<string>
+        GetGloballyIgnoredHistoryPurgeOverrideIds(
+            IEnumerable<VanillaNotificationRule> rules,
+            ISet<string> affectedOverrideIds = null)
+    {
+        var snapshot = (rules ?? Enumerable.Empty<VanillaNotificationRule>())
+            .Where(rule =>
+                rule != null &&
+                VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
+                    rule.AlarmId))
+            .ToArray();
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rule in snapshot.Where(rule =>
+                     rule.Scope ==
+                         VanillaNotificationScope.NotificationType &&
+                     rule.Behavior == VanillaNotificationBehavior.Ignored))
+        {
+            var overrideId = rule.AlarmId.Trim();
+            if ((affectedOverrideIds != null &&
+                 !affectedOverrideIds.Contains(overrideId)) ||
+                snapshot.Any(exception =>
+                    exception.Scope !=
+                        VanillaNotificationScope.NotificationType &&
+                    exception.Behavior !=
+                        VanillaNotificationBehavior.Ignored &&
+                    string.Equals(
+                        exception.AlarmId?.Trim(),
+                        overrideId,
+                        StringComparison.Ordinal)))
+            {
+                continue;
+            }
+            result.Add(overrideId);
+        }
+        return result;
+    }
+
+    private static string TransferNotificationRuleIdentity(
+        TransferNotificationRule rule)
+    {
+        if (rule == null)
+        {
+            return "";
+        }
+        return VanillaNotificationSuppressionPolicy.RuleIdentity(
+            new VanillaNotificationRule
+            {
+                AlarmId = rule.AlarmId,
+                Scope = rule.Scope,
+                Behavior = rule.Behavior,
+                EntityId = -1,
+                EntityPrototypeId = rule.EntityPrototypeId,
+            });
+    }
+
     private static UnmaConfiguration CloneConfiguration(
         UnmaConfiguration source)
     {
@@ -4469,6 +5102,13 @@ public sealed class UnmaRuntime : IDisposable
             .OrderBy(candidate => candidate.Source)
             .ThenBy(candidate => candidate.Name)
             .ThenBy(candidate => candidate.OverrideId)
+            .ThenBy(candidate => candidate.EntityId)
+            .ThenBy(
+                candidate => candidate.EntityPrototypeId,
+                StringComparer.Ordinal)
+            .ThenBy(
+                candidate => candidate.SlotId,
+                StringComparer.Ordinal)
             .Select(candidate => Clone(candidate))
             .ToArray();
     }
@@ -5262,6 +5902,11 @@ public sealed class UnmaRuntime : IDisposable
             EntityPrototypeId = entityPrototypeId,
             Behavior = VanillaNotificationBehavior.Ignored,
         };
+        var rules = GetVanillaNotificationRulesSnapshot();
+        var purgeAllHistory =
+            scope == VanillaNotificationScope.NotificationType &&
+            GetGloballyIgnoredHistoryPurgeOverrideIds(rules)
+                .Contains(overrideId);
         lock (m_gate)
         {
             var matchingStates = m_alarms
@@ -5273,13 +5918,11 @@ public sealed class UnmaRuntime : IDisposable
                     MatchesVanillaScopeIncludingAliases(
                         targetRule,
                         scope,
-                        pair.Value.View))
+                        pair.Value.View) &&
+                    ResolveVanillaNotificationBehavior(
+                        pair.Value.View,
+                        rules) == VanillaNotificationBehavior.Ignored)
                 .ToArray();
-            if (matchingStates.Length == 0)
-            {
-                return;
-            }
-
             var sequences = new HashSet<long>(
                 matchingStates
                     .Select(pair => pair.Value.Sequence)
@@ -5288,8 +5931,15 @@ public sealed class UnmaRuntime : IDisposable
             {
                 m_alarms.Remove(matchingState.Key);
             }
-            m_alarmHistory.RemoveAll(history =>
-                sequences.Contains(history.Sequence));
+            var removedHistoryCount = m_alarmHistory.RemoveAll(history =>
+                sequences.Contains(history.Sequence) ||
+                purgeAllHistory &&
+                VanillaNotificationSuppressionPolicy
+                    .MatchesHistoryForOverride(history, overrideId));
+            if (matchingStates.Length == 0 && removedHistoryCount == 0)
+            {
+                return;
+            }
             m_alarmHistoryRevision++;
         }
     }
@@ -8388,12 +9038,22 @@ public sealed class UnmaRuntime : IDisposable
         {
             return;
         }
+        GetNotificationEntityScope(
+            notification,
+            out var entityId,
+            out var entityPrototypeId);
+        if (ResolveVanillaNotificationBehavior(
+                overrideId,
+                entityId,
+                entityPrototypeId) == VanillaNotificationBehavior.Ignored)
+        {
+            return;
+        }
+
         var slotId = overrideId;
         var message = notification.Message.Value;
         var severity = ClassifyNotification(notification);
         var detail = id;
-        var entityId = -1;
-        var entityPrototypeId = "";
         var entityTitle = "";
         if (notification.Object.HasValue)
         {
@@ -8404,20 +9064,10 @@ public sealed class UnmaRuntime : IDisposable
                 entityTitle = objectTitle;
                 detail += " · " + objectTitle;
             }
-            if (notificationObject is IEntity entity)
+            if (entityId >= 0)
             {
-                entityId = entity.Id.Value;
-                entityPrototypeId = entity.Prototype.Id.Value;
-                slotId += ":entity:" + entity.Id.Value;
+                slotId += ":entity:" + entityId;
             }
-        }
-
-        if (ResolveVanillaNotificationBehavior(
-                overrideId,
-                entityId,
-                entityPrototypeId) == VanillaNotificationBehavior.Ignored)
-        {
-            return;
         }
         var reconciledLegacyHistory =
             SustainedVanillaAlarmPolicy.IsSustainedPrototype(id) &&
@@ -8457,6 +9107,17 @@ public sealed class UnmaRuntime : IDisposable
         {
             return;
         }
+        GetNotificationEntityScope(
+            notification,
+            out var entityId,
+            out var entityPrototypeId);
+        if (ResolveVanillaNotificationBehavior(
+                overrideId,
+                entityId,
+                entityPrototypeId) == VanillaNotificationBehavior.Ignored)
+        {
+            return;
+        }
         if (SustainedVanillaAlarmPolicy.IgnoresNotificationRemoval(
                 prototypeId))
         {
@@ -8488,8 +9149,19 @@ public sealed class UnmaRuntime : IDisposable
 
     private void OnNotificationSuppressChanged(INotification notification)
     {
-        if (!GetVanillaNotificationEnabled(
-                "vanilla:" + notification.Proto.Id.Value))
+        var overrideId = "vanilla:" + notification.Proto.Id.Value;
+        if (!GetVanillaNotificationEnabled(overrideId))
+        {
+            return;
+        }
+        GetNotificationEntityScope(
+            notification,
+            out var entityId,
+            out var entityPrototypeId);
+        if (ResolveVanillaNotificationBehavior(
+                overrideId,
+                entityId,
+                entityPrototypeId) == VanillaNotificationBehavior.Ignored)
         {
             return;
         }
@@ -8535,6 +9207,21 @@ public sealed class UnmaRuntime : IDisposable
         return SustainedVanillaAlarmPolicy.AlarmKeyForNotification(
             notification.Proto.Id.Value,
             NotificationKey(notification));
+    }
+
+    private static void GetNotificationEntityScope(
+        INotification notification,
+        out int entityId,
+        out string entityPrototypeId)
+    {
+        entityId = -1;
+        entityPrototypeId = "";
+        if (notification.Object.HasValue &&
+            notification.Object.Value is IEntity entity)
+        {
+            entityId = entity.Id.Value;
+            entityPrototypeId = entity.Prototype.Id.Value;
+        }
     }
 
     private void SetAlarm(

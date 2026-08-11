@@ -1141,6 +1141,8 @@ public sealed class UnmaConfiguration
             MigrateAlarmHistory();
         }
 
+        PurgeIgnoredVanillaPersistence();
+
         MergeDefaultSystemAlarms(loadedSchemaVersion);
         AlarmTimingMemoryPolicy.NormalizeMemories(
             AlarmTimingMemories,
@@ -1184,6 +1186,52 @@ public sealed class UnmaConfiguration
             }
         }
         SchemaVersion = CurrentSchemaVersion;
+    }
+
+    private void PurgeIgnoredVanillaPersistence()
+    {
+        var ignoredMemories = AlarmMemories
+            .Where(memory =>
+                memory != null &&
+                string.Equals(
+                    memory.Source,
+                    "vanilla",
+                    StringComparison.Ordinal) &&
+                VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                    VanillaNotificationRules,
+                    memory.OverrideId,
+                    memory.EntityId,
+                    memory.EntityPrototypeId) ==
+                VanillaNotificationBehavior.Ignored)
+            .ToArray();
+        var ignoredSequences = new HashSet<long>(ignoredMemories
+            .Select(memory => memory.Sequence)
+            .Where(sequence => sequence > 0));
+        foreach (var memory in ignoredMemories)
+        {
+            AlarmMemories.Remove(memory);
+        }
+
+        var globallyIgnoredOverrideIds = VanillaNotificationRules
+            .Where(rule =>
+                rule.Scope == VanillaNotificationScope.NotificationType &&
+                rule.Behavior == VanillaNotificationBehavior.Ignored)
+            .Select(rule => rule.AlarmId)
+            .Where(overrideId => !VanillaNotificationRules.Any(exception =>
+                exception.Scope !=
+                    VanillaNotificationScope.NotificationType &&
+                exception.Behavior != VanillaNotificationBehavior.Ignored &&
+                string.Equals(
+                    exception.AlarmId,
+                    overrideId,
+                    StringComparison.Ordinal)))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        AlarmHistory.RemoveAll(history =>
+            ignoredSequences.Contains(history.Sequence) ||
+            globallyIgnoredOverrideIds.Any(overrideId =>
+                VanillaNotificationSuppressionPolicy
+                    .MatchesHistoryForOverride(history, overrideId)));
     }
 
     private static float NormalizeFinite(float value, float fallback)

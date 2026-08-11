@@ -11,6 +11,9 @@ Set-StrictMode -Version Latest
 
 $runtimeTypeName = "UNMA.Runtime.UnmaRuntime"
 $stateStoreTypeName = "UNMA.Runtime.UnmaStateStore"
+$transferProfileStoreTypeName = "UNMA.Runtime.UnmaTransferProfileStore"
+$configurationTransferPolicyTypeName =
+    "UNMA.Domain.ConfigurationTransferPolicy"
 $configurationTypeName = "UNMA.Domain.UnmaConfiguration"
 $timingMemoryPolicyTypeName = "UNMA.Domain.AlarmTimingMemoryPolicy"
 $escalationPolicyTypeName = "UNMA.Domain.AlarmEscalationPolicy"
@@ -1607,6 +1610,180 @@ function Assert-CallsRuntimeMethodExactlyOnce {
 Write-Host (
     "UNMA configuration rollback IL regression passed: " +
     "$($configurationFields.Count) DataMember fields are restored atomically.")
+
+$importTransferProfile = @(
+    $methods | Where-Object Name -eq "ImportTransferProfile")
+Assert-Condition `
+    ($importTransferProfile.Count -eq 1) `
+    "ImportTransferProfile was not found exactly once."
+$importSaveCalls = @(Read-MethodInstructions $importTransferProfile[0] |
+    Where-Object {
+        ($_.OpCode.Name -eq "call" -or
+            $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq $runtimeTypeName -and
+        $_.Operand.Name -eq "SaveConfiguration"
+    })
+Assert-Condition `
+    ($importSaveCalls.Count -eq 2) `
+    ("ImportTransferProfile must persist once before and once after " +
+        "live-state reconciliation.")
+Write-Host "UNMA transfer-profile persistence IL regression passed."
+
+$getTransferProfile = @(
+    $methods | Where-Object Name -eq "GetTransferProfile")
+Assert-Condition `
+    ($getTransferProfile.Count -eq 1) `
+    "GetTransferProfile was not found exactly once."
+$getTransferProfileCalls = @(
+    Read-MethodInstructions $getTransferProfile[0] | Where-Object {
+        ($_.OpCode.Name -eq "call" -or
+            $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase]
+    })
+$recommendedFactoryCalls = @($getTransferProfileCalls |
+    Where-Object {
+        $_.Operand.DeclaringType.FullName -eq
+            $configurationTransferPolicyTypeName -and
+        $_.Operand.Name -eq "CreateRecommendedQuietProfile"
+    })
+$recommendedGuardCalls = @($getTransferProfileCalls |
+    Where-Object {
+        $_.Operand.DeclaringType.FullName -eq
+            $configurationTransferPolicyTypeName -and
+        $_.Operand.Name -eq "ShouldInitializeRecommendedProfile"
+    })
+$recommendedUpgradeCalls = @($getTransferProfileCalls |
+    Where-Object {
+        $_.Operand.DeclaringType.FullName -eq
+            $configurationTransferPolicyTypeName -and
+        $_.Operand.Name -eq "TryRefreshPreviousRecommendedProfile"
+    })
+$createIfMissingCalls = @($getTransferProfileCalls |
+    Where-Object {
+        $_.Operand.DeclaringType.FullName -eq
+            $transferProfileStoreTypeName -and
+        $_.Operand.Name -eq "SaveIfMissing"
+    })
+$overwritingSaveCalls = @($getTransferProfileCalls |
+    Where-Object {
+        $_.Operand.DeclaringType.FullName -eq
+            $transferProfileStoreTypeName -and
+        $_.Operand.Name -eq "Save"
+    })
+$automaticImportCalls = @($getTransferProfileCalls |
+    Where-Object {
+        $_.Operand.DeclaringType.FullName -eq $runtimeTypeName -and
+        $_.Operand.Name -eq "ImportTransferProfile"
+    })
+Assert-Condition `
+    ($recommendedFactoryCalls.Count -eq 1 -and
+        $recommendedGuardCalls.Count -eq 1 -and
+        $recommendedUpgradeCalls.Count -eq 1 -and
+        $createIfMissingCalls.Count -eq 1) `
+    "Recommended profile initialization must retain its guarded create-only path."
+Assert-Condition `
+    ($overwritingSaveCalls.Count -eq 0 -and
+        $automaticImportCalls.Count -eq 0) `
+    "Recommended profile initialization must neither overwrite nor auto-import."
+Write-Host "UNMA recommended transfer-profile seed IL regression passed."
+
+foreach ($ignoredHotPath in @(
+        [pscustomobject]@{
+            Method = "OnNotificationAdded"
+            Downstream = @("SetAlarm")
+        },
+        [pscustomobject]@{
+            Method = "OnNotificationRemoved"
+            Downstream = @("ClearAlarm", "PruneInactiveVanillaHistory")
+        },
+        [pscustomobject]@{
+            Method = "OnNotificationSuppressChanged"
+            Downstream = @("PersistAlarmState")
+        })) {
+    $hotPathMethod = @($methods | Where-Object Name -eq $ignoredHotPath.Method)
+    Assert-Condition `
+        ($hotPathMethod.Count -eq 1) `
+        "$($ignoredHotPath.Method) was not found exactly once."
+    $hotPathInstructions = @(Read-MethodInstructions $hotPathMethod[0])
+    $resolveBehaviorIndices = @(for (
+            $index = 0;
+            $index -lt $hotPathInstructions.Count;
+            $index++) {
+        $instruction = $hotPathInstructions[$index]
+        if ((Test-IsMethodInstruction `
+                $instruction `
+                $runtimeTypeName `
+                "ResolveVanillaNotificationBehavior")) {
+            $index
+        }
+    })
+    Assert-Condition `
+        ($resolveBehaviorIndices.Count -eq 1) `
+        "$($ignoredHotPath.Method) must resolve Ignored exactly once."
+    foreach ($downstreamName in $ignoredHotPath.Downstream) {
+        $downstreamIndices = @(for (
+                $index = 0;
+                $index -lt $hotPathInstructions.Count;
+                $index++) {
+            if (Test-IsMethodInstruction `
+                    $hotPathInstructions[$index] `
+                    $runtimeTypeName `
+                    $downstreamName) {
+                $index
+            }
+        })
+        Assert-Condition `
+            ($downstreamIndices.Count -ge 1 -and
+                $downstreamIndices[0] -gt $resolveBehaviorIndices[0]) `
+            ("$($ignoredHotPath.Method) must check Ignored before " +
+                "$downstreamName.")
+    }
+}
+
+$configurationNormalize = @($configurationType.GetMethods($bindingFlags) |
+    Where-Object Name -eq "Normalize")
+Assert-Condition `
+    ($configurationNormalize.Count -eq 1) `
+    "UnmaConfiguration.Normalize was not found exactly once."
+$ignoredPersistencePurgeCalls = @(
+    Read-MethodInstructions $configurationNormalize[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $configurationTypeName `
+            "PurgeIgnoredVanillaPersistence"
+    })
+Assert-Condition `
+    ($ignoredPersistencePurgeCalls.Count -eq 1) `
+    "Normalize must purge ignored Vanilla persistence exactly once."
+$purgeIgnoredLambdaMethods = @(
+    $runtimeType.GetNestedTypes($bindingFlags) |
+        ForEach-Object { $_.GetMethods($bindingFlags) } |
+        Where-Object {
+            $_.Name -like "<PurgeIgnoredVanillaAlarms>*"
+        })
+$exceptionAwarePurgePredicates = @(
+    $purgeIgnoredLambdaMethods | Where-Object {
+        $instructions = @(Read-MethodInstructions $_)
+        $matchesScope = @($instructions | Where-Object {
+            Test-IsMethodInstruction `
+                $_ `
+                $runtimeTypeName `
+                "MatchesVanillaScopeIncludingAliases"
+        }).Count -eq 1
+        $resolvesEffectiveBehavior = @($instructions | Where-Object {
+            Test-IsMethodInstruction `
+                $_ `
+                $runtimeTypeName `
+                "ResolveVanillaNotificationBehavior"
+        }).Count -eq 1
+        $matchesScope -and $resolvesEffectiveBehavior
+    })
+Assert-Condition `
+    ($exceptionAwarePurgePredicates.Count -eq 1) `
+    ("PurgeIgnoredVanillaAlarms must preserve more-specific non-Ignored " +
+        "rules by resolving effective behavior in its state predicate.")
+Write-Host "UNMA ignored-notification hot-path IL regression passed."
 
 foreach ($mutationMethodName in @(
         "UpdateRuleWithPersistenceLock",

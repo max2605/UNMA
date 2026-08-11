@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.10.0** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.1** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -87,7 +87,7 @@ fields or closing the focused window releases the keyboard again.
 | **HISTORY** | Completed and current alarm events |
 | **SYSTEM** | Built-in health, food, and worker monitoring |
 | **NOTIFICATION OPTIONS** | Per-notification sound, visibility, logging, and Vanilla behavior |
-| **OPTIONS** | Content scale, alarm colors, sound rescan, and integration diagnostics |
+| **OPTIONS** | Content scale, alarm colors, cross-save profile, sound rescan, and integration diagnostics |
 
 ## Alarm states
 
@@ -196,7 +196,7 @@ or silences an alarm and never changes history or audio state.
 
 Incident snapshots are transient, derived results recalculated from the
 current alarm and history snapshots. They add no saved fields and require
-no new schema migration in 0.10.0. For performance, the UI requests at most
+no new schema migration in 0.10.1. For performance, the UI requests at most
 one result per frame and filter. Runtime history is copied only when its
 revision changes, global pressure is bounded to the newest 8,192 occurrences,
 and sorting plus analysis run outside the alarm lock. If revisions keep
@@ -416,8 +416,8 @@ display slots, not duplicate alarm states.
 ## Vanilla game notifications
 
 Open **NOTIFICATION OPTIONS** to configure known Vanilla notification types.
-Object-bound notifications can be configured for one exact object or for every
-object of the same prototype.
+They can be configured globally by notification type, for one exact object, or
+for every object of the same prototype.
 
 | Mode | UNMA sound | HOME / counters | History |
 | --- | --- | --- | --- |
@@ -426,7 +426,8 @@ object of the same prototype.
 | **LOG, SOUND OFF, HIDE** | Disabled | Hidden | Stored |
 | **DO NOT LOG / IGNORE COMPLETELY** | Disabled | Hidden | Not created |
 
-Object-specific rules override prototype rules. Completely ignoring a type
+Object-specific rules override prototype rules, which override global
+notification-type rules. Completely ignoring a type
 also removes matching active and recent events that UNMA can still identify
 safely.
 
@@ -516,6 +517,93 @@ The startup defaults in `config.json` are:
 | `pollIntervalMs` | `500` | Evaluate custom rules every 500 ms |
 | `enableSystemAlarms` | `true` | Monitor health, food, and workers |
 
+### Cross-save default profile
+
+The current configuration can be saved as a default profile under **OPTIONS**
+and imported into another save. The profile is separate from world files and
+is stored at:
+
+```text
+%LOCALAPPDATA%\UNMA\profiles\default.json
+```
+
+Only when this file is genuinely absent does UNMA create and persist the
+built-in **UNMA Recommended Quiet** profile. Exactly recognized, unchanged
+earlier built-ins – **UNMA Recommended Silent** with six Silent rules and the
+intermediate Quiet profile with two additional Hidden rules – are upgraded to
+the current Quiet profile in memory only; their seed files remain unchanged.
+Divergent and custom profiles are neither supplemented nor overwritten. The
+built-in profile is not imported into a save automatically: its preview must
+still be inspected and the import explicitly confirmed.
+
+The recommended profile sets only these global notification types to
+**SILENT** or **LOG · SOUND OFF**:
+
+- `UpgradeInProgress`;
+- `DowngradeInProgress`;
+- `VehicleGoalStruggling`;
+- `VehicleNoReachableDesignations`;
+- `NoTreesToHarvest`;
+- `ExcavatorHasNoValidTruck`.
+
+**SILENT** disables only UNMA's sound for these notifications. The original
+Captain of Industry notification remains unchanged, and UNMA continues to
+show and record it in HOME and history.
+
+The profile additionally sets these notification types to **IGNORED** or
+**DO NOT LOG · IGNORE COMPLETELY**:
+
+- `TruckCannotDeliver`;
+- `TruckCannotDeliverMixedCargo`.
+
+CoI frequently withdraws and re-emits these vehicle notifications with a new,
+transient `NotificationId`. **IGNORED** discards each new UNMA event before
+`SetAlarm`, history creation, and persistence, preventing the flicker from
+continually increasing Incident Lens, history, and save-processing load. A
+confirmed import and configuration normalization remove matching active states
+and memories. They also remove older global history entries when no more
+specific non-ignored entity or prototype rule must preserve them. The original
+Captain of Industry notification remains visible and unchanged.
+`CannotDeliverFromMineTower`, `VehicleGoalUnreachable`, and `VehicleNoFuel` are
+deliberately excluded and remain normal and audible.
+
+The following categories can be selected independently when saving and
+importing:
+
+- notification rules, including sound assignments and automatic
+  acknowledgement;
+- system-alarm configuration;
+- alarm colors and UI scale;
+- window positions and sizes; this category is unselected by default.
+
+The startup options in `config.json`, including global audio enablement and
+volume, already apply independently of a save and are not duplicated in the
+profile.
+
+In the source save, select the required categories and save the default
+profile. In the target save, open the import and inspect its preview. It
+classifies values as new, changed, unchanged, or skipped. Only confirmation
+atomically merges the selected values into the target configuration. Matching
+keys take the profile value, while other target values and unselected
+categories remain intact. If validation or the initial atomic configuration
+write fails, the complete target configuration remains unchanged. A rare
+failure while subsequently saving the reconciled live alarm state is reported
+as a partial failure; settings already imported successfully remain in place.
+
+A Vanilla rule is portable when it is stored by stable notification type
+(`NotificationType`) or by notification type plus entity prototype. Rules for
+one exact entity ID belong to one world and are safely skipped; both the
+preview and final result report them. For example, an `UpgradeInProgress` rule
+for every object of a conveyor prototype can remain completely ignored by UNMA
+without accidentally targeting an unrelated entity with the same numeric ID
+in the new save.
+
+History, active alarms, acknowledgements, running delays, escalations, snooze
+states, and all other timing memories are never written to or imported from
+the profile. A transferred ignore rule affects UNMA only. It neither disables
+nor changes the original Captain of Industry notification. UNMA writes the
+profile atomically through a temporary file and backup.
+
 ## Provider-mod alarms
 
 Active mods can extend UNMA with alarm definitions, entity metrics, templates,
@@ -560,8 +648,9 @@ archive. The following survive saving and reloading:
 Schema 20 migrates configurations from earlier UNMA versions with every
 existing panel unassigned. Their previous **ALL** board behavior therefore
 remains unchanged until areas are deliberately created and assigned.
-The Incident Lens stores no configuration or result of its own, so 0.10.0
-remains on schema 20. If a configuration from a newer UNMA schema is found,
+The Incident Lens stores no configuration or result of its own. The separate
+default profile does not extend a world file either, so 0.10.1 remains on
+schema 20. If a configuration from a newer UNMA schema is found,
 this version leaves the main file and its backup artifacts byte-for-byte
 untouched, uses safe defaults, and blocks configuration writes for the session
 instead of discarding unknown future fields.

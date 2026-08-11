@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using UNMA.Localization;
 
@@ -32,6 +33,21 @@ public static class PanelSlotProjection
             return view.OccurrenceId.Trim();
         }
         return view.Key?.Trim() ?? "";
+    }
+
+    public static string StableViewIdentity(AlarmView view)
+    {
+        if (view == null)
+        {
+            return "";
+        }
+        return string.Join(
+            "|",
+            view.Source?.Trim() ?? "",
+            view.OverrideId?.Trim() ?? "",
+            view.EntityId.ToString(CultureInfo.InvariantCulture),
+            view.EntityPrototypeId?.Trim() ?? "",
+            StableAlarmId(view));
     }
 
     public static string LegacyVanillaSlotId(

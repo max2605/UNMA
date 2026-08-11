@@ -76,6 +76,13 @@ public sealed class UnmaMod : IMod
         var store = new UnmaStateStore(
             Manifest.RootDirectoryPath,
             gameId);
+        var transferProfileStore = new UnmaTransferProfileStore(
+            System.IO.Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                "UNMA",
+                "profiles",
+                "default.json"));
         m_runtime = new UnmaRuntime(
             resolver.Resolve<INotificationsManager>(),
             resolver.Resolve<IEntitiesManager>(),
@@ -89,7 +96,8 @@ public sealed class UnmaMod : IMod
             resolver.Resolve<ISimLoopEvents>(),
             store,
             ReadSettings(),
-            DiscoverActiveExternalProviders());
+            DiscoverActiveExternalProviders(),
+            transferProfileStore);
         m_runtime.Initialize();
 
         m_overlay = UnmaOverlayController.Create(

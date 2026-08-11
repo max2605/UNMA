@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.10.1 – 2026-08-11
+
+- Unter **OPTIONEN** kann die aktuelle Konfiguration als spielstandsübergreifendes
+  Standardprofil gespeichert und in einer anderen Welt mit Vorschau importiert
+  werden. Meldungsregeln, Systemmeldungen, Alarmfarben/UI-Skalierung und
+  Fensterpositionen sind einzeln auswählbar.
+- Nur wenn `%LOCALAPPDATA%\UNMA\profiles\default.json` tatsächlich fehlt,
+  erzeugt und persistiert UNMA **UNMA Recommended Quiet**. Diese
+  Initialisierung überschreibt keine vorhandene Datei. Exakt erkannte,
+  unveränderte frühere Built-ins mit sechs Silent-Regeln oder mit sechs
+  Silent- und zwei Hidden-Regeln werden nur im Speicher aktualisiert; ihre
+  Seed-Dateien sowie abweichende und benutzerdefinierte Profile bleiben
+  unverändert. Importiert wird weiterhin erst nach Vorschau und ausdrücklicher
+  Bestätigung.
+- Das empfohlene Profil stellt `UpgradeInProgress`, `DowngradeInProgress`,
+  `VehicleGoalStruggling`, `VehicleNoReachableDesignations`,
+  `NoTreesToHarvest` und `ExcavatorHasNoValidTruck` auf Silent. Nur der
+  UNMA-Ton entfällt; CoI-Meldung, HOME und Verlauf bleiben erhalten.
+- `TruckCannotDeliver` und `TruckCannotDeliverMixedCargo` stehen auf Ignored.
+  UNMA verwirft neue Ereignisse vor `SetAlarm`, Verlauf und Persistenz. Import
+  und Normalisierung bereinigen passende aktive Zustände und Memories sowie
+  ältere globale Verlaufseinträge, sofern keine spezifischere nicht ignorierende
+  Regel gilt. Das senkt Incident-Lens- und Spielstandlast bei flackernden
+  `NotificationId`-Werten; die originale CoI-Meldung bleibt unverändert.
+  `CannotDeliverFromMineTower`, `VehicleGoalUnreachable` und `VehicleNoFuel`
+  bleiben hörbar.
+- Der Import führt ausgewählte Werte atomar mit der Zielwelt zusammen: Die
+  Vorschau unterscheidet neue, geänderte, unveränderte und übersprungene Werte;
+  vorhandene Werte außerhalb der Auswahl bleiben erhalten.
+- Vanilla-Regeln nach stabiler Meldungsart (`NotificationType`) und
+  Entity-Prototyp sind portabel. Instanzgebundene Entity-Regeln werden wegen
+  ihrer weltabhängigen Entity-ID sicher übersprungen und im Ergebnis gemeldet.
+- Manuell bearbeitete oder beschädigte Profile werden vor dem Merge semantisch
+  geprüft. Ungültige Werte bleiben unverändert und erscheinen als übersprungen;
+  nicht installierte Töne werden bereits in der Vorschau gemeldet.
+- Verlauf, aktive Alarme, Quittierungen, Timer und sonstige Laufzeit-Memories
+  werden weder exportiert noch importiert. Importierte Ignore-Regeln wirken nur
+  in UNMA; die ursprüngliche Captain-of-Industry-Meldung bleibt unverändert.
+- Das atomar geschriebene Standardprofil liegt unter
+  `%LOCALAPPDATA%\UNMA\profiles\default.json`. Das öffentliche Erweiterungs-API
+  und die Assembly-Bindung bleiben auf V1, das Persistenzschema bleibt 20.
+
 ## 0.10.0 – 2026-08-11
 
 - 0.10.0 bündelt und stabilisiert die vollständige Ausbaureihe 0.9.19 bis
