@@ -104,7 +104,10 @@ internal static class InstrumentPanelRenderer
             wordWrap = false,
         };
         titleStyle.normal.textColor = Cream;
-        NativeGUI.Label(titleRect, definition.Title, titleStyle);
+        NativeGUI.Label(
+            titleRect,
+            FitText(definition.Title, titleStyle, titleRect.width),
+            titleStyle);
 
         var faceTop = reserveActionBar ? 56f : 28f;
         var face = new Rect(
@@ -172,7 +175,10 @@ internal static class InstrumentPanelRenderer
         sourceStyle.normal.textColor = CoiUiPalette.Text;
         NativeGUI.Label(
             new Rect(rect.x + 8f, rect.yMax - 29f, rect.width - 16f, 22f),
-            definition.EntityTitle + " · " + definition.MetricLabel,
+            FitText(
+                definition.EntityTitle + " · " + definition.MetricLabel,
+                sourceStyle,
+                rect.width - 16f),
             sourceStyle);
     }
 
@@ -665,7 +671,13 @@ internal static class InstrumentPanelRenderer
         Fill(
             new Rect(center.x - 5f, center.y - 5f, 10f, 10f),
             CoiUiPalette.BorderLight);
-        DrawValue(new Rect(rect.x, rect.y, rect.width, 28f), definition, value, style, Cream);
+        var valueBadge = new Rect(
+            rect.center.x - Mathf.Min(82f, rect.width * 0.36f),
+            rect.y + 3f,
+            Mathf.Min(164f, rect.width * 0.72f),
+            24f);
+        Fill(valueBadge, new Color(0.08f, 0.08f, 0.07f, 0.96f));
+        DrawValue(valueBadge, definition, value, style, Cream);
     }
 
     private static void DrawDigital(
@@ -784,7 +796,42 @@ internal static class InstrumentPanelRenderer
             clipping = TextClipping.Clip,
         };
         style.normal.textColor = color;
-        NativeGUI.Label(Inset(rect, 4f), FormatValue(value) + " " + definition.Unit, style);
+        var labelRect = Inset(rect, 4f);
+        var label = FormatValue(value) +
+                    (string.IsNullOrWhiteSpace(definition.Unit)
+                        ? string.Empty
+                        : " " + definition.Unit);
+        NativeGUI.Label(
+            labelRect,
+            FitText(label, style, labelRect.width),
+            style);
+    }
+
+    private static string FitText(string value, GUIStyle style, float maxWidth)
+    {
+        value ??= string.Empty;
+        if (maxWidth <= 1f || style.CalcSize(new GUIContent(value)).x <= maxWidth)
+        {
+            return value;
+        }
+
+        const string suffix = "...";
+        var low = 0;
+        var high = value.Length;
+        while (low < high)
+        {
+            var middle = (low + high + 1) / 2;
+            var candidate = value.Substring(0, middle).TrimEnd() + suffix;
+            if (style.CalcSize(new GUIContent(candidate)).x <= maxWidth)
+            {
+                low = middle;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+        return value.Substring(0, low).TrimEnd() + suffix;
     }
 
     private static void DrawHistorianTrace(

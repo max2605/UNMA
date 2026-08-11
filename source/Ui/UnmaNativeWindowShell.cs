@@ -90,6 +90,33 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             return Frame.WorldBound.Contains(panelPoint);
         }
 
+        public Vector2 FrameWorldPosition =>
+            Frame.WorldBound.position;
+
+        public void RestoreFrameWorldPosition(Vector2 worldPosition)
+        {
+            var currentWorldPosition = Frame.WorldBound.position;
+            var currentTranslation =
+                Frame.RootElement.resolvedStyle.translate;
+            this.TranslateFrame(
+                new Px(
+                    currentTranslation.x +
+                    worldPosition.x -
+                    currentWorldPosition.x),
+                new Px(
+                    currentTranslation.y +
+                    worldPosition.y -
+                    currentWorldPosition.y));
+        }
+
+        public void ScheduleFrameWorldPositionRestore(
+            Vector2 worldPosition)
+        {
+            Frame.RootElement.schedule
+                .Execute(() => RestoreFrameWorldPosition(worldPosition))
+                .StartingIn(16);
+        }
+
         public void ConfigureResize(
             Action<Vector2> resizeDelta,
             Action resizeCompleted)
@@ -198,6 +225,9 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     private float m_contentScale = 1f;
     private float m_resizeStartWidth;
     private float m_resizeStartHeight;
+    private bool m_temporarilyFullscreen;
+    private Vector2 m_preFullscreenFrameWorldPosition;
+    private bool m_preFullscreenFrameWorldPositionValid;
 
     public UnmaNativeWindowShell(
         UiRoot uiRoot,
@@ -337,9 +367,22 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     /// </summary>
     public void SetTemporarySize(Vector2 size)
     {
-        if (!m_disposed)
+        if (m_disposed)
         {
-            ApplyWindowSize(size.x, size.y);
+            return;
+        }
+
+        if (m_temporarilyFullscreen)
+        {
+            m_window.Fullscreen(false);
+            m_temporarilyFullscreen = false;
+        }
+        ApplyWindowSize(size.x, size.y);
+        if (m_preFullscreenFrameWorldPositionValid)
+        {
+            m_window.ScheduleFrameWorldPositionRestore(
+                m_preFullscreenFrameWorldPosition);
+            m_preFullscreenFrameWorldPositionValid = false;
         }
     }
 
@@ -353,7 +396,12 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         var previousSize = CurrentSize;
         if (!m_disposed)
         {
-            ApplyWindowSize(float.MaxValue, float.MaxValue);
+            m_preFullscreenFrameWorldPosition =
+                m_window.FrameWorldPosition;
+            m_preFullscreenFrameWorldPositionValid = true;
+            m_temporarilyFullscreen = true;
+            m_window.Fullscreen();
+            ApplyFullscreenContentSize();
         }
         return previousSize;
     }
@@ -514,7 +562,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
 
     private void HandleResizeDelta(Vector2 delta)
     {
-        if (m_disposed)
+        if (m_disposed || m_temporarilyFullscreen)
         {
             return;
         }
@@ -577,6 +625,35 @@ internal sealed class UnmaNativeWindowShell : IDisposable
         m_window.WindowSize(
             new Px(m_windowWidth),
             new Px(m_windowHeight));
+        m_rootElement.style.width = m_windowWidth - 28f;
+        m_rootElement.style.height = m_windowHeight - 82f;
+        m_navigationElement.style.width = bodyWidth;
+        m_navigationElement.style.minWidth = Mathf.Max(1f, bodyWidth);
+        m_bodyElement.style.width = bodyWidth;
+        m_bodyElement.style.height = bodyHeight;
+        m_bodyElement.style.minWidth = Mathf.Min(
+            MinimumBodyWidth * m_contentScale,
+            bodyWidth);
+        m_bodyElement.style.minHeight = Mathf.Min(
+            MinimumBodyHeight * m_contentScale,
+            bodyHeight);
+        UpdateNavigationButtonWidths(bodyWidth);
+    }
+
+    private void ApplyFullscreenContentSize()
+    {
+        var rootScale = IsFinitePositive(m_uiRoot.CurrentScale)
+            ? m_uiRoot.CurrentScale
+            : 1f;
+        m_windowWidth = Mathf.Max(
+            HorizontalBodyInset + 1f,
+            Screen.width / rootScale);
+        m_windowHeight = Mathf.Max(
+            VerticalChromeInset + 1f,
+            Screen.height / rootScale);
+
+        var bodyWidth = m_windowWidth - HorizontalBodyInset;
+        var bodyHeight = m_windowHeight - VerticalChromeInset;
         m_rootElement.style.width = m_windowWidth - 28f;
         m_rootElement.style.height = m_windowHeight - 82f;
         m_navigationElement.style.width = bodyWidth;

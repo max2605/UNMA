@@ -13,13 +13,23 @@
 - Hauptfenster, Editor und abgekoppelte Panels verwenden viewportbegrenzte,
   skalenabhängige Mindestgrößen. Die nutzbare logische Arbeitsfläche bleibt
   dadurch auch bei 200 Prozent erhalten.
+- Alle Hauptansichten folgen nun einem einheitlichen dunklen Kartenraster mit
+  konsistenten Abständen, Eingabefeldern und responsiven Aktionszeilen. Verlauf,
+  Systemmeldungen, Benachrichtigungsoptionen, Instrumente und Optionen nutzen
+  den verfügbaren Platz ohne leere Aktionsspalten oder horizontales Überlaufen.
+- Instrumenttitel werden kontrolliert gekürzt und Messwerte kollisionsfrei
+  dargestellt. Der Historian verwendet echtes CoI-Vollbild und kehrt danach
+  exakt zu Größe und Position des Bedienfensters zurück.
+- Interne CoI-Kernmodule erscheinen nicht mehr fälschlich als ungültige externe
+  API-Anbieter; textbasierte **BEREICHE**- und **BEARBEITEN**-Aktionen ersetzen
+  auf Systemen ohne passende Symbolglyphe die bisherigen Platzhalterkästchen.
 - Konfigurationen aus Schema 21 oder höher werden vor vollständiger
   Deserialisierung erkannt. UNMA lässt Hauptdatei, Backup-, Temp- und
   Broken-Artefakte unangetastet und sperrt weitere Schreibvorgänge für die
   Sitzung, statt unbekannte Felder mit dem Schema-20-Modell zu verlieren.
 - Das öffentliche Erweiterungs-API und die Assembly-Bindung bleiben auf V1;
   das Persistenzschema bleibt 20. Für 0.10.0 ist keine neue Migration nötig.
-- Release-Build, 125.569 Core-Assertions sowie alle IL-/Reflection-,
+- Release-Build, 125.696 Core-Assertions sowie alle IL-/Reflection-,
   Lokalisierungs-, Rollback- und Paketprüfungen wurden erfolgreich ausgeführt.
 - Die Versionsfolge springt bewusst von 0.9.26 auf 0.10.0; 0.9.27 wurde nicht
   veröffentlicht.

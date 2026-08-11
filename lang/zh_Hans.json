@@ -903,7 +903,7 @@
     "board.area_filter": "AREA",
     "board.area_all": "ALL",
     "board.area_unassigned": "UNASSIGNED",
-    "board.area_manage": "⚙ AREAS",
+    "board.area_manage": "MANAGE AREAS",
     "board.area_filter_item": "{0} · {1} PANELS",
     "board.dashboard_scope": "{0} · {1}",
     "board.acknowledge_area": "AREA ACK",
@@ -972,5 +972,6 @@
     "ui.incident.duration_days": "{0} DAYS",
     "ui.incident.duration_ticks": "{0} TICKS",
     "ui.incident.focus_hint": "Member controls only focus visible alarms. They never acknowledge, hide, or silence alarms.",
-    "ui.incident.focus": "FOCUS"
+    "ui.incident.focus": "FOCUS",
+    "board.area_manage_short": "AREAS"
 }

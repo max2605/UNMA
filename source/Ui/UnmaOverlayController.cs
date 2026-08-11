@@ -1128,9 +1128,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 OpenPanelCreationEditor();
             }
             if (NativeGUILayout.Button(
-                    "⚙",
+                    UnmaText.Get("ui.common.edit", "EDIT"),
                     m_buttonStyle,
-                    NativeGUILayout.Width(42f),
+                    NativeGUILayout.Width(72f),
                     NativeGUILayout.Height(30f)))
             {
                 OpenPanelSettingsEditor(panel);
@@ -1744,10 +1744,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndScrollView();
         if (NativeGUILayout.Button(
                 compact
-                    ? "⚙"
-                    : UnmaText.Get("board.area_manage", "⚙ AREAS"),
+                    ? UnmaText.Get("board.area_manage_short", "AREAS")
+                    : UnmaText.Get("board.area_manage", "MANAGE AREAS"),
                 m_buttonStyle,
-                NativeGUILayout.Width(compact ? 42f : 122f),
+                NativeGUILayout.Width(compact ? 82f : 142f),
                 NativeGUILayout.Height(30f)))
         {
             OpenAlarmAreasEditor();
@@ -2202,8 +2202,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
 
         m_instrumentScroll = NativeGUILayout.BeginScrollView(m_instrumentScroll);
+        const float cardGap = 7f;
+        const float preferredCardWidth = 360f;
         var availableWidth = Mathf.Max(250f, m_windowRect.width - 62f);
-        var columns = Math.Max(1, Mathf.FloorToInt(availableWidth / 270f));
+        var columns = Math.Min(
+            instruments.Count,
+            Math.Max(
+                1,
+                Math.Min(
+                    5,
+                    Mathf.FloorToInt(
+                        (availableWidth + cardGap) /
+                        (preferredCardWidth + cardGap)))));
+        var cardWidth = Mathf.Clamp(
+            (availableWidth - cardGap * (columns - 1)) / columns,
+            245f,
+            480f);
         for (var start = 0; start < instruments.Count; start += columns)
         {
             var rowKey = "instrument-row:";
@@ -2225,11 +2239,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 }
                 var instrument = instruments[index];
                 var rect = NativeGUILayoutUtility.GetRect(
-                    245f,
-                    310f,
+                    cardWidth,
+                    cardWidth,
                     225f,
                     225f,
-                    NativeGUILayout.ExpandWidth(true));
+                    NativeGUILayout.Width(cardWidth));
                 m_instrumentValues.TryGetValue(instrument.Id, out var value);
                 m_instrumentSamples.TryGetValue(instrument.Id, out var samples);
                 InstrumentPanelRenderer.Draw(
@@ -3388,7 +3402,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             UnmaText.Get("auto.546f06f29ca0"),
             m_smallLabelStyle);
         DrawStatusMessage();
-        DrawHistoryHeader();
+        var showHistoryActions = entries.Any(entry => entry.CanDelete);
+        DrawHistoryHeader(showHistoryActions);
 
         var historyViewportHeight =
             Math.Max(180f, m_windowRect.height - 258f);
@@ -3413,7 +3428,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             DrawHistoryRows(
                 entries,
                 m_historyScroll.y,
-                historyViewportHeight);
+                historyViewportHeight,
+                showHistoryActions);
         }
         NativeGUILayout.EndScrollView();
     }
@@ -3567,7 +3583,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         return m_historyCache;
     }
 
-    private void DrawHistoryHeader()
+    private void DrawHistoryHeader(bool showActions)
     {
         var rect = NativeGUILayoutUtility.GetRect(
             0f,
@@ -3575,7 +3591,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.ExpandWidth(true),
             NativeGUILayout.Height(30f));
         DrawPanelRect(rect, CoiUiPalette.SurfaceRaised);
-        var actionWidth = 98f;
+        var actionWidth = showActions ? 98f : 0f;
         var stateWidth = 92f;
         var timeWidth = 128f;
         NativeGUI.Label(
@@ -3602,20 +3618,24 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 rect.height),
             UnmaText.Get("ui.history.state", "STATE"),
             m_historyHeaderStyle);
-        NativeGUI.Label(
-            new Rect(
-                rect.xMax - actionWidth,
-                rect.y,
-                actionWidth,
-                rect.height),
-            UnmaText.Get("ui.history.action", "ACTION"),
-            m_historyHeaderStyle);
+        if (showActions)
+        {
+            NativeGUI.Label(
+                new Rect(
+                    rect.xMax - actionWidth,
+                    rect.y,
+                    actionWidth,
+                    rect.height),
+                UnmaText.Get("ui.history.action", "ACTION"),
+                m_historyHeaderStyle);
+        }
     }
 
     private void DrawHistoryRows(
         IReadOnlyList<AlarmHistoryDefinition> entries,
         float scrollY,
-        float viewportHeight)
+        float viewportHeight,
+        bool showActions)
     {
         var rowStep = HistoryRowHeight + 4f;
         var firstVisible = Math.Max(
@@ -3640,7 +3660,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 HistoryRowHeight,
                 NativeGUILayout.ExpandWidth(true),
                 NativeGUILayout.Height(HistoryRowHeight));
-            DrawHistoryRow(rect, entries[index], blinkOn);
+            DrawHistoryRow(rect, entries[index], blinkOn, showActions);
             NativeGUILayout.Space(4f);
         }
 
@@ -3653,9 +3673,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawHistoryRow(
         Rect rect,
         AlarmHistoryDefinition entry,
-        bool blinkOn)
+        bool blinkOn,
+        bool showActions)
     {
-        var background = Color.white;
+        var background = CoiUiPalette.Surface;
         var textStyle = m_historyTextStyle;
         if (!entry.IsGone && !entry.IsAcknowledged)
         {
@@ -3667,7 +3688,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         else if (entry.IsGone && !entry.IsAcknowledged)
         {
             background = blinkOn
-                ? Color.white
+                ? CoiUiPalette.SurfaceRaised
                 : CoiUiPalette.TextMuted;
         }
 
@@ -3679,7 +3700,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             rect.height - 4f);
         DrawPanelRect(inner, background);
 
-        var actionWidth = 96f;
+        var actionWidth = showActions ? 96f : 0f;
         var stateWidth = 90f;
         var timeWidth = 126f;
         NativeGUI.Label(
@@ -3711,7 +3732,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 ? m_historyAlertStateStyle
                 : m_historyStateStyle);
 
-        if (entry.CanDelete && NativeGUI.Button(
+        if (showActions && entry.CanDelete && NativeGUI.Button(
                 new Rect(
                     inner.xMax - actionWidth + 4f,
                     inner.y + 4f,
@@ -7175,90 +7196,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_systemAlarmScroll = NativeGUILayout.BeginScrollView(m_systemAlarmScroll);
         if (m_systemAlarmDraft == null)
         {
+            var compactRows = m_windowRect.width < 760f;
             foreach (var alarm in m_runtime.GetSystemAlarmDefinitions())
             {
-                NativeGUILayout.BeginHorizontal();
-                NativeGUILayout.Label(
-                    alarm.DisplayName + " · " +
-                    alarm.Stages.Count(stage => stage.Enabled) +
-                    UnmaText.Get("auto.da08863fac44") +
-                    (alarm.AutoAcknowledgeOnClear
-                        ? UnmaText.Get("auto.367f30137868")
-                        : UnmaText.Get("auto.c9097d398192")),
-                    m_labelStyle);
-                if (NativeGUILayout.Button(
-                        alarm.Enabled
-                            ? UnmaText.Get("ui.common.on", "ON")
-                            : UnmaText.Get("ui.common.off", "OFF"),
-                        alarm.Enabled
-                            ? m_primaryButtonStyle
-                            : m_buttonStyle,
-                        NativeGUILayout.Width(55f)))
-                {
-                    alarm.Enabled = !alarm.Enabled;
-                    if (m_runtime.UpdateSystemAlarm(alarm))
-                    {
-                        SetStatus(UnmaText.Get("auto.1145c5c75960"));
-                    }
-                    else
-                    {
-                        SetStatus(
-                            UnmaText.Get("auto.5df942eb6687") +
-                            m_runtime.LastPersistenceError);
-                    }
-                }
-                if (NativeGUILayout.Button(
-                        UnmaText.Get("ui.common.edit", "EDIT"),
-                        m_buttonStyle,
-                        NativeGUILayout.Width(115f)))
-                {
-                    BeginEditingSystemAlarm(alarm);
-                }
-                if (NativeGUILayout.Button(
-                        string.Equals(
-                            m_pendingSystemResetId,
-                            alarm.Id,
-                            StringComparison.Ordinal)
-                            ? UnmaText.Get("auto.91d331fc1397")
-                            : UnmaText.Get(
-                                "ui.system.factory_default",
-                                "FACTORY DEFAULT"),
-                        string.Equals(
-                            m_pendingSystemResetId,
-                            alarm.Id,
-                            StringComparison.Ordinal)
-                            ? m_dangerButtonStyle
-                            : m_buttonStyle,
-                        NativeGUILayout.Width(125f)))
-                {
-                    if (!string.Equals(
-                            m_pendingSystemResetId,
-                            alarm.Id,
-                            StringComparison.Ordinal))
-                    {
-                        m_pendingSystemResetId = alarm.Id;
-                        m_pendingSystemResetUntil =
-                            Time.realtimeSinceStartup + 5f;
-                        SetStatus(
-                            UnmaText.Get("auto.cd3ff75f956e") +
-                            UnmaText.Get("auto.a63963cdfdad"));
-                    }
-                    else
-                    {
-                        m_pendingSystemResetId = "";
-                        if (m_runtime.ResetSystemAlarm(alarm.Id))
-                        {
-                            SetStatus(UnmaText.Get("auto.85ff6c110b12"));
-                        }
-                        else
-                        {
-                            SetStatus(
-                                UnmaText.Get("auto.1e0dd8281824") +
-                                m_runtime.LastPersistenceError);
-                        }
-                    }
-                }
-                NativeGUILayout.EndHorizontal();
+                DrawSystemAlarmSummaryRow(alarm, compactRows);
             }
         }
         else
@@ -7267,6 +7208,104 @@ public sealed class UnmaOverlayController : MonoBehaviour
         }
         DrawStatusMessage();
         NativeGUILayout.EndScrollView();
+    }
+
+    private void DrawSystemAlarmSummaryRow(
+        SystemAlarmDefinition alarm,
+        bool compact)
+    {
+        NativeGUILayout.BeginVertical(
+            "system-summary:" + alarm.Id,
+            m_panelStyle,
+            NativeGUILayout.ExpandWidth(true));
+        if (!compact)
+        {
+            NativeGUILayout.BeginHorizontal();
+        }
+        NativeGUILayout.Label(
+            alarm.DisplayName + " · " +
+            alarm.Stages.Count(stage => stage.Enabled) +
+            UnmaText.Get("auto.da08863fac44") +
+            (alarm.AutoAcknowledgeOnClear
+                ? UnmaText.Get("auto.367f30137868")
+                : UnmaText.Get("auto.c9097d398192")),
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true),
+            NativeGUILayout.Height(32f));
+        if (compact)
+        {
+            NativeGUILayout.BeginHorizontal();
+        }
+
+        if (NativeGUILayout.Button(
+                alarm.Enabled
+                    ? UnmaText.Get("ui.common.on", "ON")
+                    : UnmaText.Get("ui.common.off", "OFF"),
+                alarm.Enabled ? m_primaryButtonStyle : m_buttonStyle,
+                NativeGUILayout.Width(compact ? 72f : 84f),
+                NativeGUILayout.Height(32f)))
+        {
+            alarm.Enabled = !alarm.Enabled;
+            if (m_runtime.UpdateSystemAlarm(alarm))
+            {
+                SetStatus(UnmaText.Get("auto.1145c5c75960"));
+            }
+            else
+            {
+                SetStatus(
+                    UnmaText.Get("auto.5df942eb6687") +
+                    m_runtime.LastPersistenceError);
+            }
+        }
+        if (NativeGUILayout.Button(
+                UnmaText.Get("ui.common.edit", "EDIT"),
+                m_buttonStyle,
+                NativeGUILayout.Width(compact ? 88f : 112f),
+                NativeGUILayout.Height(32f)))
+        {
+            BeginEditingSystemAlarm(alarm);
+        }
+
+        var confirmingReset = string.Equals(
+            m_pendingSystemResetId,
+            alarm.Id,
+            StringComparison.Ordinal);
+        if (NativeGUILayout.Button(
+                confirmingReset
+                    ? UnmaText.Get("auto.91d331fc1397")
+                    : UnmaText.Get(
+                        "ui.system.factory_default",
+                        "FACTORY DEFAULT"),
+                confirmingReset ? m_dangerButtonStyle : m_buttonStyle,
+                NativeGUILayout.Width(compact ? 132f : 154f),
+                NativeGUILayout.Height(32f)))
+        {
+            if (!confirmingReset)
+            {
+                m_pendingSystemResetId = alarm.Id;
+                m_pendingSystemResetUntil = Time.realtimeSinceStartup + 5f;
+                SetStatus(
+                    UnmaText.Get("auto.cd3ff75f956e") +
+                    UnmaText.Get("auto.a63963cdfdad"));
+            }
+            else
+            {
+                m_pendingSystemResetId = "";
+                if (m_runtime.ResetSystemAlarm(alarm.Id))
+                {
+                    SetStatus(UnmaText.Get("auto.85ff6c110b12"));
+                }
+                else
+                {
+                    SetStatus(
+                        UnmaText.Get("auto.1e0dd8281824") +
+                        m_runtime.LastPersistenceError);
+                }
+            }
+        }
+        NativeGUILayout.EndHorizontal();
+        NativeGUILayout.EndVertical();
+        NativeGUILayout.Space(4f);
     }
 
     private void DrawSystemAlarmDraft()
@@ -7941,7 +7980,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_soundOverrideFilter = NativeGUILayout.TextField(
             m_soundOverrideFilter,
             100,
-            m_textFieldStyle);
+            m_textFieldStyle,
+            NativeGUILayout.ExpandWidth(true),
+            NativeGUILayout.Height(30f));
         NativeGUILayout.EndHorizontal();
 
         var sounds = m_audio.GetSoundOptions();
@@ -7949,8 +7990,10 @@ public sealed class UnmaOverlayController : MonoBehaviour
             .Where(MatchesSoundOverrideFilter)
             .ToArray();
 
-        m_soundOverrideScroll = NativeGUILayout.BeginScrollView(
-            m_soundOverrideScroll);
+        m_soundOverrideScroll = NativeGUILayout.BeginVerticalScrollView(
+            m_soundOverrideScroll,
+            NativeGUILayout.ExpandWidth(true),
+            NativeGUILayout.ExpandHeight(true));
         if (candidates.Length == 0)
         {
             NativeGUILayout.Label(
@@ -7975,10 +8018,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "vanilla",
                 StringComparison.Ordinal);
 
+            NativeGUILayout.BeginVertical(
+                "sound-override:" + candidate.OverrideId,
+                m_panelStyle,
+                NativeGUILayout.ExpandWidth(true));
             NativeGUILayout.Label(
-                candidate.Name + "\n" + candidate.Detail,
-                m_labelStyle,
-                NativeGUILayout.MinHeight(42f));
+                candidate.Name,
+                m_headerStyle,
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.MinHeight(28f));
+            NativeGUILayout.Label(
+                candidate.Detail,
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.MinHeight(22f));
 
             if (isVanilla)
             {
@@ -7989,7 +8042,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.Label(
                 UnmaText.Get("sounds.override.sound_label", "Ton"),
                 m_smallLabelStyle,
-                NativeGUILayout.Width(70f));
+                NativeGUILayout.MinWidth(190f),
+                NativeGUILayout.ExpandWidth(true));
             if (NativeGUILayout.Button("◀", m_buttonStyle, NativeGUILayout.Width(34f)))
             {
                 SaveSoundOverride(
@@ -7999,8 +8053,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.Label(
                 sounds[soundIndex].Label,
                 m_smallLabelStyle,
-                NativeGUILayout.MinWidth(90f),
-                NativeGUILayout.ExpandWidth(true));
+                NativeGUILayout.Width(245f),
+                NativeGUILayout.Height(30f));
             if (NativeGUILayout.Button("▶", m_buttonStyle, NativeGUILayout.Width(34f)))
             {
                 SaveSoundOverride(
@@ -8020,7 +8074,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     candidate.OverrideId,
                     updatedAutoAcknowledgeOnClear);
             }
-            NativeGUILayout.Space(8f);
+            NativeGUILayout.EndVertical();
+            NativeGUILayout.Space(5f);
         }
         NativeGUILayout.EndScrollView();
         DrawStatusMessage();
@@ -8282,17 +8337,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawOptions()
     {
-        m_optionsScroll = NativeGUILayout.BeginScrollView(
+        m_optionsScroll = NativeGUILayout.BeginVerticalScrollView(
             m_optionsScroll,
-            false,
-            false,
             NativeGUILayout.ExpandWidth(true),
             NativeGUILayout.ExpandHeight(true));
 
         NativeGUILayout.Label(UnmaText.Get("options.display"), m_sectionStyle);
         NativeGUILayout.Label(
             UnmaText.Get("auto.05e9f359f2e3"),
-            m_labelStyle);
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
 
         NativeGUILayout.BeginHorizontal();
         NativeGUILayout.Label(
@@ -8326,10 +8380,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_runtime.Configuration.UiScalePercent = 100;
             scaleChanged = true;
         }
+        NativeGUILayout.EndHorizontal();
         NativeGUILayout.Label(
             UnmaText.Get("auto.df85f85313da"),
-            m_smallLabelStyle);
-        NativeGUILayout.EndHorizontal();
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
         if (scaleChanged)
         {
             SaveConfiguration(
@@ -8337,38 +8392,32 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 m_runtime.Configuration.UiScalePercent + " %.");
         }
 
-        NativeGUILayout.BeginHorizontal();
-        NativeGUILayout.Label(
+        var compactColorSettings = m_windowRect.width < 760f;
+        if (!compactColorSettings)
+        {
+            NativeGUILayout.BeginHorizontal();
+        }
+        m_runtime.Configuration.WarningColor = DrawOptionsColorField(
             UnmaText.Get("options.warning_color"),
-            m_labelStyle,
-            NativeGUILayout.Width(95f));
-        m_runtime.Configuration.WarningColor = NativeGUILayout.TextField(
             m_runtime.Configuration.WarningColor,
-            9,
-            m_textFieldStyle,
-            NativeGUILayout.Width(100f));
-        NativeGUILayout.Label(
+            compactColorSettings);
+        m_runtime.Configuration.CriticalColor = DrawOptionsColorField(
             UnmaText.Get("severity.critical"),
-            m_labelStyle,
-            NativeGUILayout.Width(72f));
-        m_runtime.Configuration.CriticalColor = NativeGUILayout.TextField(
             m_runtime.Configuration.CriticalColor,
-            9,
-            m_textFieldStyle,
-            NativeGUILayout.Width(100f));
-        NativeGUILayout.Label(
+            compactColorSettings);
+        m_runtime.Configuration.EmergencyColor = DrawOptionsColorField(
             UnmaText.Get("severity.emergency"),
-            m_labelStyle,
-            NativeGUILayout.Width(68f));
-        m_runtime.Configuration.EmergencyColor = NativeGUILayout.TextField(
             m_runtime.Configuration.EmergencyColor,
-            9,
-            m_textFieldStyle,
-            NativeGUILayout.Width(100f));
+            compactColorSettings);
+        if (compactColorSettings)
+        {
+            NativeGUILayout.BeginHorizontal();
+        }
         if (NativeGUILayout.Button(
                 UnmaText.Get("auto.373d6df29cf1"),
                 m_primaryButtonStyle,
-                NativeGUILayout.Width(175f)))
+                NativeGUILayout.Width(175f),
+                NativeGUILayout.Height(30f)))
         {
             SaveConfiguration(UnmaText.Get("auto.f7bb0c5b2c6c"));
         }
@@ -8380,14 +8429,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_sectionStyle);
         NativeGUILayout.Label(
             UnmaText.Get("auto.f98a9c516625"),
-            m_labelStyle);
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
         NativeGUILayout.Label(
             UnmaText.Get("auto.665123745b97") +
             m_audio.SoundsDirectory,
-            m_smallLabelStyle);
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
         NativeGUILayout.Label(
             UnmaText.Get("auto.b4f0fa6a9f20"),
-            m_smallLabelStyle);
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
         if (NativeGUILayout.Button(
                 UnmaText.Get("auto.3ac4c11a94ac"),
                 m_buttonStyle,
@@ -8403,13 +8455,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_sectionStyle);
         NativeGUILayout.Label(
             UnmaText.Get("auto.5ca97b0efd51"),
-            m_labelStyle);
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
 
         NativeGUILayout.Space(10f);
         NativeGUILayout.Label(UnmaText.Get("auto.461c23ce7edb"), m_sectionStyle);
         NativeGUILayout.Label(
             UnmaText.Get("auto.a183668aa2b3"),
-            m_labelStyle);
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
 
         NativeGUILayout.Space(10f);
         NativeGUILayout.Label(
@@ -8417,7 +8471,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             m_sectionStyle);
         NativeGUILayout.Label(
             UnmaText.Get("auto.fdea5764a7c1"),
-            m_labelStyle);
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
 
         NativeGUILayout.Space(10f);
         NativeGUILayout.Label(
@@ -8428,7 +8483,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "options.integration.description",
                 UnmaText.Get("auto.a67711e569a9") +
                 UnmaText.Get("auto.ae53894897ea")),
-            m_labelStyle);
+            m_labelStyle,
+            NativeGUILayout.ExpandWidth(true));
         var integration = m_runtime.GetExternalIntegrationStatus();
         NativeGUILayout.Label(
             UnmaText.Format(
@@ -8444,7 +8500,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 integration.ApiAlarmCount,
                 integration.ApiStateCount,
                 integration.DiagnosticCount),
-            m_smallLabelStyle);
+            m_smallLabelStyle,
+            NativeGUILayout.ExpandWidth(true));
         if (NativeGUILayout.Button(
                 UnmaText.Get(
                     "options.integration.reload",
@@ -8470,10 +8527,38 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.Label(
                 diagnostic.ProviderId + " · " + diagnostic.Code + " · " +
                 LocalizeExternalDiagnosticMessage(diagnostic.Code),
-                m_smallLabelStyle);
+                m_smallLabelStyle,
+                NativeGUILayout.ExpandWidth(true));
         }
         DrawStatusMessage();
         NativeGUILayout.EndScrollView();
+    }
+
+    private string DrawOptionsColorField(
+        string label,
+        string value,
+        bool ownRow)
+    {
+        if (ownRow)
+        {
+            NativeGUILayout.BeginHorizontal();
+        }
+        NativeGUILayout.Label(
+            label,
+            m_labelStyle,
+            NativeGUILayout.Width(110f),
+            NativeGUILayout.Height(30f));
+        var updated = NativeGUILayout.TextField(
+            value,
+            9,
+            m_textFieldStyle,
+            NativeGUILayout.Width(112f),
+            NativeGUILayout.Height(30f));
+        if (ownRow)
+        {
+            NativeGUILayout.EndHorizontal();
+        }
+        return updated;
     }
 
     private static string LocalizeExternalDiagnosticMessage(string code)
@@ -11229,6 +11314,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
         m_panelStyle = new GUIStyle()
         {
+            stretchWidth = true,
             padding = new RectOffset(8, 8, 7, 7),
             margin = new RectOffset(3, 3, 3, 3),
             normal =
@@ -11251,6 +11337,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         };
         m_sectionStyle = new GUIStyle()
         {
+            stretchWidth = true,
             fontSize = 14,
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleLeft,
@@ -11330,19 +11417,23 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_textFieldStyle = new GUIStyle()
         {
             fontSize = 13,
+            padding = new RectOffset(9, 9, 5, 5),
+            border = new RectOffset(3, 3, 3, 3),
             normal =
             {
                 textColor = CoiUiPalette.TextBright,
-                background = SolidTexture(
+                background = CoiButtonTexture(
                     "field",
-                    CoiUiPalette.SurfaceRaised),
+                    CoiUiPalette.SurfaceRaised,
+                    CoiUiPalette.BorderLight),
             },
             focused =
             {
                 textColor = CoiUiPalette.TextBright,
-                background = SolidTexture(
+                background = CoiButtonTexture(
                     "field-focus",
-                    CoiUiPalette.Border),
+                    CoiUiPalette.Border,
+                    CoiUiPalette.Yellow),
             },
         };
         m_historyHeaderStyle = new GUIStyle(m_labelStyle)
@@ -11358,7 +11449,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleLeft,
             clipping = TextClipping.Clip,
-            normal = { textColor = Color.black },
+            normal = { textColor = CoiUiPalette.TextBright },
         };
         m_historyStateStyle = new GUIStyle(m_historyTextStyle)
         {

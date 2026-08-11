@@ -381,6 +381,7 @@ internal static class NativeGUILayout
             scrollPosition,
             false,
             false,
+            true,
             null,
             options);
 
@@ -392,6 +393,7 @@ internal static class NativeGUILayout
             scrollPosition,
             false,
             false,
+            true,
             background,
             options);
 
@@ -404,6 +406,7 @@ internal static class NativeGUILayout
             scrollPosition,
             alwaysShowHorizontal,
             alwaysShowVertical,
+            true,
             null,
             options);
 
@@ -418,6 +421,25 @@ internal static class NativeGUILayout
             scrollPosition,
             alwaysShowHorizontal,
             alwaysShowVertical,
+            true,
+            null,
+            options);
+
+    /// <summary>
+    /// Creates a width-constrained vertical scroller. Regular IMGUI scroll
+    /// views measure their contents in both axes; that makes long wrapped
+    /// labels expand the content width and produces a horizontal scrollbar.
+    /// Settings and list pages use this variant so prose wraps to the visible
+    /// COI window instead of escaping to the right.
+    /// </summary>
+    public static Vector2 BeginVerticalScrollView(
+        Vector2 scrollPosition,
+        params NativeGUILayoutOption[] options) =>
+        BeginScrollViewCore(
+            scrollPosition,
+            false,
+            false,
+            false,
             null,
             options);
 
@@ -626,6 +648,7 @@ internal static class NativeGUILayout
         Vector2 scrollPosition,
         bool alwaysShowHorizontal,
         bool alwaysShowVertical,
+        bool allowHorizontal,
         GUIStyle background,
         NativeGUILayoutOption[] options)
     {
@@ -633,9 +656,14 @@ internal static class NativeGUILayout
         context.InvalidateAbsoluteCanvas();
         var node = context.Acquire(NativeNodeKind.ScrollView);
         var scroll = (ScrollView)node.Element;
-        scroll.horizontalScrollerVisibility = alwaysShowHorizontal
-            ? ScrollerVisibility.AlwaysVisible
-            : ScrollerVisibility.Auto;
+        scroll.mode = allowHorizontal
+            ? ScrollViewMode.VerticalAndHorizontal
+            : ScrollViewMode.Vertical;
+        scroll.horizontalScrollerVisibility = allowHorizontal
+            ? alwaysShowHorizontal
+                ? ScrollerVisibility.AlwaysVisible
+                : ScrollerVisibility.Auto
+            : ScrollerVisibility.Hidden;
         scroll.verticalScrollerVisibility = alwaysShowVertical
             ? ScrollerVisibility.AlwaysVisible
             : ScrollerVisibility.Auto;

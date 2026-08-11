@@ -160,6 +160,7 @@ public sealed class UnmaMod : IMod
                 .Where(item => item.LoadError.IsNone)
                 .Select(item => item.Manifest)
                 .Where(manifest => manifest != null)
+                .Where(manifest => !IsBuiltInProvider(manifest.Id))
                 .GroupBy(manifest => manifest.Id, StringComparer.Ordinal)
                 .Select(group => group.First())
                 .Select(manifest => new ExternalProviderDescriptor(
@@ -180,4 +181,9 @@ public sealed class UnmaMod : IMod
             };
         }
     }
+
+    private static bool IsBuiltInProvider(string id) =>
+        string.Equals(id, "COI-Core", StringComparison.Ordinal) ||
+        string.Equals(id, "COI-CoreData", StringComparison.Ordinal) ||
+        string.Equals(id, "COI-CoreUnity", StringComparison.Ordinal);
 }
