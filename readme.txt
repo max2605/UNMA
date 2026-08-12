@@ -1,6 +1,6 @@
 UNMA – Universal Notification and Monitoring Annunciator
 
-Version: 0.10.1
+Version: 0.10.2
 Captain of Industry: 0.8.6c
 Required dependency: MultiLangLib 0.1.0 or newer
 Optional dependency: Keybind Framework 2.0.2 or newer
@@ -16,12 +16,13 @@ Installation
 UNMA can be added to and removed from existing saves. World-specific settings
 are stored separately and are not included in this release archive.
 
-Version 0.10.1 adds a selectable cross-save default profile under OPTIONS.
-Preview and atomically merge portable notification and prototype rules,
-system-alarm settings, alarm colors/UI scale, and optionally window layout.
-World-bound entity rules, history, active alarms, and timing memories are
-never transferred. The profile is stored at:
-%LOCALAPPDATA%\UNMA\profiles\default.json
+Version 0.10.2 focuses on operator ergonomics and accessibility. The alarm
+editor now puts the message title first, exposes the active state, validates
+inputs inline, keeps save actions visible, and adapts to narrow or highly
+scaled windows. Alarm tiles provide a visible Edit action, status feedback is
+kept in view, contrast is selected dynamically, and Reduced Motion provides a
+stable alarm highlight. Main, editor, and detached-window layouts persist
+without losing the preferred position during UI-scale or viewport changes.
 
 Documentation: README.md, USER_GUIDE_EN.md, USER_GUIDE_DE.md
 Source and issues: https://github.com/max2605/UNMA

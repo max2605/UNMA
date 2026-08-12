@@ -1,3 +1,14 @@
+v0.10.2 | 2026-08-12
+Operator ergonomics and accessibility
+* Moved the message title to the top of the alarm editor, explained where it is displayed, and exposed each rule's active state so disabled panel clones can be enabled from the live UI.
+* Added a sticky validation and action bar with explicit missing-title, target-panel, condition, color, and timing feedback; an extreme-compact layout keeps the controls usable at minimum size and 200 percent scaling.
+* Replaced narrow condition tables with responsive cards and moved timing plus escalation into a collapsed advanced section that summarizes defaults, configured values, or hidden errors.
+* Added a visible Edit action and inactive badge to custom alarm tiles while retaining double-click as a shortcut.
+* Added persistent in-view status feedback, localized control metadata, safer keyboard focus capture, Ctrl+Enter save, Escape close handling, and larger action targets.
+* Added dynamic black/white alarm text for contrast, stable high-contrast history rows, and a Reduced Motion option that replaces alarm blinking with a steady highlight and transfers with appearance profiles.
+* Persisted preferred position, size, and open state for main, editor, and detached windows. Viewport/UI-scale clamps, pinning, layout import, and Historian fullscreen no longer overwrite user preferences.
+* Kept MultiLangLib external and required, synchronized 1,069 keys across all 21 language catalogs, retained API V1 and persistence schema 20, and passed 138,229 core assertions plus all Release, IL/reflection, localization, rollback, and package checks.
+
 v0.10.1 | 2026-08-11
 Cross-save default profile
 * Added a selectable cross-save default profile under OPTIONS for notification rules, system alarms, alarm colors/UI scale, and window positions.

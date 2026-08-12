@@ -67,6 +67,9 @@ internal sealed class NativeUiSurface : IDisposable
 
         m_context = new NativeRenderContext(this, m_contentRoot);
         RootElement.RegisterCallback<GeometryChangedEvent>(HandleGeometryChanged);
+        RootElement.RegisterCallback<PointerUpEvent>(
+            HandlePointerRelease,
+            TrickleDown.TrickleDown);
         ApplyScaleLayout();
     }
 
@@ -96,6 +99,23 @@ internal sealed class NativeUiSurface : IDisposable
             }
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Returns whether a keyboard-focusable control inside this surface owns
+    /// focus. Pointer activation releases non-text controls to the focus sink
+    /// after the click completes; Tab/keyboard focus remains captured.
+    /// </summary>
+    public bool HasKeyboardFocus
+    {
+        get
+        {
+            var focused = RootElement.panel?.focusController?.focusedElement
+                as VisualElement;
+            return focused != null &&
+                   focused != m_focusSink &&
+                   IsWithinRoot(focused);
         }
     }
 
@@ -170,8 +190,54 @@ internal sealed class NativeUiSurface : IDisposable
         m_disposed = true;
         RootElement.UnregisterCallback<GeometryChangedEvent>(
             HandleGeometryChanged);
+        RootElement.UnregisterCallback<PointerUpEvent>(
+            HandlePointerRelease,
+            TrickleDown.TrickleDown);
         m_context.Dispose();
         RootElement.RemoveFromHierarchy();
+    }
+
+    private void HandlePointerRelease(PointerUpEvent evt)
+    {
+        if (evt.button != 0)
+        {
+            return;
+        }
+        var focused = RootElement.panel?.focusController?.focusedElement
+            as VisualElement;
+        if (focused == null ||
+            focused == m_focusSink ||
+            !IsWithinRoot(focused) ||
+            IsTextInputElement(focused))
+        {
+            return;
+        }
+
+        // Let Button.clicked / Toggle change finish before releasing pointer
+        // focus. Keyboard navigation can still focus the same control later.
+        RootElement.schedule.Execute(() =>
+        {
+            if (!m_disposed && focused.panel != null &&
+                IsWithinRoot(focused))
+            {
+                focused.Blur();
+                m_focusSink.Focus();
+            }
+        });
+    }
+
+    private bool IsTextInputElement(VisualElement element)
+    {
+        for (var current = element;
+             current != null && current != RootElement;
+             current = current.parent)
+        {
+            if (current is UiTextField)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void HandleGeometryChanged(GeometryChangedEvent _)
@@ -259,6 +325,65 @@ internal readonly struct NativeGUILayoutOption
 
     public NativeGUILayoutOptionKind Kind { get; }
     public float Value { get; }
+}
+
+/// <summary>
+/// Optional semantic metadata for controls rendered by the immediate native
+/// UI bridge. A stable name allows deterministic focus targeting, while the
+/// tooltip and focus flag keep compact or pointer-only controls understandable
+/// without changing the legacy drawing API.
+/// </summary>
+internal readonly struct NativeControlMetadata
+{
+    private readonly bool? m_focusable;
+
+    public NativeControlMetadata(
+        string name = null,
+        string tooltip = null,
+        bool focusable = true,
+        int tabIndex = 0)
+    {
+        Name = name;
+        Tooltip = tooltip;
+        m_focusable = focusable;
+        TabIndex = tabIndex;
+    }
+
+    public string Name { get; }
+    public string Tooltip { get; }
+    public bool Focusable => m_focusable ?? true;
+    public int TabIndex { get; }
+}
+
+internal static class NativeControlMetadataApplicator
+{
+    public static string ReconciliationKey(
+        NativeControlMetadata? metadata) =>
+        metadata.HasValue &&
+        !string.IsNullOrWhiteSpace(metadata.Value.Name)
+            ? metadata.Value.Name
+            : null;
+
+    public static void Apply(
+        VisualElement element,
+        NativeControlMetadata? metadata,
+        string fallbackTooltip = null)
+    {
+        if (element == null)
+        {
+            return;
+        }
+
+        var focusable = !metadata.HasValue || metadata.Value.Focusable;
+        element.name = metadata?.Name ?? string.Empty;
+        element.tooltip = metadata.HasValue
+            ? metadata.Value.Tooltip ?? fallbackTooltip ?? string.Empty
+            : fallbackTooltip ?? string.Empty;
+        element.focusable = focusable;
+        element.tabIndex = focusable
+            ? metadata?.TabIndex ?? 0
+            : -1;
+    }
 }
 
 internal static class NativeGUILayout
@@ -512,16 +637,40 @@ internal static class NativeGUILayout
     public static bool Button(
         string text,
         params NativeGUILayoutOption[] options) =>
-        Button(text, null, options);
+        ButtonCore(text, null, null, null, options);
+
+    public static bool Button(
+        string text,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        ButtonCore(text, null, metadata, null, options);
 
     public static bool Button(
         string text,
         GUIStyle style,
-        params NativeGUILayoutOption[] options)
+        params NativeGUILayoutOption[] options) =>
+        ButtonCore(text, style, null, null, options);
+
+    public static bool Button(
+        string text,
+        GUIStyle style,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        ButtonCore(text, style, metadata, null, options);
+
+    private static bool ButtonCore(
+        string text,
+        GUIStyle style,
+        NativeControlMetadata? metadata,
+        string fallbackTooltip,
+        NativeGUILayoutOption[] options)
     {
         var context = NativeUiRuntime.RequireCurrent();
         context.InvalidateAbsoluteCanvas();
-        var node = context.Acquire(NativeNodeKind.Button);
+        var node = context.Acquire(
+            NativeNodeKind.Button,
+            reconciliationKey:
+                NativeControlMetadataApplicator.ReconciliationKey(metadata));
         var button = (UiButton)node.Element;
         button.text = text ?? string.Empty;
         button.enableRichText = style?.richText ?? false;
@@ -531,6 +680,10 @@ internal static class NativeGUILayout
             options,
             context.Enabled,
             context.Color);
+        NativeControlMetadataApplicator.Apply(
+            button,
+            metadata,
+            fallbackTooltip);
         return node.ConsumeClick();
     }
 
@@ -538,34 +691,85 @@ internal static class NativeGUILayout
         GUIContent content,
         GUIStyle style,
         params NativeGUILayoutOption[] options) =>
-        Button(content?.text, style, options);
+        ButtonCore(content?.text, style, null, content?.tooltip, options);
+
+    public static bool Button(
+        GUIContent content,
+        GUIStyle style,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        ButtonCore(
+            content?.text,
+            style,
+            metadata,
+            content?.tooltip,
+            options);
 
     public static string TextField(
         string text,
         params NativeGUILayoutOption[] options) =>
-        TextField(text, -1, null, options);
+        TextFieldCore(text, -1, null, null, options);
+
+    public static string TextField(
+        string text,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        TextFieldCore(text, -1, null, metadata, options);
 
     public static string TextField(
         string text,
         GUIStyle style,
         params NativeGUILayoutOption[] options) =>
-        TextField(text, -1, style, options);
+        TextFieldCore(text, -1, style, null, options);
+
+    public static string TextField(
+        string text,
+        GUIStyle style,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        TextFieldCore(text, -1, style, metadata, options);
 
     public static string TextField(
         string text,
         int maxLength,
         params NativeGUILayoutOption[] options) =>
-        TextField(text, maxLength, null, options);
+        TextFieldCore(text, maxLength, null, null, options);
+
+    public static string TextField(
+        string text,
+        int maxLength,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        TextFieldCore(text, maxLength, null, metadata, options);
 
     public static string TextField(
         string text,
         int maxLength,
         GUIStyle style,
-        params NativeGUILayoutOption[] options)
+        params NativeGUILayoutOption[] options) =>
+        TextFieldCore(text, maxLength, style, null, options);
+
+    public static string TextField(
+        string text,
+        int maxLength,
+        GUIStyle style,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        TextFieldCore(text, maxLength, style, metadata, options);
+
+    private static string TextFieldCore(
+        string text,
+        int maxLength,
+        GUIStyle style,
+        NativeControlMetadata? metadata,
+        NativeGUILayoutOption[] options)
     {
         var context = NativeUiRuntime.RequireCurrent();
         context.InvalidateAbsoluteCanvas();
-        var node = context.Acquire(NativeNodeKind.TextField);
+        var node = context.Acquire(
+            NativeNodeKind.TextField,
+            reconciliationKey:
+                NativeControlMetadataApplicator.ReconciliationKey(metadata));
         var field = (UiTextField)node.Element;
         field.maxLength = maxLength > 0 ? maxLength : -1;
         var result = node.ConsumeText(text ?? string.Empty);
@@ -578,6 +782,7 @@ internal static class NativeGUILayout
             options,
             context.Enabled,
             context.Color);
+        NativeControlMetadataApplicator.Apply(field, metadata);
         return result;
     }
 
@@ -585,17 +790,43 @@ internal static class NativeGUILayout
         bool value,
         string text,
         params NativeGUILayoutOption[] options) =>
-        Toggle(value, text, null, options);
+        ToggleCore(value, text, null, null, options);
+
+    public static bool Toggle(
+        bool value,
+        string text,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        ToggleCore(value, text, null, metadata, options);
 
     public static bool Toggle(
         bool value,
         string text,
         GUIStyle style,
-        params NativeGUILayoutOption[] options)
+        params NativeGUILayoutOption[] options) =>
+        ToggleCore(value, text, style, null, options);
+
+    public static bool Toggle(
+        bool value,
+        string text,
+        GUIStyle style,
+        NativeControlMetadata metadata,
+        params NativeGUILayoutOption[] options) =>
+        ToggleCore(value, text, style, metadata, options);
+
+    private static bool ToggleCore(
+        bool value,
+        string text,
+        GUIStyle style,
+        NativeControlMetadata? metadata,
+        NativeGUILayoutOption[] options)
     {
         var context = NativeUiRuntime.RequireCurrent();
         context.InvalidateAbsoluteCanvas();
-        var node = context.Acquire(NativeNodeKind.Toggle);
+        var node = context.Acquire(
+            NativeNodeKind.Toggle,
+            reconciliationKey:
+                NativeControlMetadataApplicator.ReconciliationKey(metadata));
         var toggle = (UiToggle)node.Element;
         toggle.text = text ?? string.Empty;
         var result = node.ConsumeToggle(value);
@@ -608,6 +839,7 @@ internal static class NativeGUILayout
             options,
             context.Enabled,
             context.Color);
+        NativeControlMetadataApplicator.Apply(toggle, metadata);
         return result;
     }
 
@@ -942,18 +1174,40 @@ internal static class NativeGUI
         Label(position, content?.text, style);
 
     public static bool Button(Rect position, string text) =>
-        Button(position, text, null);
+        ButtonCore(position, text, null, null, null);
 
     public static bool Button(
         Rect position,
         string text,
-        GUIStyle style)
+        NativeControlMetadata metadata) =>
+        ButtonCore(position, text, null, metadata, null);
+
+    public static bool Button(
+        Rect position,
+        string text,
+        GUIStyle style) =>
+        ButtonCore(position, text, style, null, null);
+
+    public static bool Button(
+        Rect position,
+        string text,
+        GUIStyle style,
+        NativeControlMetadata metadata) =>
+        ButtonCore(position, text, style, metadata, null);
+
+    private static bool ButtonCore(
+        Rect position,
+        string text,
+        GUIStyle style,
+        NativeControlMetadata? metadata,
+        string fallbackTooltip)
     {
         var context = NativeUiRuntime.RequireCurrent();
         var canvasNode = context.RequireAbsoluteCanvas();
         var node = context.Acquire(
             NativeNodeKind.Button,
-            canvasNode);
+            canvasNode,
+            NativeControlMetadataApplicator.ReconciliationKey(metadata));
         var button = (UiButton)node.Element;
         button.text = text ?? string.Empty;
         button.enableRichText = style?.richText ?? false;
@@ -963,6 +1217,10 @@ internal static class NativeGUI
             Array.Empty<NativeGUILayoutOption>(),
             context.Enabled,
             context.Color);
+        NativeControlMetadataApplicator.Apply(
+            button,
+            metadata,
+            fallbackTooltip);
         NativeStyleMapper.ApplyAbsoluteRect(node.Element, position);
         return node.ConsumeClick();
     }
@@ -971,7 +1229,24 @@ internal static class NativeGUI
         Rect position,
         GUIContent content,
         GUIStyle style) =>
-        Button(position, content?.text, style);
+        ButtonCore(
+            position,
+            content?.text,
+            style,
+            null,
+            content?.tooltip);
+
+    public static bool Button(
+        Rect position,
+        GUIContent content,
+        GUIStyle style,
+        NativeControlMetadata metadata) =>
+        ButtonCore(
+            position,
+            content?.text,
+            style,
+            metadata,
+            content?.tooltip);
 
     public static void DrawTexture(Rect position, Texture image)
     {
@@ -1422,6 +1697,7 @@ internal sealed class NativeRenderContext : IDisposable
             NativeStyleMapper.RefreshVisualState(node);
         });
     }
+
 
     private static void AttachAt(
         VisualElement parent,

@@ -27,6 +27,8 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         private Action m_resizeCompleted;
         private readonly Action<bool> m_onActivated;
         private readonly Func<Vector2, bool> m_isBodyPoint;
+        private readonly Func<bool> m_onEscape;
+        private readonly Func<bool> m_onCtrlEnter;
         private Vector2 m_resizeStart;
         private int m_resizePointerId = -1;
 
@@ -34,14 +36,21 @@ internal sealed class UnmaNativeEditorShell : IDisposable
             LocStrFormatted title,
             Action requestClose,
             Action<bool> onActivated,
-            Func<Vector2, bool> isBodyPoint)
+            Func<Vector2, bool> isBodyPoint,
+            Func<bool> onEscape,
+            Func<bool> onCtrlEnter)
             : base(title, false)
         {
             m_onActivated = onActivated;
             m_isBodyPoint = isBodyPoint;
+            m_onEscape = onEscape;
+            m_onCtrlEnter = onCtrlEnter;
             CloseButton.OnClick(requestClose);
             Frame.RootElement.RegisterCallback<PointerDownEvent>(
                 HandleFramePointerDown,
+                TrickleDown.TrickleDown);
+            Frame.RootElement.RegisterCallback<KeyDownEvent>(
+                HandleKeyboardShortcut,
                 TrickleDown.TrickleDown);
             m_resizeHandle = new ResizeLabel("\u25E2")
             {
@@ -90,6 +99,61 @@ internal sealed class UnmaNativeEditorShell : IDisposable
             return Frame.WorldBound.Contains(panelPoint);
         }
 
+        public Vector2 FrameWorldPosition => Frame.WorldBound.position;
+
+        public void RestoreFrameWorldPosition(Vector2 worldPosition)
+        {
+            var currentWorldPosition = Frame.WorldBound.position;
+            var frameShadowElement = Frame.RootElement.parent;
+            if (frameShadowElement == null)
+            {
+                return;
+            }
+            var currentTranslation =
+                frameShadowElement.resolvedStyle.translate;
+            this.TranslateFrame(
+                new Px(
+                    currentTranslation.x +
+                    worldPosition.x - currentWorldPosition.x),
+                new Px(
+                    currentTranslation.y +
+                    worldPosition.y - currentWorldPosition.y));
+        }
+
+        public void ScheduleFrameWorldPositionRestore(
+            Vector2 worldPosition,
+            Func<bool> shouldRestore,
+            Action onRestored)
+        {
+            Frame.RootElement.schedule
+                .Execute(() =>
+                {
+                    if (shouldRestore?.Invoke() != true)
+                    {
+                        return;
+                    }
+                    RestoreFrameWorldPosition(worldPosition);
+                    onRestored?.Invoke();
+                })
+                .StartingIn(16);
+        }
+
+        public void BringFrameToFront()
+        {
+            RootElement.BringToFront();
+        }
+
+        public WindowDragger CreateWindowDragger()
+        {
+            var frameShadowElement = Frame.RootElement.parent ??
+                throw new InvalidOperationException(
+                    "Native editor frame shadow is not attached.");
+            return new WindowDragger(
+                this,
+                new UiComponent(frameShadowElement),
+                TitleBar);
+        }
+
         public void ConfigureResize(
             Action<Vector2> resizeDelta,
             Action resizeCompleted)
@@ -117,7 +181,32 @@ internal sealed class UnmaNativeEditorShell : IDisposable
                 HandleResizePointerUp);
             m_resizeHandle.UnregisterCallback<PointerCaptureOutEvent>(
                 HandleResizeCaptureOut);
+            Frame.RootElement.UnregisterCallback<KeyDownEvent>(
+                HandleKeyboardShortcut,
+                TrickleDown.TrickleDown);
             m_resizeHandle.RemoveFromHierarchy();
+        }
+
+        private void HandleKeyboardShortcut(KeyDownEvent evt)
+        {
+            Func<bool> action = null;
+            if (evt.keyCode == KeyCode.Escape)
+            {
+                action = m_onEscape;
+            }
+            else if (evt.ctrlKey &&
+                     (evt.keyCode == KeyCode.Return ||
+                      evt.keyCode == KeyCode.KeypadEnter))
+            {
+                action = m_onCtrlEnter;
+            }
+
+            if (action?.Invoke() != true)
+            {
+                return;
+            }
+
+            evt.StopImmediatePropagation();
         }
 
         private void HandleResizePointerDown(PointerDownEvent evt)
@@ -210,27 +299,43 @@ internal sealed class UnmaNativeEditorShell : IDisposable
     private readonly Action m_onClose;
     private readonly Action<float, float> m_onResized;
     private readonly EditorWindow m_window;
+    private readonly WindowDragger m_windowDragger;
     private readonly NativeUiSurface m_bodySurface;
     private readonly VisualElement m_bodyElement;
     private readonly VisualElement m_rootElement;
 
     private bool m_disposed;
     private bool m_suppressed;
+    private float m_preferredWindowWidth;
+    private float m_preferredWindowHeight;
     private float m_windowWidth;
     private float m_windowHeight;
     private float m_contentScale = 1f;
+    private int m_viewportScreenWidth;
+    private int m_viewportScreenHeight;
+    private float m_viewportRootScale;
+    private bool m_viewportSignatureReady;
     private float m_resizeStartWidth;
     private float m_resizeStartHeight;
+    private float m_resizeStartPreferredWidth;
+    private float m_resizeStartPreferredHeight;
     private string m_currentTitle;
+    private Vector2 m_preferredFrameWorldPosition;
+    private Vector2 m_effectiveFrameWorldPosition;
+    private int m_positionRestoreVersion;
 
     public UnmaNativeEditorShell(
         UiRoot uiRoot,
         float requestedWidth,
         float requestedHeight,
+        float initialX,
+        float initialY,
         string initialTitle,
         Action onClose,
         Action<float, float> onResized,
-        Action<bool> onActivated)
+        Action<bool> onActivated,
+        Func<bool> onEscape = null,
+        Func<bool> onCtrlEnter = null)
     {
         m_uiRoot = uiRoot ?? throw new ArgumentNullException(nameof(uiRoot));
         m_onClose = onClose ?? throw new ArgumentNullException(nameof(onClose));
@@ -238,12 +343,20 @@ internal sealed class UnmaNativeEditorShell : IDisposable
                       throw new ArgumentNullException(nameof(onResized));
 
         var viewportSize = GetMaximumViewportSize();
-        m_windowWidth = ClampRequestedDimension(
-            requestedWidth,
+        m_preferredWindowWidth =
+            WindowResizeMath.NormalizePreferredExtent(
+                requestedWidth,
+                MinimumWindowWidth);
+        m_preferredWindowHeight =
+            WindowResizeMath.NormalizePreferredExtent(
+                requestedHeight,
+                MinimumWindowHeight);
+        m_windowWidth = WindowResizeMath.ResolveEffectiveExtent(
+            m_preferredWindowWidth,
             Mathf.Min(GetMinimumWindowWidth(), viewportSize.x),
             viewportSize.x);
-        m_windowHeight = ClampRequestedDimension(
-            requestedHeight,
+        m_windowHeight = WindowResizeMath.ResolveEffectiveExtent(
+            m_preferredWindowHeight,
             Mathf.Min(GetMinimumWindowHeight(), viewportSize.y),
             viewportSize.y);
 
@@ -283,12 +396,22 @@ internal sealed class UnmaNativeEditorShell : IDisposable
             ToTitle(m_currentTitle),
             m_onClose,
             onActivated,
-            panelPoint => m_bodyElement.worldBound.Contains(panelPoint));
+            panelPoint => m_bodyElement.worldBound.Contains(panelPoint),
+            onEscape,
+            onCtrlEnter);
+        m_preferredFrameWorldPosition = NormalizePreferredPosition(
+            new Vector2(initialX, initialY));
+        m_effectiveFrameWorldPosition = ClampPosition(
+            m_preferredFrameWorldPosition);
         m_window
             .WindowSize(
                 new Px(m_windowWidth),
                 new Px(m_windowHeight))
-            .MakeMovableAndEnablePositionSaving();
+            .TranslateFrame(
+                new Px(m_effectiveFrameWorldPosition.x),
+                new Px(m_effectiveFrameWorldPosition.y));
+        m_windowDragger = m_window.CreateWindowDragger();
+        m_windowDragger.OnMoved += HandleWindowMoved;
         m_window.EnablePinning();
         m_window.AddBodySingle(root);
         m_window.ConfigureResize(HandleResizeDelta, HandleResizeCompleted);
@@ -300,9 +423,49 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         !m_disposed &&
         !m_suppressed &&
         m_window.IsOpen &&
-        m_bodySurface.HasTextInputFocus;
+        m_bodySurface.HasKeyboardFocus;
 
     public Vector2 CurrentSize => new(m_windowWidth, m_windowHeight);
+
+    /// <summary>
+    /// User-selected size before transient UI-scale and viewport constraints.
+    /// This is the size that may be persisted by the controller.
+    /// </summary>
+    public Vector2 PreferredSize =>
+        new(m_preferredWindowWidth, m_preferredWindowHeight);
+
+    public bool TryGetCurrentPosition(out Vector2 position)
+    {
+        position = m_preferredFrameWorldPosition;
+        return !m_disposed && m_window.IsOpen;
+    }
+
+    public void ApplyLayout(Vector2 position, Vector2 size)
+    {
+        if (m_disposed)
+        {
+            return;
+        }
+        m_preferredWindowWidth =
+            WindowResizeMath.NormalizePreferredExtent(
+                size.x,
+                MinimumWindowWidth);
+        m_preferredWindowHeight =
+            WindowResizeMath.NormalizePreferredExtent(
+                size.y,
+                MinimumWindowHeight);
+        m_preferredFrameWorldPosition =
+            NormalizePreferredPosition(position);
+        ApplyPreferredWindowSize();
+    }
+
+    public void BringToFront()
+    {
+        if (!m_disposed && m_window.IsOpen)
+        {
+            m_window.BringFrameToFront();
+        }
+    }
 
     /// <summary>
     /// Preserves the editor's usable logical body across UNMA UI scales while
@@ -316,13 +479,16 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         }
 
         var normalized = NormalizeContentScale(scale);
-        if (Mathf.Approximately(m_contentScale, normalized))
+        var contentScaleChanged =
+            !Mathf.Approximately(m_contentScale, normalized);
+        var viewportChanged = UpdateViewportSignature();
+        if (!contentScaleChanged && !viewportChanged)
         {
             return;
         }
 
         m_contentScale = normalized;
-        ApplyWindowSize(m_windowWidth, m_windowHeight);
+        ApplyPreferredWindowSize();
     }
 
     public void ClearBodyFocus()
@@ -353,6 +519,7 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         {
             m_window.Open(m_uiRoot);
             m_window.SetVisible(!m_suppressed);
+            RestorePosition(m_preferredFrameWorldPosition);
         }
     }
 
@@ -397,7 +564,8 @@ internal sealed class UnmaNativeEditorShell : IDisposable
     {
         if (!m_disposed)
         {
-            ApplyWindowSize(m_windowWidth, m_windowHeight);
+            UpdateViewportSignature();
+            ApplyPreferredWindowSize();
         }
     }
 
@@ -428,6 +596,7 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         }
 
         m_disposed = true;
+        m_windowDragger.OnMoved -= HandleWindowMoved;
         m_bodySurface.Dispose();
         m_window.DisposeResizeHandle();
         if (m_window.IsOpen)
@@ -438,6 +607,7 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         {
             m_window.RemoveFromHierarchy();
         }
+        m_windowDragger.Disable();
     }
 
     private void HandleResizeDelta(Vector2 delta)
@@ -452,11 +622,24 @@ internal sealed class UnmaNativeEditorShell : IDisposable
         {
             m_resizeStartWidth = m_windowWidth;
             m_resizeStartHeight = m_windowHeight;
+            m_resizeStartPreferredWidth = m_preferredWindowWidth;
+            m_resizeStartPreferredHeight = m_preferredWindowHeight;
         }
 
         ApplyWindowSize(
             m_resizeStartWidth + delta.x,
             m_resizeStartHeight + delta.y);
+        m_preferredWindowWidth = Mathf.Approximately(
+            m_windowWidth,
+            m_resizeStartWidth)
+            ? m_resizeStartPreferredWidth
+            : m_windowWidth;
+        m_preferredWindowHeight = Mathf.Approximately(
+            m_windowHeight,
+            m_resizeStartHeight)
+            ? m_resizeStartPreferredHeight
+            : m_windowHeight;
+        RestoreEffectivePositionFromPreferred(force: true);
     }
 
     private void HandleResizeCompleted()
@@ -468,17 +651,47 @@ internal sealed class UnmaNativeEditorShell : IDisposable
 
         m_resizeStartWidth = 0f;
         m_resizeStartHeight = 0f;
-        m_onResized(m_windowWidth, m_windowHeight);
+        m_resizeStartPreferredWidth = 0f;
+        m_resizeStartPreferredHeight = 0f;
+        m_onResized(
+            m_preferredWindowWidth,
+            m_preferredWindowHeight);
+    }
+
+    private void HandleWindowMoved(Vector2 _)
+    {
+        if (m_disposed || m_window.IsPinned || !m_window.IsOpen)
+        {
+            return;
+        }
+
+        var current = m_window.FrameWorldPosition;
+        if (!IsFinite(current.x) || !IsFinite(current.y))
+        {
+            return;
+        }
+
+        m_preferredFrameWorldPosition =
+            NormalizePreferredPosition(current);
+        RestoreEffectivePositionFromPreferred(force: true);
+    }
+
+    private void ApplyPreferredWindowSize()
+    {
+        ApplyWindowSize(
+            m_preferredWindowWidth,
+            m_preferredWindowHeight);
+        RestoreEffectivePositionFromPreferred(force: true);
     }
 
     private void ApplyWindowSize(float requestedWidth, float requestedHeight)
     {
         var viewportSize = GetMaximumViewportSize();
-        var nextWidth = ClampRequestedDimension(
+        var nextWidth = WindowResizeMath.ResolveEffectiveExtent(
             requestedWidth,
             Mathf.Min(GetMinimumWindowWidth(), viewportSize.x),
             viewportSize.x);
-        var nextHeight = ClampRequestedDimension(
+        var nextHeight = WindowResizeMath.ResolveEffectiveExtent(
             requestedHeight,
             Mathf.Min(GetMinimumWindowHeight(), viewportSize.y),
             viewportSize.y);
@@ -509,6 +722,87 @@ internal sealed class UnmaNativeEditorShell : IDisposable
             bodyHeight);
     }
 
+    private void RestorePosition(Vector2 requestedPosition)
+    {
+        m_preferredFrameWorldPosition =
+            NormalizePreferredPosition(requestedPosition);
+        RestoreEffectivePositionFromPreferred(force: true);
+    }
+
+    private void RestoreEffectivePositionFromPreferred(bool force)
+    {
+        var effectivePosition = ClampPosition(
+            m_preferredFrameWorldPosition);
+        m_effectiveFrameWorldPosition = effectivePosition;
+        if (!m_window.IsOpen)
+        {
+            return;
+        }
+
+        var current = m_window.FrameWorldPosition;
+        if (!force && IsFinite(current.x) && IsFinite(current.y) &&
+            PositionsApproximately(current, effectivePosition))
+        {
+            m_effectiveFrameWorldPosition = current;
+            return;
+        }
+
+        var restoreVersion = ++m_positionRestoreVersion;
+        m_window.RestoreFrameWorldPosition(effectivePosition);
+        m_window.ScheduleFrameWorldPositionRestore(
+            effectivePosition,
+            () => !m_disposed &&
+                  restoreVersion == m_positionRestoreVersion &&
+                  m_window.IsOpen,
+            () => CompleteEffectivePositionRestore(restoreVersion));
+    }
+
+    private void CompleteEffectivePositionRestore(int restoreVersion)
+    {
+        if (m_disposed || restoreVersion != m_positionRestoreVersion)
+        {
+            return;
+        }
+
+        var current = m_window.FrameWorldPosition;
+        if (IsFinite(current.x) && IsFinite(current.y))
+        {
+            m_effectiveFrameWorldPosition = current;
+        }
+    }
+
+    private Vector2 ClampPosition(Vector2 requestedPosition)
+    {
+        var rootScale = IsFinitePositive(m_uiRoot.CurrentScale)
+            ? m_uiRoot.CurrentScale
+            : 1f;
+        var viewportWidth = Mathf.Max(1f, Screen.width / rootScale);
+        var viewportHeight = Mathf.Max(1f, Screen.height / rootScale);
+        var normalized = NormalizePreferredPosition(requestedPosition);
+        return new Vector2(
+            Mathf.Clamp(
+                normalized.x,
+                0f,
+                Mathf.Max(0f, viewportWidth - m_windowWidth)),
+            Mathf.Clamp(
+                normalized.y,
+                0f,
+                Mathf.Max(0f, viewportHeight - m_windowHeight)));
+    }
+
+    private static Vector2 NormalizePreferredPosition(Vector2 position)
+    {
+        return new Vector2(
+            IsFinite(position.x) ? position.x : 180f,
+            IsFinite(position.y) ? position.y : 110f);
+    }
+
+    private static bool PositionsApproximately(Vector2 left, Vector2 right)
+    {
+        return Mathf.Abs(left.x - right.x) <= 0.5f &&
+               Mathf.Abs(left.y - right.y) <= 0.5f;
+    }
+
     private float GetMinimumWindowWidth()
     {
         return HorizontalBodyInset + MinimumBodyWidth * m_contentScale;
@@ -522,6 +816,24 @@ internal sealed class UnmaNativeEditorShell : IDisposable
     private static float NormalizeContentScale(float scale)
     {
         return Mathf.Clamp(IsFinitePositive(scale) ? scale : 1f, 0.75f, 2f);
+    }
+
+    private bool UpdateViewportSignature()
+    {
+        var rootScale = IsFinitePositive(m_uiRoot.CurrentScale)
+            ? m_uiRoot.CurrentScale
+            : 1f;
+        var changed = !m_viewportSignatureReady ||
+                      m_viewportScreenWidth != Screen.width ||
+                      m_viewportScreenHeight != Screen.height ||
+                      !Mathf.Approximately(
+                          m_viewportRootScale,
+                          rootScale);
+        m_viewportScreenWidth = Screen.width;
+        m_viewportScreenHeight = Screen.height;
+        m_viewportRootScale = rootScale;
+        m_viewportSignatureReady = true;
+        return changed;
     }
 
     private Vector2 GetMaximumViewportSize()
@@ -544,17 +856,6 @@ internal sealed class UnmaNativeEditorShell : IDisposable
                     logicalHeight * 0.96f)));
     }
 
-    private static float ClampRequestedDimension(
-        float requested,
-        float minimum,
-        float maximum)
-    {
-        return Mathf.Clamp(
-            IsFinitePositive(requested) ? requested : minimum,
-            minimum,
-            maximum);
-    }
-
     private static float GetBodyWidth(float windowWidth)
     {
         return Mathf.Max(1f, windowWidth - HorizontalBodyInset);
@@ -575,8 +876,11 @@ internal sealed class UnmaNativeEditorShell : IDisposable
 
     private static bool IsFinitePositive(float value)
     {
-        return !float.IsNaN(value) &&
-               !float.IsInfinity(value) &&
-               value > 0f;
+        return IsFinite(value) && value > 0f;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 }

@@ -5,6 +5,7 @@ using Mafi.Unity.UiToolkit.Component;
 using Mafi.Unity.UiToolkit.Library;
 using UnityEngine;
 using UnityEngine.UIElements;
+using UNMA.Localization;
 using NativeLabel = UnityEngine.UIElements.Label;
 
 namespace UNMA.Ui;
@@ -70,7 +71,9 @@ internal sealed class UnmaNativeLauncher : IDisposable
         m_dragHandle = new NativeLabel("\u2195")
         {
             name = "UNMA.NativeLauncherDragHandle",
-            tooltip = "Move UNMA launcher",
+            tooltip = UnmaText.Get(
+                "native.launcher_move",
+                "Move UNMA launcher"),
             pickingMode = PickingMode.Position,
         };
         ConfigureDragHandle(m_dragHandle);
@@ -152,6 +155,16 @@ internal sealed class UnmaNativeLauncher : IDisposable
             : "UNMA";
         ((IComponentWithText)m_openButton).SetValue(
             new LocStrFormatted(text));
+    }
+
+    public void SetPosition(float x, float y)
+    {
+        if (m_disposed)
+        {
+            return;
+        }
+        var position = ClampToViewport(x, y);
+        ApplyPosition(position.x, position.y, false);
     }
 
     public void Dispose()

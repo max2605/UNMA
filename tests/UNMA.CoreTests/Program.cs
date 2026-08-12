@@ -50,6 +50,7 @@ internal static class Program
         TestConfigurationRoundTrip();
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
+        TestReducedMotionConfigurationContract();
         TestRecommendedQuietTransferProfile();
         TestTransferProfileRoundTripAndFilter();
         TestConfigurationTransferMerge();
@@ -59,6 +60,8 @@ internal static class Program
         TestTransferProfileStoreFutureAndCorruptProtection();
         TestStateStoreFutureSchemaProtection();
         TestMechanicalSiren();
+        TestAlarmUiErgonomics();
+        TestAlarmUiStructuralSmokeTests();
         TestLocalizationCoverage();
         TestExternalRegistryValidationAndSnapshots();
         TestExternalMetricPrecedenceAndIsolation();
@@ -183,6 +186,768 @@ internal static class Program
                 IsTrue(english.ContainsKey(match.Groups[1].Value));
             }
         }
+    }
+
+    private static void TestAlarmUiErgonomics()
+    {
+        AreEqual(4.5d, AlarmUiErgonomics.MinimumNormalTextContrast);
+
+        IsTrue(AlarmUiErgonomics.IsValidHtmlColor("#000000"));
+        IsTrue(AlarmUiErgonomics.IsValidHtmlColor("#abcdef"));
+        IsTrue(AlarmUiErgonomics.IsValidHtmlColor("  #ABCDEF  "));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor(null));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor(""));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor("   "));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor("000000"));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor("#000"));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor("#00000000"));
+        IsFalse(AlarmUiErgonomics.IsValidHtmlColor("#GG0000"));
+
+        IsTrue(AlarmUiErgonomics.ShouldUseLightText(0d, 0d, 0d));
+        IsFalse(AlarmUiErgonomics.ShouldUseLightText(1d, 1d, 1d));
+        IsTrue(AlarmUiErgonomics.ShouldUseLightText(
+            0x2B / 255d,
+            0x2D / 255d,
+            0x32 / 255d));
+        IsFalse(AlarmUiErgonomics.ShouldUseLightText(
+            0xF0 / 255d,
+            0xC5 / 255d,
+            0x41 / 255d));
+        IsTrue(AlarmUiErgonomics.ShouldUseLightText(
+            0xE5 / 255d,
+            0x1B / 255d,
+            0x23 / 255d));
+        AreClose(21d, AlarmUiErgonomics.BestTextContrast(0d, 0d, 0d));
+        AreClose(21d, AlarmUiErgonomics.BestTextContrast(1d, 1d, 1d));
+        AreClose(
+            AlarmUiErgonomics.BestTextContrast(0d, 0d, 0d),
+            AlarmUiErgonomics.BestTextContrast(-1d, -1d, -1d));
+        AreClose(
+            AlarmUiErgonomics.BestTextContrast(1d, 1d, 1d),
+            AlarmUiErgonomics.BestTextContrast(2d, 2d, 2d));
+
+        var lowestSampledContrast = double.MaxValue;
+        for (var red = 0; red <= 16; red++)
+        {
+            for (var green = 0; green <= 16; green++)
+            {
+                for (var blue = 0; blue <= 16; blue++)
+                {
+                    lowestSampledContrast = Math.Min(
+                        lowestSampledContrast,
+                        AlarmUiErgonomics.BestTextContrast(
+                            red / 16d,
+                            green / 16d,
+                            blue / 16d));
+                }
+            }
+        }
+        IsTrue(lowestSampledContrast >=
+               AlarmUiErgonomics.MinimumNormalTextContrast);
+
+        IsTrue(AlarmUiErgonomics.CanSaveRule(
+            "  LOW COAL  ",
+            hasTargetPanel: true,
+            conditionCount: 1,
+            colorIsValid: true,
+            timingIsValid: true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            " ", true, 1, true, true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            null, true, 1, true, true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            "LOW COAL", false, 1, true, true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            "LOW COAL", true, 0, true, true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            "LOW COAL", true, -1, true, true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            "LOW COAL", true, 1, false, true));
+        IsFalse(AlarmUiErgonomics.CanSaveRule(
+            "LOW COAL", true, 1, true, false));
+    }
+
+    private static void TestAlarmUiStructuralSmokeTests()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var editorSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Ui",
+            "UnmaOverlayController.cs"));
+        var editorMethod = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmRuleEditor(bool inEntityWindow)");
+        var titleField = editorMethod.IndexOf(
+            "DrawAlarmTitleField();",
+            StringComparison.Ordinal);
+        var enabledField = editorMethod.IndexOf(
+            "DrawAlarmEnabledField();",
+            StringComparison.Ordinal);
+        var targetPanel = editorMethod.IndexOf(
+            "DrawTargetPanelSelector(inEntityWindow);",
+            StringComparison.Ordinal);
+        IsTrue(titleField >= 0);
+        IsTrue(enabledField > titleField);
+        IsTrue(targetPanel > enabledField);
+
+        var enabledMethod = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmEnabledField()");
+        IsTrue(enabledMethod.Contains(
+            "m_draftEnabled = NativeGUILayout.Toggle(",
+            StringComparison.Ordinal));
+
+        var alarmProperties = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmProperties()");
+        IsTrue(alarmProperties.Contains(
+            "DrawAlarmAdvancedSection(sounds);",
+            StringComparison.Ordinal));
+        IsFalse(alarmProperties.Contains(
+            "DrawAlarmTimingDraft();",
+            StringComparison.Ordinal));
+        IsFalse(alarmProperties.Contains(
+            "DrawAlarmEscalationDraft(sounds);",
+            StringComparison.Ordinal));
+        var advancedSection = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmAdvancedSection(");
+        var collapsedGate = advancedSection.IndexOf(
+            "if (!m_ruleAdvancedOpen)",
+            StringComparison.Ordinal);
+        var advancedTiming = advancedSection.IndexOf(
+            "DrawAlarmTimingDraft();",
+            StringComparison.Ordinal);
+        var advancedEscalation = advancedSection.IndexOf(
+            "DrawAlarmEscalationDraft(sounds);",
+            StringComparison.Ordinal);
+        IsTrue(collapsedGate >= 0);
+        IsTrue(advancedTiming > collapsedGate);
+        IsTrue(advancedEscalation > advancedTiming);
+        IsTrue(advancedSection.Contains(
+            "new NativeControlMetadata(",
+            StringComparison.Ordinal));
+        IsTrue(advancedSection.Contains(
+            "\"alarm-advanced-toggle\"",
+            StringComparison.Ordinal));
+
+        var editorBody = ExtractSourceMethod(
+            editorSource,
+            "private void DrawEditorBodyContent()");
+        var status = editorBody.IndexOf(
+            "DrawStatusMessage();",
+            StringComparison.Ordinal);
+        var scrollStart = editorBody.IndexOf(
+            "NativeGUILayout.BeginScrollView",
+            StringComparison.Ordinal);
+        var scrollEnd = editorBody.LastIndexOf(
+            "NativeGUILayout.EndScrollView();",
+            StringComparison.Ordinal);
+        var actions = editorBody.IndexOf(
+            "DrawRuleEditorActions(",
+            StringComparison.Ordinal);
+        IsTrue(status >= 0 && status < scrollStart);
+        IsTrue(scrollEnd > scrollStart);
+        IsTrue(actions > scrollEnd);
+
+        var editorActions = ExtractSourceMethod(
+            editorSource,
+            "private void DrawRuleEditorActions(");
+        IsTrue(editorActions.Contains(
+            "var extremeCompact =",
+            StringComparison.Ordinal));
+        IsTrue(editorActions.Contains(
+            "m_entityAlarmWindowRect.height / Math.Max(0.75f, UiScale) < 600f",
+            StringComparison.Ordinal));
+        IsTrue(editorActions.Contains(
+            "\"alarm-editor-save-compact\"",
+            StringComparison.Ordinal));
+
+        var validation = ExtractSourceMethod(
+            editorSource,
+            "private string GetRuleDraftValidationMessage()");
+        IsTrue(validation.Contains(
+            "string.IsNullOrWhiteSpace(m_draftRuleName)",
+            StringComparison.Ordinal));
+        IsTrue(validation.Contains(
+            "GetDraftTargetPanel() == null",
+            StringComparison.Ordinal));
+        IsTrue(validation.Contains(
+            "m_draftConditions.Count == 0",
+            StringComparison.Ordinal));
+        IsTrue(validation.Contains(
+            "AlarmUiErgonomics.IsValidHtmlColor(m_draftColor)",
+            StringComparison.Ordinal));
+        IsTrue(validation.Contains(
+            "TryGetTimingTicks(m_draftActivationDelay",
+            StringComparison.Ordinal));
+
+        var saveDraft = ExtractSourceMethod(
+            editorSource,
+            "private bool SaveDraftRule(IReadOnlyList<SoundOption> sounds)");
+        IsTrue(saveDraft.Contains(
+            "GetRuleDraftValidationMessage()",
+            StringComparison.Ordinal));
+        IsTrue(saveDraft.Contains(
+            "StatusSeverity.Error, true",
+            StringComparison.Ordinal));
+        IsTrue(saveDraft.Contains(
+            "Name = m_draftRuleName.Trim()",
+            StringComparison.Ordinal));
+        IsTrue(saveDraft.Contains(
+            "Enabled = m_draftEnabled",
+            StringComparison.Ordinal));
+
+        var beginEditing = ExtractSourceMethod(
+            editorSource,
+            "private void BeginEditingRule(");
+        IsTrue(beginEditing.Contains(
+            "m_draftEnabled = rule.Enabled;",
+            StringComparison.Ordinal));
+        IsTrue(beginEditing.Contains(
+            "m_ruleAdvancedOpen = false;",
+            StringComparison.Ordinal));
+        var resetDraft = ExtractSourceMethod(
+            editorSource,
+            "private void ResetDraftRule()");
+        IsTrue(resetDraft.Contains(
+            "m_draftEnabled = true;",
+            StringComparison.Ordinal));
+        IsTrue(resetDraft.Contains(
+            "m_ruleAdvancedOpen = false;",
+            StringComparison.Ordinal));
+
+        var mainTab = ExtractSourceMethod(
+            editorSource,
+            "private void DrawSelectedMainTab()");
+        var mainStatus = mainTab.IndexOf(
+            "DrawStatusMessage();",
+            StringComparison.Ordinal);
+        var mainSwitch = mainTab.IndexOf(
+            "switch (m_tab)",
+            StringComparison.Ordinal);
+        IsTrue(mainStatus >= 0 && mainStatus < mainSwitch);
+        var detachedPanel = ExtractSourceMethod(
+            editorSource,
+            "private void DrawDetachedPanelContent(");
+        IsTrue(detachedPanel.Contains(
+            "DrawStatusMessage();",
+            StringComparison.Ordinal));
+
+        var alarmTile = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmTile(");
+        IsTrue(alarmTile.Contains(
+            "m_runtime.Configuration.ReducedMotion",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "AlarmUiErgonomics.ShouldUseLightText(",
+            StringComparison.Ordinal));
+        var historyRows = ExtractSourceMethod(
+            editorSource,
+            "private void DrawHistoryRows(");
+        var historyRow = ExtractSourceMethod(
+            editorSource,
+            "private void DrawHistoryRow(");
+        IsFalse(historyRows.Contains("blink", StringComparison.OrdinalIgnoreCase));
+        IsFalse(historyRow.Contains("blink", StringComparison.OrdinalIgnoreCase));
+        IsFalse(historyRows.Contains(
+            "Time.realtimeSinceStartup",
+            StringComparison.Ordinal));
+        IsFalse(historyRow.Contains(
+            "Time.realtimeSinceStartup",
+            StringComparison.Ordinal));
+
+        var editorShellSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Ui",
+            "UnmaNativeEditorShell.cs"));
+        var keyboardShortcut = ExtractSourceMethod(
+            editorShellSource,
+            "private void HandleKeyboardShortcut(KeyDownEvent evt)");
+        IsTrue(keyboardShortcut.Contains(
+            "KeyCode.Escape",
+            StringComparison.Ordinal));
+        IsTrue(keyboardShortcut.Contains(
+            "evt.ctrlKey",
+            StringComparison.Ordinal));
+        IsTrue(keyboardShortcut.Contains(
+            "KeyCode.Return",
+            StringComparison.Ordinal));
+        IsTrue(keyboardShortcut.Contains(
+            "if (action?.Invoke() != true)",
+            StringComparison.Ordinal));
+        IsTrue(keyboardShortcut.Contains(
+            "evt.StopImmediatePropagation();",
+            StringComparison.Ordinal));
+
+        var saveShortcut = ExtractSourceMethod(
+            editorSource,
+            "private bool SaveDraftRuleFromShortcut()");
+        IsTrue(saveShortcut.Contains(
+            "m_editorWindowMode != EditorWindowMode.Rule",
+            StringComparison.Ordinal));
+        IsTrue(saveShortcut.Contains(
+            "return false;",
+            StringComparison.Ordinal));
+        var escapeShortcut = ExtractSourceMethod(
+            editorSource,
+            "private bool HandleEditorEscapeShortcut()");
+        IsTrue(escapeShortcut.Contains(
+            "m_editorClosePromptOpen = false;",
+            StringComparison.Ordinal));
+
+        var immediateUiSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Ui",
+            "NativeImmediateUi.cs"));
+        IsTrue(immediateUiSource.Contains(
+            "public bool HasKeyboardFocus",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "private void HandlePointerRelease(PointerUpEvent evt)",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "IsTextInputElement(focused)",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "m_focusSink.Focus();",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "internal readonly struct NativeControlMetadata",
+            StringComparison.Ordinal));
+
+        var launcherMove = ExtractSourceMethod(
+            editorSource,
+            "private void HandleNativeLauncherMoved(float x, float y)");
+        IsTrue(launcherMove.Contains(
+            "config.LauncherX = previousX;",
+            StringComparison.Ordinal));
+        IsTrue(launcherMove.Contains(
+            "StatusSeverity.Error",
+            StringComparison.Ordinal));
+
+        foreach (var shellFile in new[]
+                 {
+                     "UnmaNativeWindowShell.cs",
+                     "UnmaNativeEditorShell.cs",
+                     "UnmaNativeDetachedPanelShell.cs",
+                 })
+        {
+            var shellSource = File.ReadAllText(Path.Combine(
+                repositoryRoot,
+                "source",
+                "Ui",
+                shellFile));
+            IsTrue(shellSource.Contains(
+                "private float m_preferredWindowWidth;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "public Vector2 PreferredSize =>",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private Vector2 m_preferredFrameWorldPosition;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private Vector2 m_effectiveFrameWorldPosition;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private int m_positionRestoreVersion;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private readonly WindowDragger m_windowDragger;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "var frameShadowElement = Frame.RootElement.parent",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "new UiComponent(frameShadowElement)",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "m_windowDragger.OnMoved += HandleWindowMoved;",
+                StringComparison.Ordinal));
+            var createWindowDragger = ExtractSourceMethod(
+                shellSource,
+                "public WindowDragger CreateWindowDragger()");
+            var draggerWindowArgument = createWindowDragger.IndexOf(
+                "this,",
+                StringComparison.Ordinal);
+            var draggerFrameArgument = createWindowDragger.IndexOf(
+                "new UiComponent(frameShadowElement),",
+                StringComparison.Ordinal);
+            var draggerHeaderArgument = createWindowDragger.IndexOf(
+                "TitleBar",
+                StringComparison.Ordinal);
+            IsTrue(draggerWindowArgument >= 0);
+            IsTrue(draggerFrameArgument > draggerWindowArgument);
+            IsTrue(draggerHeaderArgument > draggerFrameArgument);
+            IsTrue(shellSource.Contains(
+                "private int m_viewportScreenWidth;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private int m_viewportScreenHeight;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private float m_viewportRootScale;",
+                StringComparison.Ordinal));
+            IsTrue(shellSource.Contains(
+                "private bool m_viewportSignatureReady;",
+                StringComparison.Ordinal));
+            IsFalse(shellSource.Contains(
+                "m_positionReady",
+                StringComparison.Ordinal));
+
+            var currentPosition = ExtractSourceMethod(
+                shellSource,
+                "public bool TryGetCurrentPosition(out Vector2 position)");
+            IsTrue(currentPosition.Contains(
+                "position = m_preferredFrameWorldPosition;",
+                StringComparison.Ordinal));
+            IsFalse(currentPosition.Contains(
+                "m_window.FrameWorldPosition",
+                StringComparison.Ordinal));
+            IsFalse(currentPosition.Contains(
+                "m_preferredFrameWorldPosition =",
+                StringComparison.Ordinal));
+            IsFalse(currentPosition.Contains(
+                "m_effectiveFrameWorldPosition",
+                StringComparison.Ordinal));
+            IsTrue(currentPosition.Contains(
+                "return !m_disposed && m_window.IsOpen;",
+                StringComparison.Ordinal));
+
+            var windowMoved = ExtractSourceMethod(
+                shellSource,
+                "private void HandleWindowMoved(Vector2 _)");
+            IsTrue(windowMoved.Contains(
+                "m_window.FrameWorldPosition",
+                StringComparison.Ordinal));
+            IsTrue(windowMoved.Contains(
+                "m_window.IsPinned",
+                StringComparison.Ordinal));
+            IsTrue(windowMoved.Contains(
+                "NormalizePreferredPosition(current)",
+                StringComparison.Ordinal));
+            IsTrue(windowMoved.Contains(
+                "RestoreEffectivePositionFromPreferred(force: true);",
+                StringComparison.Ordinal));
+
+            var disposeShell = ExtractSourceMethod(
+                shellSource,
+                "public void Dispose()");
+            IsTrue(disposeShell.Contains(
+                "m_windowDragger.OnMoved -= HandleWindowMoved;",
+                StringComparison.Ordinal));
+            IsTrue(disposeShell.Contains(
+                "m_windowDragger.Disable();",
+                StringComparison.Ordinal));
+            IsTrue(disposeShell.IndexOf(
+                "m_windowDragger.Disable();",
+                StringComparison.Ordinal) > disposeShell.LastIndexOf(
+                "m_window.RemoveFromHierarchy();",
+                StringComparison.Ordinal));
+
+            var restoreFrameWorldPosition = ExtractSourceMethod(
+                shellSource,
+                "public void RestoreFrameWorldPosition(Vector2 worldPosition)");
+            IsTrue(restoreFrameWorldPosition.Contains(
+                "var frameShadowElement = Frame.RootElement.parent;",
+                StringComparison.Ordinal));
+            IsTrue(restoreFrameWorldPosition.Contains(
+                "frameShadowElement.resolvedStyle.translate",
+                StringComparison.Ordinal));
+            IsFalse(restoreFrameWorldPosition.Contains(
+                "Frame.RootElement.resolvedStyle.translate",
+                StringComparison.Ordinal));
+
+            var scheduledRestore = ExtractSourceMethod(
+                shellSource,
+                "public void ScheduleFrameWorldPositionRestore(");
+            IsTrue(scheduledRestore.Contains(
+                "Func<bool> shouldRestore",
+                StringComparison.Ordinal));
+            var scheduledGuardIndex = scheduledRestore.IndexOf(
+                "if (shouldRestore?.Invoke() != true)",
+                StringComparison.Ordinal);
+            var scheduledMutationIndex = scheduledRestore.IndexOf(
+                "RestoreFrameWorldPosition(worldPosition);",
+                StringComparison.Ordinal);
+            IsTrue(scheduledGuardIndex >= 0);
+            IsTrue(scheduledMutationIndex > scheduledGuardIndex);
+
+            var restorePosition = ExtractSourceMethod(
+                shellSource,
+                "private void RestorePosition(Vector2 requestedPosition)");
+            IsTrue(restorePosition.Contains(
+                "NormalizePreferredPosition(requestedPosition)",
+                StringComparison.Ordinal));
+            IsTrue(restorePosition.Contains(
+                "RestoreEffectivePositionFromPreferred(force: true);",
+                StringComparison.Ordinal));
+
+            var restoreEffectivePosition = ExtractSourceMethod(
+                shellSource,
+                "private void RestoreEffectivePositionFromPreferred(bool force)");
+            IsTrue(restoreEffectivePosition.Contains(
+                "ClampPosition(",
+                StringComparison.Ordinal));
+            IsTrue(restoreEffectivePosition.Contains(
+                "m_effectiveFrameWorldPosition = effectivePosition;",
+                StringComparison.Ordinal));
+            IsTrue(restoreEffectivePosition.Contains(
+                "var restoreVersion = ++m_positionRestoreVersion;",
+                StringComparison.Ordinal));
+            IsTrue(restoreEffectivePosition.Contains(
+                "CompleteEffectivePositionRestore(restoreVersion)",
+                StringComparison.Ordinal));
+            IsTrue(restoreEffectivePosition.Contains(
+                "restoreVersion == m_positionRestoreVersion",
+                StringComparison.Ordinal));
+            IsTrue(restoreEffectivePosition.Contains(
+                "m_window.IsOpen",
+                StringComparison.Ordinal));
+
+            var applyPreferredSize = ExtractSourceMethod(
+                shellSource,
+                "private void ApplyPreferredWindowSize()");
+            IsTrue(applyPreferredSize.Contains(
+                "RestoreEffectivePositionFromPreferred(force: true);",
+                StringComparison.Ordinal));
+
+            if (shellSource.Contains(
+                    "public void ApplyLayout(Vector2 position, Vector2 size)",
+                    StringComparison.Ordinal))
+            {
+                var applyLayout = ExtractSourceMethod(
+                    shellSource,
+                    "public void ApplyLayout(Vector2 position, Vector2 size)");
+                IsTrue(applyLayout.Contains(
+                    "NormalizePreferredPosition(position)",
+                    StringComparison.Ordinal));
+                if (string.Equals(
+                        shellFile,
+                        "UnmaNativeWindowShell.cs",
+                        StringComparison.Ordinal))
+                {
+                    var fullscreenBranch = applyLayout.IndexOf(
+                        "if (m_temporarilyFullscreen)",
+                        StringComparison.Ordinal);
+                    var applyFullscreen = applyLayout.IndexOf(
+                        "ApplyFullscreenContentSize();",
+                        StringComparison.Ordinal);
+                    var elseBranch = applyLayout.IndexOf(
+                        "else",
+                        applyFullscreen,
+                        StringComparison.Ordinal);
+                    var applyPreferred = applyLayout.IndexOf(
+                        "ApplyPreferredWindowSize();",
+                        StringComparison.Ordinal);
+                    IsTrue(fullscreenBranch >= 0);
+                    IsTrue(applyFullscreen > fullscreenBranch);
+                    IsTrue(elseBranch > applyFullscreen);
+                    IsTrue(applyPreferred > elseBranch);
+                }
+            }
+
+            if (string.Equals(
+                    shellFile,
+                    "UnmaNativeWindowShell.cs",
+                    StringComparison.Ordinal))
+            {
+                IsFalse(currentPosition.Contains(
+                    "m_temporarilyFullscreen",
+                    StringComparison.Ordinal));
+                var temporarySize = ExtractSourceMethod(
+                    shellSource,
+                    "public void SetTemporarySize(Vector2 _)");
+                IsTrue(temporarySize.Contains(
+                    "ApplyPreferredWindowSize();",
+                    StringComparison.Ordinal));
+                IsFalse(temporarySize.Contains(
+                    "ApplyWindowSize(",
+                    StringComparison.Ordinal));
+                IsTrue(temporarySize.Contains(
+                    "m_windowDragger.Enable();",
+                    StringComparison.Ordinal));
+                IsTrue(temporarySize.IndexOf(
+                    "m_window.Fullscreen(false);",
+                    StringComparison.Ordinal) < temporarySize.IndexOf(
+                    "m_windowDragger.Enable();",
+                    StringComparison.Ordinal));
+                var maximize = ExtractSourceMethod(
+                    shellSource,
+                    "public Vector2 MaximizeTemporarily()");
+                IsTrue(maximize.Contains(
+                    "TryGetCurrentPosition(out _);",
+                    StringComparison.Ordinal));
+                IsTrue(maximize.Contains(
+                    "m_positionRestoreVersion++;",
+                    StringComparison.Ordinal));
+                IsTrue(maximize.Contains(
+                    "m_windowDragger.Disable();",
+                    StringComparison.Ordinal));
+                IsTrue(maximize.IndexOf(
+                    "m_windowDragger.Disable();",
+                    StringComparison.Ordinal) < maximize.IndexOf(
+                    "m_window.Fullscreen();",
+                    StringComparison.Ordinal));
+                IsFalse(shellSource.Contains(
+                    "m_preFullscreenFrameWorldPosition",
+                    StringComparison.Ordinal));
+                IsTrue(restoreEffectivePosition.Contains(
+                    "!m_temporarilyFullscreen",
+                    StringComparison.Ordinal));
+                var openMainShell = ExtractSourceMethod(
+                    shellSource,
+                    "public void Open()");
+                var openFullscreenBranch = openMainShell.IndexOf(
+                    "if (m_temporarilyFullscreen)",
+                    StringComparison.Ordinal);
+                var openApplyFullscreen = openMainShell.IndexOf(
+                    "ApplyFullscreenContentSize();",
+                    StringComparison.Ordinal);
+                var openElseBranch = openMainShell.IndexOf(
+                    "else",
+                    openApplyFullscreen,
+                    StringComparison.Ordinal);
+                var openRestorePosition = openMainShell.IndexOf(
+                    "RestorePosition(m_preferredFrameWorldPosition);",
+                    StringComparison.Ordinal);
+                IsTrue(openFullscreenBranch >= 0);
+                IsTrue(openApplyFullscreen > openFullscreenBranch);
+                IsTrue(openElseBranch > openApplyFullscreen);
+                IsTrue(openRestorePosition > openElseBranch);
+            }
+
+            var setContentScale = ExtractSourceMethod(
+                shellSource,
+                "public void SetContentScale(float scale)");
+            IsTrue(setContentScale.Contains(
+                "var contentScaleChanged =",
+                StringComparison.Ordinal));
+            IsTrue(setContentScale.Contains(
+                "var viewportChanged = UpdateViewportSignature();",
+                StringComparison.Ordinal));
+            IsTrue(setContentScale.Contains(
+                "if (!contentScaleChanged && !viewportChanged)",
+                StringComparison.Ordinal));
+            IsTrue(setContentScale.Contains(
+                "ApplyPreferredWindowSize();",
+                StringComparison.Ordinal));
+            IsFalse(setContentScale.Contains(
+                "ApplyWindowSize(m_windowWidth, m_windowHeight);",
+                StringComparison.Ordinal));
+
+            var refreshViewport = ExtractSourceMethod(
+                shellSource,
+                "public void RefreshViewportConstraints()");
+            IsTrue(refreshViewport.Contains(
+                "UpdateViewportSignature();",
+                StringComparison.Ordinal));
+            IsTrue(refreshViewport.Contains(
+                "ApplyPreferredWindowSize();",
+                StringComparison.Ordinal));
+
+            var updateViewportSignature = ExtractSourceMethod(
+                shellSource,
+                "private bool UpdateViewportSignature()");
+            IsTrue(updateViewportSignature.Contains(
+                "m_viewportScreenWidth != Screen.width",
+                StringComparison.Ordinal));
+            IsTrue(updateViewportSignature.Contains(
+                "m_viewportScreenHeight != Screen.height",
+                StringComparison.Ordinal));
+            IsTrue(updateViewportSignature.Contains(
+                "m_uiRoot.CurrentScale",
+                StringComparison.Ordinal));
+            IsTrue(updateViewportSignature.Contains(
+                "m_viewportSignatureReady = true;",
+                StringComparison.Ordinal));
+
+            var openShell = ExtractSourceMethod(
+                shellSource,
+                "public void Open()");
+            IsTrue(openShell.Contains(
+                "RefreshViewportConstraints();",
+                StringComparison.Ordinal));
+
+            var resizeCompleted = ExtractSourceMethod(
+                shellSource,
+                "private void HandleResizeCompleted()");
+            IsTrue(resizeCompleted.Contains(
+                "m_preferredWindowWidth",
+                StringComparison.Ordinal));
+            IsTrue(resizeCompleted.Contains(
+                "m_preferredWindowHeight",
+                StringComparison.Ordinal));
+
+            var resizeDelta = ExtractSourceMethod(
+                shellSource,
+                "private void HandleResizeDelta(Vector2 delta)");
+            IsTrue(resizeDelta.Contains(
+                "m_resizeStartPreferredWidth",
+                StringComparison.Ordinal));
+            IsTrue(resizeDelta.Contains(
+                "m_resizeStartPreferredHeight",
+                StringComparison.Ordinal));
+        }
+
+        var exitHistorian = ExtractSourceMethod(
+            editorSource,
+            "private void ExitInstrumentHistorian()");
+        IsTrue(exitHistorian.Contains(
+            "var preferredSize = m_nativeWindowShell.PreferredSize;",
+            StringComparison.Ordinal));
+        IsTrue(exitHistorian.Contains(
+            "m_windowRect.width = preferredSize.x;",
+            StringComparison.Ordinal));
+        IsTrue(exitHistorian.Contains(
+            "m_windowRect.height = preferredSize.y;",
+            StringComparison.Ordinal));
+        IsFalse(exitHistorian.Contains(
+            "m_windowRect.width = m_historianPreviousWindowSize.x;",
+            StringComparison.Ordinal));
+    }
+
+    private static string ExtractSourceMethod(
+        string source,
+        string signature)
+    {
+        var signatureIndex = source.IndexOf(
+            signature,
+            StringComparison.Ordinal);
+        if (signatureIndex < 0)
+        {
+            throw new InvalidOperationException(
+                "Source method not found: " + signature);
+        }
+        var bodyStart = source.IndexOf('{', signatureIndex);
+        if (bodyStart < 0)
+        {
+            throw new InvalidOperationException(
+                "Source method body not found: " + signature);
+        }
+
+        var depth = 0;
+        for (var index = bodyStart; index < source.Length; index++)
+        {
+            if (source[index] == '{')
+            {
+                depth++;
+            }
+            else if (source[index] == '}' && --depth == 0)
+            {
+                return source.Substring(
+                    signatureIndex,
+                    index - signatureIndex + 1);
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Source method body is incomplete: " + signature);
     }
 
     private static Dictionary<string, string> ReadLanguageFile(string path)
@@ -2933,6 +3698,29 @@ internal static class Program
 
     private static void TestWindowResizeMath()
     {
+        AreEqual(980f, WindowResizeMath.NormalizePreferredExtent(
+            980f,
+            700f));
+        AreEqual(700f, WindowResizeMath.NormalizePreferredExtent(
+            float.NaN,
+            700f));
+        AreEqual(1356f, WindowResizeMath.ResolveEffectiveExtent(
+            980f,
+            1356f,
+            1908f));
+        AreEqual(980f, WindowResizeMath.ResolveEffectiveExtent(
+            980f,
+            700f,
+            1908f));
+        AreEqual(900f, WindowResizeMath.ResolveEffectiveExtent(
+            980f,
+            700f,
+            900f));
+        AreEqual(980f, WindowResizeMath.ResolveEffectiveExtent(
+            980f,
+            700f,
+            1908f));
+
         AreEqual(946f, WindowResizeMath.GetHandleOrigin(980f, 30f, 4f));
         AreEqual(686f, WindowResizeMath.GetHandleOrigin(720f, 30f, 4f));
         IsTrue(WindowResizeMath.IsInsideHandle(
@@ -6334,8 +7122,19 @@ internal static class Program
     private static void TestConfigurationRoundTrip()
     {
         var configuration = UnmaConfiguration.CreateDefault();
+        configuration.ReducedMotion = true;
         var fixedPanel = configuration.Panels.Find(panel =>
             !panel.IsDashboard);
+        configuration.DetachedPanelLayouts.Add(
+            new DetachedPanelWindowLayout
+            {
+                PanelId = fixedPanel.Id,
+                X = 234f,
+                Y = 123f,
+                Width = 780f,
+                Height = 560f,
+                IsOpen = true,
+            });
         fixedPanel.Slots.Add(new PanelSlotDefinition
         {
             AlarmId = "vanilla:LowFoodSupply",
@@ -6532,6 +7331,12 @@ internal static class Program
         AreEqual("none", restoredVanillaOverride.SoundId);
         IsTrue(restoredVanillaOverride.IsGloballyDisabled);
         AreEqual(20, restored.SchemaVersion);
+        IsTrue(restored.ReducedMotion);
+        AreEqual(1, restored.DetachedPanelLayouts.Count);
+        AreEqual(fixedPanel.Id, restored.DetachedPanelLayouts[0].PanelId);
+        AreEqual(234f, restored.DetachedPanelLayouts[0].X);
+        AreEqual(780f, restored.DetachedPanelLayouts[0].Width);
+        IsTrue(restored.DetachedPanelLayouts[0].IsOpen);
         AreEqual(1, restored.InstrumentPanels.Count);
         AreEqual("instruments-main", restored.InstrumentPanels[0].Id);
         AreEqual(1, restored.Instruments.Count);
@@ -7340,6 +8145,52 @@ internal static class Program
             .LegacySustainedAlarmReconciliationPending);
     }
 
+    private static void TestReducedMotionConfigurationContract()
+    {
+        var defaults = UnmaConfiguration.CreateDefault();
+        IsFalse(defaults.ReducedMotion);
+        AreEqual(20, UnmaConfiguration.CurrentSchemaVersion);
+
+        defaults.ReducedMotion = true;
+        var json = SerializeDataContractJson(defaults);
+        IsTrue(json.Contains(
+            "\"ReducedMotion\":true",
+            StringComparison.Ordinal));
+
+        UnmaConfiguration restored;
+        using (var stream = new MemoryStream(
+                   System.Text.Encoding.UTF8.GetBytes(json)))
+        {
+            restored = (UnmaConfiguration)new DataContractJsonSerializer(
+                typeof(UnmaConfiguration)).ReadObject(stream);
+        }
+        restored.Normalize();
+        IsTrue(restored.ReducedMotion);
+        AreEqual(20, restored.SchemaVersion);
+
+        const string legacyJson = "{\"SchemaVersion\":20}";
+        UnmaConfiguration legacy;
+        using (var stream = new MemoryStream(
+                   System.Text.Encoding.UTF8.GetBytes(legacyJson)))
+        {
+            legacy = (UnmaConfiguration)new DataContractJsonSerializer(
+                typeof(UnmaConfiguration)).ReadObject(stream);
+        }
+        legacy.Normalize();
+        IsFalse(legacy.ReducedMotion);
+        AreEqual(20, legacy.SchemaVersion);
+
+        var repositoryRoot = FindRepositoryRoot();
+        var runtimeSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Runtime",
+            "UnmaRuntime.cs"));
+        IsTrue(runtimeSource.Contains(
+            "target.ReducedMotion = snapshot.ReducedMotion;",
+            StringComparison.Ordinal));
+    }
+
     private static void TestRecommendedQuietTransferProfile()
     {
         IsTrue(ConfigurationTransferPolicy
@@ -7378,13 +8229,13 @@ internal static class Program
                 VanillaNotificationBehavior.Ignored,
         };
         var profile = ConfigurationTransferPolicy
-            .CreateRecommendedQuietProfile("0.10.1");
+            .CreateRecommendedQuietProfile("0.10.2");
 
         AreEqual(
             UnmaTransferProfile.CurrentProfileSchemaVersion,
             profile.ProfileSchemaVersion);
         AreEqual("UNMA Recommended Quiet", profile.Metadata.Name);
-        AreEqual("0.10.1", profile.Metadata.SourceVersion);
+        AreEqual("0.10.2", profile.Metadata.SourceVersion);
         IsTrue(DateTime.TryParse(
             profile.Metadata.CreatedUtc,
             System.Globalization.CultureInfo.InvariantCulture,
@@ -7445,7 +8296,7 @@ internal static class Program
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 legacyProfile,
-                "0.10.1",
+                "0.10.2",
                 out var upgradedLegacyProfile));
         IsFalse(ReferenceEquals(legacyProfile, upgradedLegacyProfile));
         AreEqual("UNMA Recommended Silent", legacyProfile.Metadata.Name);
@@ -7476,7 +8327,7 @@ internal static class Program
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 previousQuietProfile,
-                "0.10.1",
+                "0.10.2",
                 out var refreshedQuietProfile));
         AreEqual(
             2,
@@ -7496,7 +8347,7 @@ internal static class Program
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 customProfile,
-                "0.10.1",
+                "0.10.2",
                 out var unchangedCustomProfile));
         IsTrue(ReferenceEquals(customProfile, unchangedCustomProfile));
 
@@ -7508,7 +8359,7 @@ internal static class Program
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 divergentQuietProfile,
-                "0.10.1",
+                "0.10.2",
                 out var unchangedDivergentProfile));
         IsTrue(ReferenceEquals(
             divergentQuietProfile,
@@ -7648,6 +8499,7 @@ internal static class Program
         source.CriticalColor = "#445566";
         source.EmergencyColor = "#778899";
         source.UiScalePercent = 175;
+        source.ReducedMotion = true;
         source.AlarmHistory.Add(new AlarmHistoryDefinition
         {
             AlarmKey = "must-not-transfer",
@@ -7690,11 +8542,11 @@ internal static class Program
             source,
             selection,
             "  Test profile  ",
-            "0.10.1");
+            "0.10.2");
 
         AreEqual(1, profile.ProfileSchemaVersion);
         AreEqual("Test profile", profile.Metadata.Name);
-        AreEqual("0.10.1", profile.Metadata.SourceVersion);
+        AreEqual("0.10.2", profile.Metadata.SourceVersion);
         IsTrue(DateTime.TryParse(
             profile.Metadata.CreatedUtc,
             System.Globalization.CultureInfo.InvariantCulture,
@@ -7718,6 +8570,7 @@ internal static class Program
         IsTrue(profile.SoundSettings[0].AutoAcknowledgeOnClear);
         AreEqual("#112233", profile.Appearance.WarningColor);
         AreEqual(175, profile.Appearance.UiScalePercent);
+        IsTrue(profile.Appearance.ReducedMotion);
         IsTrue(profile.WindowLayout == null);
         AreEqual(source.SystemAlarms.Count, profile.SystemAlarms.Count);
 
@@ -7768,6 +8621,7 @@ internal static class Program
             restored.NotificationRules[0].Behavior);
         AreEqual("horn", restored.SoundSettings[0].SoundId);
         AreEqual("#112233", restored.Appearance.WarningColor);
+        IsTrue(restored.Appearance.ReducedMotion);
         AreEqual(source.SystemAlarms.Count, restored.SystemAlarms.Count);
     }
 
@@ -7817,6 +8671,7 @@ internal static class Program
         source.CriticalColor = "red";
         source.EmergencyColor = "#070809";
         source.UiScalePercent = 150;
+        source.ReducedMotion = true;
         source.WindowX = 301f;
         source.WindowY = 302f;
         source.WindowWidth = 1001f;
@@ -7827,6 +8682,15 @@ internal static class Program
         source.EditorWindowY = 306f;
         source.EditorWindowWidth = 1101f;
         source.EditorWindowHeight = 801f;
+        source.DetachedPanelLayouts.Add(new DetachedPanelWindowLayout
+        {
+            PanelId = "supply",
+            X = 411f,
+            Y = 222f,
+            Width = 760f,
+            Height = 540f,
+            IsOpen = true,
+        });
         source.SystemAlarms.Find(alarm => alarm.Id == "system:health")
             .Stages[0].Message = "TRANSFERRED HEALTH";
         source.Rules.Add(new AlarmRuleDefinition
@@ -7850,7 +8714,7 @@ internal static class Program
                 WindowLayout = true,
             },
             "Merge",
-            "0.10.1");
+            "0.10.2");
         profile.SoundSettings.Add(new TransferSoundSetting
         {
             AlarmId = "rule:world-specific-guid",
@@ -7917,6 +8781,12 @@ internal static class Program
         IsTrue(preview.Diagnostics.Any(item => item.Contains(
             "not stable",
             StringComparison.Ordinal)));
+        AreEqual(
+            TransferImportChangeKind.Changed,
+            FindTransferChange(
+                preview,
+                TransferProfileCategory.Appearance,
+                "reduced-motion").Kind);
 
         var result = ConfigurationTransferPolicy.Merge(target, profile);
         var merged = result.Configuration;
@@ -7925,6 +8795,7 @@ internal static class Program
         AreEqual(
             VanillaNotificationBehavior.Silent,
             target.VanillaNotificationRules[0].Behavior);
+        IsFalse(target.ReducedMotion);
         var importedNormal = merged.VanillaNotificationRules.Find(rule =>
             rule.AlarmId == "vanilla:UpgradeInProgress" &&
             rule.Scope == VanillaNotificationScope.NotificationType);
@@ -7952,8 +8823,13 @@ internal static class Program
 
         AreEqual("#010203", merged.WarningColor);
         AreEqual(150, merged.UiScalePercent);
+        IsTrue(merged.ReducedMotion);
         AreEqual(301f, merged.WindowX);
         AreEqual(801f, merged.EditorWindowHeight);
+        AreEqual(1, merged.DetachedPanelLayouts.Count);
+        AreEqual("supply", merged.DetachedPanelLayouts[0].PanelId);
+        AreEqual(411f, merged.DetachedPanelLayouts[0].X);
+        IsTrue(merged.DetachedPanelLayouts[0].IsOpen);
         AreEqual(
             "TRANSFERRED HEALTH",
             merged.SystemAlarms.Find(alarm => alarm.Id == "system:health")
@@ -7971,6 +8847,12 @@ internal static class Program
         AreEqual(0, secondResult.Preview.Added);
         AreEqual(0, secondResult.Preview.Changed);
         IsTrue(secondResult.Preview.Unchanged > 0);
+        AreEqual(
+            TransferImportChangeKind.Unchanged,
+            FindTransferChange(
+                secondResult.Preview,
+                TransferProfileCategory.Appearance,
+                "reduced-motion").Kind);
         AreEqual(
             merged.VanillaNotificationRules.Count,
             secondResult.Configuration.VanillaNotificationRules.Count);
@@ -8026,7 +8908,7 @@ internal static class Program
             source,
             selection,
             "Semantic validation",
-            "0.10.1");
+            "0.10.2");
         profile.Appearance.WarningColor = "not-a-color";
         profile.Appearance.EmergencyColor = null;
         profile.Appearance.UiScalePercent = 999;
@@ -8184,7 +9066,7 @@ internal static class Program
                     WindowLayout = false,
                 },
                 "Invalid system alarm",
-                "0.10.1");
+                "0.10.2");
             var invalidHealth = invalidProfile.SystemAlarms.Find(alarm =>
                 alarm.Id == "system:health");
             invalidProfile.SystemAlarms =
@@ -8230,7 +9112,7 @@ internal static class Program
                 WindowLayout = false,
             },
             "Schema contract",
-            "0.10.1");
+            "0.10.2");
         using var document = JsonDocument.Parse(
             SerializeDataContractJson(profile));
         var root = document.RootElement;
@@ -8298,7 +9180,7 @@ internal static class Program
                     WindowLayout = false,
                 },
                 "First",
-                "0.10.1");
+                "0.10.2");
             IsTrue(store.SaveIfMissing(
                 profile,
                 out var alreadyExists,

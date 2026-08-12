@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.Serialization;
 
 namespace UNMA.Domain;
@@ -71,6 +72,7 @@ public sealed class TransferAppearanceSettings
     [DataMember(Order = 2)] public string CriticalColor = "#F05A32";
     [DataMember(Order = 3)] public string EmergencyColor = "#E51B23";
     [DataMember(Order = 4)] public int UiScalePercent = 100;
+    [DataMember(Order = 5)] public bool ReducedMotion;
 }
 
 [DataContract]
@@ -86,6 +88,19 @@ public sealed class TransferWindowLayout
     [DataMember(Order = 8)] public float EditorWindowY = 110f;
     [DataMember(Order = 9)] public float EditorWindowWidth = 1080f;
     [DataMember(Order = 10)] public float EditorWindowHeight = 720f;
+    [DataMember(Order = 11, EmitDefaultValue = false)]
+    public List<TransferDetachedPanelWindowLayout> DetachedPanels = new();
+}
+
+[DataContract]
+public sealed class TransferDetachedPanelWindowLayout
+{
+    [DataMember(Order = 1)] public string PanelId = "";
+    [DataMember(Order = 2)] public float X = 40f;
+    [DataMember(Order = 3)] public float Y = 60f;
+    [DataMember(Order = 4)] public float Width = 620f;
+    [DataMember(Order = 5)] public float Height = 460f;
+    [DataMember(Order = 6)] public bool IsOpen;
 }
 
 [DataContract]
@@ -166,6 +181,21 @@ public sealed class UnmaTransferProfile
 
         SystemAlarms ??= new List<SystemAlarmDefinition>();
         SystemAlarms.RemoveAll(alarm => alarm == null);
+        if (WindowLayout != null)
+        {
+            WindowLayout.DetachedPanels ??=
+                new List<TransferDetachedPanelWindowLayout>();
+            WindowLayout.DetachedPanels.RemoveAll(layout =>
+                layout == null || string.IsNullOrWhiteSpace(layout.PanelId));
+            var seenPanelIds = new HashSet<string>(StringComparer.Ordinal);
+            WindowLayout.DetachedPanels = WindowLayout.DetachedPanels
+                .Where(layout =>
+                {
+                    layout.PanelId = layout.PanelId.Trim();
+                    return seenPanelIds.Add(layout.PanelId);
+                })
+                .ToList();
+        }
     }
 }
 

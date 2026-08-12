@@ -412,6 +412,17 @@ public sealed class AlarmHistoryDefinition
 }
 
 [DataContract]
+public sealed class DetachedPanelWindowLayout
+{
+    [DataMember(Order = 1)] public string PanelId = "";
+    [DataMember(Order = 2)] public float X = 40f;
+    [DataMember(Order = 3)] public float Y = 60f;
+    [DataMember(Order = 4)] public float Width = 620f;
+    [DataMember(Order = 5)] public float Height = 460f;
+    [DataMember(Order = 6)] public bool IsOpen;
+}
+
+[DataContract]
 public sealed class UnmaConfiguration
 {
     public const int CurrentSchemaVersion = 20;
@@ -454,6 +465,9 @@ public sealed class UnmaConfiguration
     public List<AlarmTimingMemoryDefinition> AlarmTimingMemories = new();
     [DataMember(Order = 27)]
     public List<AlarmAreaDefinition> AlarmAreas = new();
+    [DataMember(Order = 28)] public bool ReducedMotion;
+    [DataMember(Order = 29)]
+    public List<DetachedPanelWindowLayout> DetachedPanelLayouts = new();
 
     public static UnmaConfiguration CreateDefault()
     {
@@ -660,6 +674,16 @@ public sealed class UnmaConfiguration
         EditorWindowHeight = Math.Max(
             520f,
             NormalizeFinite(EditorWindowHeight, 720f));
+        WindowX = NormalizeFinite(WindowX, 120f);
+        WindowY = NormalizeFinite(WindowY, 80f);
+        WindowWidth = Math.Max(
+            700f,
+            NormalizeFinite(WindowWidth, 980f));
+        WindowHeight = Math.Max(
+            520f,
+            NormalizeFinite(WindowHeight, 720f));
+        LauncherX = NormalizeFinite(LauncherX, -1f);
+        LauncherY = NormalizeFinite(LauncherY, -1f);
         Panels ??= new List<PanelDefinition>();
         Rules ??= new List<AlarmRuleDefinition>();
         SoundOverrides ??= new List<AlarmSoundOverride>();
@@ -671,6 +695,7 @@ public sealed class UnmaConfiguration
         InstrumentPanels ??= new List<InstrumentPanelDefinition>();
         AlarmTimingMemories ??= new List<AlarmTimingMemoryDefinition>();
         AlarmAreas ??= new List<AlarmAreaDefinition>();
+        DetachedPanelLayouts ??= new List<DetachedPanelWindowLayout>();
         if (Panels.Count == 0)
         {
             Panels.Add(CreateDefault().Panels[0]);
@@ -741,6 +766,7 @@ public sealed class UnmaConfiguration
                 IsDashboard = false,
             });
         }
+        NormalizeDetachedPanelLayouts();
         if (loadedSchemaVersion < 20)
         {
             AlarmAreas = new List<AlarmAreaDefinition>();
@@ -1186,6 +1212,42 @@ public sealed class UnmaConfiguration
             }
         }
         SchemaVersion = CurrentSchemaVersion;
+    }
+
+    private void NormalizeDetachedPanelLayouts()
+    {
+        var knownPanelIds = new HashSet<string>(
+            Panels
+                .Where(panel => panel != null &&
+                                !string.IsNullOrWhiteSpace(panel.Id))
+                .Select(panel => panel.Id),
+            StringComparer.Ordinal);
+        var normalized = new List<DetachedPanelWindowLayout>();
+        var seenPanelIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var layout in DetachedPanelLayouts)
+        {
+            if (layout == null)
+            {
+                continue;
+            }
+            layout.PanelId = layout.PanelId?.Trim() ?? "";
+            if (layout.PanelId.Length == 0 ||
+                !knownPanelIds.Contains(layout.PanelId) ||
+                !seenPanelIds.Add(layout.PanelId))
+            {
+                continue;
+            }
+            layout.X = NormalizeFinite(layout.X, 40f);
+            layout.Y = NormalizeFinite(layout.Y, 60f);
+            layout.Width = Math.Max(
+                420f,
+                NormalizeFinite(layout.Width, 620f));
+            layout.Height = Math.Max(
+                320f,
+                NormalizeFinite(layout.Height, 460f));
+            normalized.Add(layout);
+        }
+        DetachedPanelLayouts = normalized;
     }
 
     private void PurgeIgnoredVanillaPersistence()

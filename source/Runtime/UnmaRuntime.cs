@@ -2955,7 +2955,7 @@ public sealed class UnmaRuntime : IDisposable
             {
                 var recommendedProfile =
                     ConfigurationTransferPolicy
-                        .CreateRecommendedQuietProfile("0.10.1");
+                        .CreateRecommendedQuietProfile("0.10.2");
                 if (m_transferProfileStore.SaveIfMissing(
                         recommendedProfile,
                         out var alreadyExists,
@@ -2984,7 +2984,7 @@ public sealed class UnmaRuntime : IDisposable
             if (ConfigurationTransferPolicy
                 .TryRefreshPreviousRecommendedProfile(
                     m_transferProfile,
-                    "0.10.1",
+                    "0.10.2",
                     out var upgradedRecommendedProfile))
             {
                 // Keep custom and on-disk profiles untouched. This refreshes
@@ -3023,7 +3023,7 @@ public sealed class UnmaRuntime : IDisposable
                 snapshot,
                 selection ?? new TransferProfileSelection(),
                 profileName,
-                "0.10.1");
+                "0.10.2");
             if (!m_transferProfileStore.Save(profile, out var error))
             {
                 LastTransferProfileError = error;
@@ -4759,6 +4759,7 @@ public sealed class UnmaRuntime : IDisposable
         target.LegacySustainedAlarmReconciliationPending =
             snapshot.LegacySustainedAlarmReconciliationPending;
         target.UiScalePercent = snapshot.UiScalePercent;
+        target.ReducedMotion = snapshot.ReducedMotion;
         target.EditorWindowX = snapshot.EditorWindowX;
         target.EditorWindowY = snapshot.EditorWindowY;
         target.EditorWindowWidth = snapshot.EditorWindowWidth;
@@ -4768,6 +4769,7 @@ public sealed class UnmaRuntime : IDisposable
         target.Instruments = snapshot.Instruments;
         target.InstrumentPanels = snapshot.InstrumentPanels;
         target.AlarmAreas = snapshot.AlarmAreas;
+        target.DetachedPanelLayouts = snapshot.DetachedPanelLayouts;
     }
 
     private static string ExceptionDetail(

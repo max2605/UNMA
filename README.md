@@ -5,7 +5,8 @@
 
 UNMA ergänzt Captain of Industry um eine frei konfigurierbare industrielle
 Schlitzmelder-Tafel. Das Vorbild ist die klassische Meldeanlage: im Ruhezustand
-hellgrau mit schwarzer Schrift, beim Kommen blinkend in Aktivfarbe und nach
+hellgrau mit schwarzer Schrift, beim Kommen in Aktivfarbe (wahlweise blinkend
+oder mit **REDUZIERTE BEWEGUNG** dauerhaft hervorgehoben) und nach
 `MASTER QUIT` dauerhaft stehend und stumm. Geht eine noch ungequittierte
 Meldung, bleibt sie als `GEGANGEN · UNQUITTIERT` gespeichert; nur der Bediener
 oder eine ausdrücklich gewählte automatische Quittierung setzt sie zurück.
@@ -135,15 +136,21 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Typisierte Produktmengen für Lager, Förderbänder/Rohre sowie Frachten von
   Trucks, Baggern, Tree Plantern, Tree Harvestern und Güterwaggons.
 - Mehrere Bedingungen pro Sammelmeldung mit UND- oder ODER-Verknüpfung.
+- Zeitsteuerung und Eskalation liegen in einem standardmäßig eingeklappten
+  Bereich, dessen Kopf Standardwerte, Konfiguration oder einen Eingabefehler
+  direkt anzeigt. Bei einem verdeckten Fehler öffnet er automatisch.
 - Eigene Meldungen lassen sich nach dem Speichern erneut in den Editor laden
   und vollständig ändern.
-- Ein Doppelklick auf einen eigenen Meldeschlitz öffnet dessen Regel direkt im
-  Editor; ungespeicherte andere Entwürfe werden dabei nicht überschrieben.
+- Die sichtbare Aktion **BEARBEITEN** auf einem eigenen Meldeschlitz öffnet
+  dessen Regel direkt im Editor; Doppelklick bleibt als Abkürzung erhalten.
+  Ungespeicherte andere Entwürfe werden dabei nicht überschrieben.
 - Mehrprodukt-Gebäude wie Lebensmittelmärkte bieten jeden zugewiesenen Artikel
   als verständlichen Messwert an, beispielsweise `Kartoffeln · Bestand`.
   Bedingungen können absolut (`< 400`) oder automatisch relativ zur summierten
   Produktkapazität (`< 50 %`) definiert werden.
-- Frei wählbare Meldetexte, Alarmstufen, Aktivfarben und Töne.
+- Frei wählbare Meldungstitel, Alarmstufen, Aktivfarben, Aktivstatus und Töne;
+  eine feste Aktionsleiste zeigt Validierungsfehler sowie Speichern/Löschen auch
+  in langen Editoren dauerhaft an.
 - `Z` pausiert den Ton eines Meldeschlitzes für einen Spielmonat, `R` setzt ihn
   fort. Die Funktion arbeitet auch für zusammengefasste Objektmeldungen und
   verändert weder Quittierung noch Sichtbarkeit, Zähler oder Verlauf.
@@ -170,12 +177,14 @@ Zielversion: Captain of Industry **0.8.6c**.
   verfügbaren Viewport; Panel- und Bereichseinstellungen stapeln zusätzlich
   ihre Bedienelemente. Ungespeicherte Entwürfe werden vor Schließen oder
   Wechseln ausdrücklich geschützt.
-- Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln.
+- Mehrere gleichzeitig abgekoppelte, verschiebbare In-Game-Tafeln. Pro Panel
+  existiert höchstens eine Instanz; Position, Größe und Öffnungszustand werden
+  je Spielwelt erhalten.
 - Der persistente **VERLAUF** führt jedes Alarmereignis mit `K` (gekommen),
   `KQ` (gekommen und quittiert), `KG` (gekommen und gegangen) oder `KGQ`
-  (gekommen, gegangen und quittiert). `K` blinkt rot, `KG` blinkt mit
-  schwarzer Schrift auf weißem Hintergrund; `KQ` und `KGQ` stehen schwarz auf
-  weiß. Suche, Zustands- und Stufenfilter grenzen den Verlauf ein; neue
+  (gekommen, gegangen und quittiert). Der Verlauf nutzt ruhige, kontrastreiche
+  Zustandsfarben ohne Blinken. Suche, Zustands- und Stufenfilter grenzen den
+  Verlauf ein; neue
   Ereignisse führen Spielzeitmarken für Kommen, Gehen und Quittieren. Die
   gefilterte Ansicht lässt sich als RFC-4180-CSV oder JSON exportieren. Nur
   abgeschlossene `KGQ`-Einträge lassen sich ausdrücklich löschen.
@@ -185,7 +194,7 @@ Zielversion: Captain of Industry **0.8.6c**.
   und Neuladen. Schema 20 übernimmt ältere Konfigurationen mit unzugeordneten
   Panels und unverändertem **ALLE**-Verhalten. Die Incident-Linse bleibt ein
   vorübergehender, aus aktuellen Alarm- und Verlaufssnapshots abgeleiteter
-  Zustand und benötigt in 0.10.1 weder neue Speicherfelder noch eine weitere
+  Zustand und benötigt in 0.10.2 weder neue Speicherfelder noch eine weitere
   Schema-Migration. Eine erkannte Konfiguration aus einem neueren Schema bleibt
   bytegenau unangetastet; UNMA arbeitet dann mit sicheren Vorgaben und sperrt
   Schreibvorgänge für die Sitzung. Ein revisionsgebundener
@@ -259,7 +268,7 @@ Zielversion: Captain of Industry **0.8.6c**.
 
 Das Profil kann Meldungsregeln einschließlich Tonzuordnung und automatischer
 Quittierung, Systemalarm-Konfiguration, Alarmfarben/UI-Skalierung und optional
-Fensterpositionen enthalten. Vor dem Import zeigt UNMA neue, geänderte,
+Fensterpositionen, -größen sowie offene abgekoppelte Tafeln enthalten. Vor dem Import zeigt UNMA neue, geänderte,
 unveränderte und übersprungene Werte. Erst die Bestätigung führt die gewählten
 Kategorien atomar mit der Zielwelt zusammen; nicht ausgewählte und nur in der
 Zielwelt vorhandene Werte bleiben bestehen.

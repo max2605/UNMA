@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.10.1** und
+Diese Anleitung gilt für **UNMA 0.10.2** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -60,9 +60,16 @@ Stummschaltung des Alarmtons. Eingebaute Rückfalltasten sind **F8** für das
 Hauptfenster und **Umschalt links + F8** für den nächsten Alarm; die beiden
 potenziell störenden Aktionen sind zunächst unbelegt. Die Stummschaltung
 quittiert oder löscht niemals eine Meldung.
-Solange ein natives UNMA-Textfeld den Tastaturfokus besitzt, unterdrückt UNMA
-alle vier Belegungen. Dadurch kann auch eine neu belegte Buchstabentaste beim
-Schreiben keine Operatoraktion auslösen.
+Solange ein per Tastatur bedienbares UNMA-Element – etwa Textfeld, Taste oder
+Schalter – den Fokus besitzt, unterdrückt UNMA die Spiel-Tastenkürzel. Dadurch
+kann auch eine neu belegte Buchstabentaste beim Schreiben oder Bedienen keine
+zweite Operatoraktion auslösen.
+
+Der Meldungseditor zeigt seine lokalen Tastaturaktionen in der festen
+Aktionsleiste: **Strg+Eingabe** speichert einen vollständigen Entwurf mit der
+aktuell gewählten Einstellung **MELDUNG AKTIV**, **Esc** fordert das Schließen
+des Editors an. Bei ungespeicherten Änderungen erscheint zuvor der
+Schließen-Dialog; sie werden nicht still verworfen.
 
 ### Launcher und native Fenster
 
@@ -82,14 +89,20 @@ Hauptfenster, Editor und abgekoppelte Tafeln lassen sich wie andere
 Spielfenster verschieben, anheften und am Griff unten rechts vergrößern oder
 verkleinern. **MINIMIEREN**, das native Schließen-Symbol und **F8** schließen
 nur das Hauptfenster und bringen den Launcher zurück; ein offener Editor oder
-eine abgekoppelte Tafel bleibt davon unabhängig. Fenstergrößen werden auf den
-sichtbaren Bereich begrenzt.
+eine abgekoppelte Tafel bleibt davon unabhängig. Positionen und Größen werden
+je Spielwelt gespeichert und auf den sichtbaren Bereich begrenzt.
 
 Klicks, Ziehen und Mausradbewegungen innerhalb eines sichtbaren UNMA-Fensters
 bleiben in diesem Fenster und erreichen nicht die Spielwelt dahinter. Solange
-ein UNMA-Textfeld aktiv ist, erhält es die Tastatureingaben. Ein Fokuswechsel
-weg von allen UNMA-Textfeldern oder das Schließen des fokussierten Fensters gibt
-die Spieltastatur wieder frei.
+ein UNMA-Textfeld, Button oder Schalter den Tastaturfokus besitzt, werden
+Spiel- und Mod-Shortcuts blockiert. Ein Fokuswechsel aus den UNMA-Bedienelementen
+oder das Schließen des fokussierten Fensters gibt die Spieltastatur wieder frei.
+
+Rückmeldungen und Validierungsfehler erscheinen in einer festen Statusfläche
+außerhalb des scrollbaren Inhalts. Dadurch bleibt das Ergebnis einer Aktion
+sichtbar, ohne zum Anfang oder Ende einer Seite zu scrollen. Vorübergehende
+Hinweise verschwinden nach acht Sekunden; dauerhaft angezeigte Fehler lassen
+sich mit der Taste **×** schließen.
 
 ### Tabs des Hauptfensters
 
@@ -108,9 +121,9 @@ UNMA arbeitet wie eine klassische industrielle Meldeanlage.
 
 | Kürzel | Zustand | Anzeigeverhalten |
 | --- | --- | --- |
-| `K` | Meldung ist gekommen und nicht quittiert | Blinkt in Aktivfarbe und wiederholt den Ton |
+| `K` | Meldung ist gekommen und nicht quittiert | Aktivfarbe; blinkt ohne „Reduzierte Bewegung“, wiederholt den Ton |
 | `KQ` | Meldung ist gekommen und quittiert | Bleibt aktiv stehen, ohne den Ton zu wiederholen |
-| `KG` | Ursache ist gegangen, Meldung aber nicht quittiert | Blinkt mit schwarzer Schrift auf weißem Hintergrund |
+| `KG` | Ursache ist gegangen, Meldung aber nicht quittiert | Ruhige kontrastreiche Verlaufsmarkierung bis zur Quittierung |
 | `KGQ` | Ursache ist gegangen und Meldung quittiert | Abgeschlossenes Verlaufsereignis |
 
 Das Quittieren einer aktiven Meldung beseitigt ihre Aktivfarbe nicht. Die Farbe
@@ -221,7 +234,7 @@ verändert weder Verlauf noch Audiostatus.
 
 Incident-Snapshots sind vorübergehende, aus den aktuellen Alarm- und
 Verlaufssnapshots abgeleitete Ergebnisse. Sie fügen keine Speicherfelder
-hinzu und benötigen in 0.10.1 keine neue Schema-Migration. Für sichere
+hinzu und benötigen in 0.10.2 keine neue Schema-Migration. Für sichere
 Performance fragt die UI höchstens einmal je Frame und Filter ab. Der
 Laufzeitverlauf wird nur bei geänderter Revision neu kopiert, der globale
 Druck ist auf die neuesten 8.192 Vorkommen begrenzt, und Sortierung sowie
@@ -275,21 +288,24 @@ Meldung und verändert
 weder Zähler noch Verlauf. Ein späteres neues Ereignis erhält eine neue
 Sequenz und ist wieder hörbar.
 
-Ein Doppelklick auf einen eigenen Meldeschlitz öffnet die zugehörige Regel
-direkt im Editor.
+Eigene Meldeschlitze bieten eine sichtbare Aktion **BEARBEITEN**. Der bisherige
+Doppelklick öffnet die zugehörige Regel weiterhin als Schnellaktion direkt im
+Editor. Die Symbolaktionen zum Öffnen des Objekts, Quittieren sowie Pausieren
+oder Fortsetzen des Tons erklären ihre vollständige Funktion im Tooltip.
 
 ### Abgekoppelte Panels
 
 Das gerade angezeigte HOME-, globale oder Objektpanel kann in ein eigenes
 natives Fenster abgekoppelt werden. Dieses Fenster zeigt denselben Panel- und
-Meldungszustand; es erzeugt keine zweite Meldung. Dasselbe Panel darf mehrfach
-geöffnet werden. Abgekoppelte Tafeln stellen höchstens fünf Spalten dar.
+Meldungszustand; es erzeugt keine zweite Meldung. Für jedes Panel gibt es
+höchstens ein abgekoppeltes Fenster; erneutes Abkoppeln holt das vorhandene
+Fenster nach vorn. Abgekoppelte Tafeln stellen höchstens fünf Spalten dar.
 
 Das Schließen einer abgekoppelten Tafel entfernt nur diese Ansicht. Panel,
-Schlitze und Meldungen bleiben erhalten. Position und Größe werden nicht
-gespeichert; eine neu abgekoppelte Ansicht beginnt an einer neuen
-Vorgabeposition. Das zugrunde liegende Panel wird weiterhin je Spielwelt
-gespeichert.
+Schlitze und Meldungen bleiben erhalten. Position, Größe und Öffnungszustand
+werden je Spielwelt gespeichert. Beim erneuten Öffnen verwendet UNMA die letzte
+Position; Tafeln, die beim Speichern offen waren, werden beim nächsten Start
+wiederhergestellt.
 
 ## Eigene Meldung erstellen
 
@@ -298,16 +314,35 @@ werden.
 
 1. Das gewünschte Zielpanel öffnen.
 2. **+ NEUE MELDUNG** oder einen freien Plus-Schlitz drücken.
-3. Die Quelle für die erste Bedingung wählen.
-4. Einen Messwert auswählen.
-5. Berechnung, Vergleichsoperator und Soll-Wert festlegen.
-6. **+ ZEILE HINZUFÜGEN** drücken.
-7. Bei Bedarf weitere Zeilen ergänzen.
-8. Meldetext, Alarmstufe, Aktivfarbe, Ton und Quittierverhalten einstellen.
-9. Die Meldung speichern.
+3. Oben den **MELDUNGSTITEL** eingeben. Er erscheint im Meldeschlitz und im
+   Verlauf.
+4. Die Quelle für die erste Bedingung wählen.
+5. Einen Messwert auswählen.
+6. Berechnung, Vergleichsoperator und Soll-Wert festlegen.
+7. **+ ZEILE HINZUFÜGEN** drücken.
+8. Bei Bedarf weitere Zeilen ergänzen.
+9. Alarmstufe, Aktivfarbe, Ton und Quittierverhalten einstellen und mit
+   **MELDUNG AKTIV** festlegen, ob die Regel nach dem Speichern ausgewertet
+   werden soll.
+   Auslöse-/Rücksetzzeiten und Eskalation liegen unter **ERWEITERTE
+   EINSTELLUNGEN**. Der eingeklappte Kopf zeigt, ob Standardwerte gelten,
+   Einstellungen vorhanden sind oder eine Eingabe geprüft werden muss.
+10. Die feste Aktionsleiste prüfen. **SPEICHERN & AKTIVIEREN** steht bereit,
+    sobald Titel, Zielpanel, mindestens eine Bedingung, Farbe und Zeitwerte
+    gültig sind und **MELDUNG AKTIV** gewählt ist. Ist der Schalter aus, wird
+    dieselbe vollständig konfigurierte Regel mit **INAKTIV SPEICHERN**
+    gespeichert, aber nicht ausgewertet.
 
 Jede Bedingungszeile zeigt ihren aktuellen Ist-Wert, solange ihre Quelle
 verfügbar ist.
+
+Die Aktionsleiste bleibt beim Scrollen sichtbar und kennzeichnet
+**BEREIT ZUM SPEICHERN** oder **NOCH UNVOLLSTÄNDIG**. Kann eine Regel nicht
+gespeichert werden, nennt die Validierung direkt den fehlenden Meldungstitel,
+eine fehlende Bedingung oder Zieltafel sowie ungültige Farb- oder Zeitwerte.
+Bei extrem kleinem Fenster und hoher UI-Skalierung wird dieselbe Leiste auf
+eine kompakte Zeile reduziert; die vollständigen Aktionsnamen stehen in den
+Tooltips.
 
 ### Spielobjekt als Quelle
 
@@ -442,7 +477,15 @@ Meldungszustände.
 
 - Der Meldungseditor ist ein eigenes, scrollbar aufgebautes natives Fenster.
   Er kann geöffnet bleiben, während das Hauptfenster minimiert ist.
-- Ein Doppelklick auf einen eigenen Schlitz öffnet die Regel zum Bearbeiten.
+- **ERWEITERTE EINSTELLUNGEN** ist zunächst eingeklappt, damit für eine
+  Standardmeldung nicht an Zeitsteuerung und Eskalation vorbeigescrollt werden
+  muss. Die Zusammenfassung kennzeichnet Standardwerte, konfigurierte Werte
+  und fehlerhafte verdeckte Eingaben; der Kopf liegt in der normalen
+  Tastatur-Fokusreihenfolge.
+- **BEARBEITEN** auf einem eigenen Schlitz öffnet die Regel; ein Doppelklick
+  bleibt als Schnellaktion erhalten.
+- Inaktive eigene Regeln tragen das Kennzeichen **INAKTIV** und werden nicht
+  ausgewertet, bis sie gespeichert und aktiviert werden.
 - Ist bereits ein anderer ungespeicherter Entwurf geöffnet, behält UNMA diesen
   bei und zeigt einen auffälligen Warnhinweis, statt ihn still zu überschreiben.
 - Beim Schließen eines Editors mit Entwurf stehen vier Möglichkeiten bereit:
@@ -535,7 +578,11 @@ das Fenster klein oder die Inhaltsskalierung groß ist.
   innerhalb des verfügbaren Bildschirms mit; Panel- und Bereichseinstellungen
   stapeln ihre Bedienelemente, damit alle notwendigen Aktionen auch bei
   200 Prozent erreichbar bleiben.
-- Warn-, Kritisch- und Notfallfarbe bearbeiten und speichern.
+- Warn-, Kritisch- und Notfallfarbe im Format `#RRGGBB` bearbeiten und
+  speichern. Ungültige Farbcodes werden am Feld erklärt und nicht übernommen.
+- Unter **BARRIEREARMUT** mit **REDUZIERTE BEWEGUNG** blinkende
+  Alarmhintergründe durch eine ruhige, dauerhaft sichtbare Markierung ersetzen.
+  Alarmzustand, Stufe und Quittierung bleiben weiterhin als Text erkennbar.
 - Den Ordner für eigene Töne anzeigen und unterstützte WAV- und Ogg-Dateien
   ohne Neustart neu einlesen.
 - Informationen zu Systemmeldungen, abgekoppelten Tafeln und Zustandsmodell
@@ -551,8 +598,8 @@ folgenden Tabelle.
 UNMA verhindert, dass Klicks, Ziehen oder Mausradbewegungen innerhalb seiner
 sichtbaren nativen Fenster gleichzeitig die Spielwelt im Hintergrund
 beeinflussen. Außerhalb der Fenster bleiben Gebäudeauswahl, Kartenbewegung und
-Zoom frei. Native Textfelder blockieren Spiel-Tastenkürzel nur, solange sie den
-Tastaturfokus besitzen.
+Zoom frei. Spiel-Tastenkürzel werden nur blockiert, solange ein per Tastatur
+bedienbares UNMA-Element den Fokus besitzt.
 
 Die Startvorgaben in `config.json` lauten:
 
@@ -621,7 +668,8 @@ Beim Speichern und Importieren sind folgende Kategorien einzeln auswählbar:
 - Meldungsregeln einschließlich Tonzuordnung und automatischer Quittierung;
 - Systemalarm-Konfiguration;
 - Alarmfarben und UI-Skalierung;
-- Fensterpositionen und -größen; diese Kategorie ist standardmäßig abgewählt.
+- Fensterpositionen, -größen und offene abgekoppelte Tafeln; diese Kategorie
+  ist standardmäßig abgewählt.
 
 Die globalen Startoptionen aus `config.json`, einschließlich globaler
 Audio-Aktivierung und Lautstärke, gelten bereits unabhängig vom Spielstand und
@@ -695,14 +743,15 @@ Release-Archivs. Folgende Informationen überleben Speichern und Neuladen:
 - abgeschlossene Verlaufsereignisse;
 - Messpulte, Instrumente, Quellen, Berechnungsarten und Anzeigeskalen;
 - angepasste Systemstufen sowie Vanilla-Verhaltens- und Tonregeln;
-- Inhaltsskalierung, Launcherposition sowie Größen von Hauptfenster und Editor.
+- Inhaltsskalierung, Launcherposition sowie Positionen, Größen und
+  Öffnungszustand von Hauptfenster, Editor und abgekoppelten Tafeln.
 
 Schema 20 übernimmt Konfigurationen früherer UNMA-Versionen mit allen
 vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
 **ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
 zugewiesen werden.
 Die Incident-Linse speichert weder Konfiguration noch Ergebnis. Auch das
-separate Standardprofil erweitert die Weltdatei nicht; 0.10.1 bleibt daher bei
+separate Standardprofil erweitert die Weltdatei nicht; 0.10.2 bleibt daher bei
 Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
 UNMA-Schema, lässt sie Hauptdatei und Sicherungsartefakte bytegenau unangetastet,
 verwendet sichere Vorgaben und sperrt Konfigurationsschreibvorgänge für die

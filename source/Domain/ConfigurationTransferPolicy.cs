@@ -104,7 +104,7 @@ public static class ConfigurationTransferPolicy
             profile.Metadata == null ||
             !string.Equals(
                 profile.Metadata.SourceVersion,
-                "0.10.1",
+                "0.10.2",
                 StringComparison.Ordinal) ||
             profile.Metadata.SkippedItems != 0 ||
             (profile.Metadata.Diagnostics?.Count ?? 0) != 0 ||
@@ -240,6 +240,7 @@ public static class ConfigurationTransferPolicy
                 CriticalColor = source.CriticalColor,
                 EmergencyColor = source.EmergencyColor,
                 UiScalePercent = source.UiScalePercent,
+                ReducedMotion = source.ReducedMotion,
             };
         }
         if (selection.SystemAlarms)
@@ -260,6 +261,20 @@ public static class ConfigurationTransferPolicy
                 EditorWindowY = source.EditorWindowY,
                 EditorWindowWidth = source.EditorWindowWidth,
                 EditorWindowHeight = source.EditorWindowHeight,
+                DetachedPanels = (source.DetachedPanelLayouts ??
+                        new List<DetachedPanelWindowLayout>())
+                    .Where(layout => layout != null)
+                    .Select(layout =>
+                        new TransferDetachedPanelWindowLayout
+                        {
+                            PanelId = layout.PanelId,
+                            X = layout.X,
+                            Y = layout.Y,
+                            Width = layout.Width,
+                            Height = layout.Height,
+                            IsOpen = layout.IsOpen,
+                        })
+                    .ToList(),
             };
         }
 
@@ -616,6 +631,12 @@ public static class ConfigurationTransferPolicy
                 "UI scale must be between 75 and 200 percent; the profile " +
                 "value was skipped.");
         }
+        PreviewValue(
+            preview,
+            TransferProfileCategory.Appearance,
+            "reduced-motion",
+            target.ReducedMotion,
+            profile.Appearance.ReducedMotion);
     }
 
     private static void PreviewSystemAlarms(
@@ -686,6 +707,7 @@ public static class ConfigurationTransferPolicy
             target.EditorWindowWidth, layout.EditorWindowWidth, 700f);
         PreviewWindowValue(preview, "editor-window-height",
             target.EditorWindowHeight, layout.EditorWindowHeight, 520f);
+        PreviewDetachedPanelLayouts(target, layout, preview);
     }
 
     private static void MergeNotificationRules(
@@ -776,6 +798,7 @@ public static class ConfigurationTransferPolicy
         {
             target.UiScalePercent = appearance.UiScalePercent;
         }
+        target.ReducedMotion = appearance.ReducedMotion;
     }
 
     private static void MergeWindowLayout(
@@ -817,6 +840,82 @@ public static class ConfigurationTransferPolicy
             layout.EditorWindowHeight,
             520f,
             value => target.EditorWindowHeight = value);
+        target.DetachedPanelLayouts = (layout.DetachedPanels ??
+                new List<TransferDetachedPanelWindowLayout>())
+            .Where(item => item != null &&
+                           target.Panels.Any(panel => panel != null &&
+                               string.Equals(
+                                   panel.Id,
+                                   item.PanelId?.Trim(),
+                                   StringComparison.Ordinal)) &&
+                           IsFinite(item.X) && IsFinite(item.Y) &&
+                           IsValidSizedWindowValue(item.Width, 420f) &&
+                           IsValidSizedWindowValue(item.Height, 320f))
+            .GroupBy(
+                item => item.PanelId.Trim(),
+                StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var item = group.First();
+                return new DetachedPanelWindowLayout
+                {
+                    PanelId = item.PanelId.Trim(),
+                    X = item.X,
+                    Y = item.Y,
+                    Width = item.Width,
+                    Height = item.Height,
+                    IsOpen = item.IsOpen,
+                };
+            })
+            .ToList();
+    }
+
+    private static void PreviewDetachedPanelLayouts(
+        UnmaConfiguration target,
+        TransferWindowLayout layout,
+        TransferImportPreview preview)
+    {
+        var targetLayouts = (target.DetachedPanelLayouts ??
+                new List<DetachedPanelWindowLayout>())
+            .Where(item => item != null)
+            .ToDictionary(item => item.PanelId, StringComparer.Ordinal);
+        foreach (var item in layout.DetachedPanels ??
+                     new List<TransferDetachedPanelWindowLayout>())
+        {
+            var panelId = item?.PanelId?.Trim() ?? "";
+            var valid = panelId.Length > 0 &&
+                        target.Panels.Any(panel => panel != null &&
+                            string.Equals(
+                                panel.Id,
+                                panelId,
+                                StringComparison.Ordinal)) &&
+                        IsFinite(item.X) && IsFinite(item.Y) &&
+                        IsValidSizedWindowValue(item.Width, 420f) &&
+                        IsValidSizedWindowValue(item.Height, 320f);
+            if (!valid)
+            {
+                AddSkipped(
+                    preview,
+                    TransferProfileCategory.WindowLayout,
+                    "detached-panel:" + panelId,
+                    "");
+                continue;
+            }
+            var unchanged = targetLayouts.TryGetValue(panelId, out var current) &&
+                            current.X.Equals(item.X) &&
+                            current.Y.Equals(item.Y) &&
+                            current.Width.Equals(item.Width) &&
+                            current.Height.Equals(item.Height) &&
+                            current.IsOpen == item.IsOpen;
+            preview.Add(
+                TransferProfileCategory.WindowLayout,
+                "detached-panel:" + panelId,
+                targetLayouts.ContainsKey(panelId)
+                    ? unchanged
+                        ? TransferImportChangeKind.Unchanged
+                        : TransferImportChangeKind.Changed
+                    : TransferImportChangeKind.Added);
+        }
     }
 
     private static List<TransferNotificationRule>
@@ -1253,6 +1352,11 @@ public static class ConfigurationTransferPolicy
         {
             apply(value);
         }
+    }
+
+    private static bool IsValidSizedWindowValue(float value, float minimum)
+    {
+        return IsFinite(value) && value >= minimum;
     }
 
     private static bool IsValidUiScale(int value)

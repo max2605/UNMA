@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.2 – 2026-08-12
+
+- Der Meldungseditor zeigt den **MELDUNGSTITEL** jetzt als erstes Feld und
+  erklärt direkt, dass er auf dem Meldeschlitz und im Verlauf erscheint. Der
+  Aktivzustand einer Regel ist sichtbar und editierbar; dadurch lassen sich
+  insbesondere bewusst deaktivierte Panelkopien ohne Umweg aktivieren.
+- Eine feste Aktionsleiste hält Validierungsstatus, Speichern, Verwerfen und
+  Löschen auch in langen Entwürfen erreichbar. Fehlende Titel, Zielpanels oder
+  Bedingungen sowie ungültige Farb- und Zeitwerte werden konkret benannt.
+  Bei minimalem Fenster und hoher Skalierung reduziert sich die Leiste auf
+  eine kompakte, vollständig per Tooltip erklärte Zeile.
+- Bedingungen verwenden unter schmalen Viewports responsive Karten statt
+  überbreiter Tabellen. Zeitsteuerung und Eskalation liegen in einem zunächst
+  eingeklappten Bereich, der Standardwerte, vorhandene Konfiguration oder
+  verdeckte Eingabefehler bereits im Kopf anzeigt.
+- Eigene Meldeschlitze bieten eine sichtbare **BEARBEITEN**-Aktion; Doppelklick
+  bleibt als Abkürzung erhalten. Inaktive Regeln werden gekennzeichnet.
+  Filter und zyklische Auswahlen zeigen ihre verfügbaren Werte nachvollziehbar.
+- Status- und Fehlermeldungen bleiben außerhalb langer Scrollbereiche sichtbar.
+  Tastaturfokus, `Strg+Eingabe`, `Esc`, beschriftete Metadaten und größere
+  Ziele verhindern parallele Spielaktionen und verbessern die Bedienbarkeit.
+- Alarmtext wählt abhängig von der Hintergrundfarbe automatisch Schwarz oder
+  Weiß. Der Verlauf verwendet ruhige, kontrastreiche Zustandsfarben. Die neue
+  Option **REDUZIERTE BEWEGUNG** ersetzt blinkende Alarmhintergründe durch eine
+  stabile Hervorhebung und ist Teil von Darstellungstransferprofilen.
+- Hauptfenster, Editor und abgekoppelte Tafeln speichern Position, bevorzugte
+  Größe und Öffnungszustand. Automatische Viewport- oder Skalierungsbegrenzung,
+  Pinning und Historian-Vollbild überschreiben keine Nutzerpräferenzen;
+  Layoutimporte werden sofort sichtbar angewandt.
+- MultiLangLib bleibt Pflichtabhängigkeit und externe Assembly. Alle 21
+  Sprachkataloge besitzen 1.069 identische Schlüssel; neue sichtbare Texte
+  laufen über `UnmaText`. API und Assembly-Bindung bleiben V1,
+  Persistenzschema 20 bleibt kompatibel.
+- Release-Build, 138.229 Core-Assertions, sämtliche IL-/Reflection-,
+  Lokalisierungs-, Rollback- und Paketprüfungen wurden erfolgreich ausgeführt.
+
 ## 0.10.1 – 2026-08-11
 
 - Unter **OPTIONEN** kann die aktuelle Konfiguration als spielstandsübergreifendes

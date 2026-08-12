@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.10.1** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.2** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -50,9 +50,14 @@ alarms, selecting the next unacknowledged alarm, and muting alarm audio for
 five real-time minutes. The built-in fallbacks are **F8** for the main window
 and **Left Shift + F8** for the next alarm; the two potentially disruptive
 actions start unbound. Muting audio never acknowledges or clears an alarm.
-UNMA suppresses all four bindings while any native UNMA text field owns
-keyboard focus, so a rebound letter key cannot trigger an operator action
-while text is being entered.
+UNMA suppresses game shortcuts while a keyboard-operable UNMA control, such as
+a text field, button, or toggle, owns focus. A rebound letter key therefore
+cannot trigger a second operator action while typing or operating the UI.
+
+The alarm editor lists its local keyboard actions in the fixed action bar:
+**Ctrl+Enter** saves a complete draft with the current **ALARM ENABLED**
+setting, while **Esc** requests closing the editor. Unsaved changes open the
+close prompt first and are never discarded silently.
 
 ### Launcher and native windows
 
@@ -71,12 +76,18 @@ The main window, editor, and detached panels can be moved, pinned, and resized
 from the lower-right handle like other game windows. **MINIMIZE**, the native
 close button, and **F8** close only the main window and restore the launcher;
 an open editor or detached panel remains independent. Window sizes are kept
-inside the current viewport.
+inside the current viewport, and positions and sizes are saved per world.
 
 Pointer and mouse-wheel input inside a visible UNMA window stays with that
-window instead of reaching the world behind it. While a UNMA text field is
-active, keyboard input goes to that field. Moving focus away from all UNMA text
-fields or closing the focused window releases the keyboard again.
+window instead of reaching the world behind it. While a UNMA text field,
+button, or toggle owns keyboard focus, game and mod shortcuts are blocked.
+Moving focus outside UNMA controls or closing the focused window releases the
+keyboard again.
+
+Feedback and validation errors appear in a fixed status surface outside the
+scrollable content. The result of an action therefore remains visible without
+scrolling to the beginning or end of a page. Temporary feedback expires after
+eight seconds; persistent errors can be closed with the **×** button.
 
 ### Main window tabs
 
@@ -95,9 +106,9 @@ UNMA follows the behavior of a traditional industrial annunciator.
 
 | Code | State | Display behavior |
 | --- | --- | --- |
-| `K` | Active and not acknowledged | Flashes in its active color and repeats its sound |
+| `K` | Active and not acknowledged | Active color; flashes unless Reduced Motion is enabled, repeats its sound |
 | `KQ` | Active and acknowledged | Remains active without repeating its sound |
-| `KG` | Cleared and not acknowledged | Flashes with black text on a white background |
+| `KG` | Cleared and not acknowledged | Stable high-contrast history marking until acknowledgement |
 | `KGQ` | Cleared and acknowledged | Completed history event |
 
 Acknowledging an active alarm does not clear its active color. The color
@@ -196,7 +207,7 @@ or silences an alarm and never changes history or audio state.
 
 Incident snapshots are transient, derived results recalculated from the
 current alarm and history snapshots. They add no saved fields and require
-no new schema migration in 0.10.1. For performance, the UI requests at most
+no new schema migration in 0.10.2. For performance, the UI requests at most
 one result per frame and filter. Runtime history is copied only when its
 revision changes, global pressure is bounded to the newest 8,192 occurrences,
 and sorting plus analysis run outside the alarm lock. If revisions keep
@@ -244,19 +255,23 @@ Snoozing an aggregated slot covers every current occurrence behind it, but never
 acknowledges, hides, clears, or removes an alarm from counters or history. A
 later occurrence receives a new sequence and is audible again.
 
-Double-click a custom alarm slot to open its rule directly in the editor.
+Custom alarm slots provide a visible **EDIT** action. Double-clicking continues
+to open the rule directly in the editor as a shortcut. Tooltips spell out the
+complete purpose of the object, acknowledge, audio-snooze, and audio-resume
+symbol actions.
 
 ### Detached panels
 
 The currently displayed HOME, global, or object panel can be detached into an
 independent native window. It shows the same panel state rather than creating a
-second alarm state. You may open more than one view of the same panel; detached
-boards display at most five columns.
+second alarm state. Each panel has at most one detached window; detaching it
+again brings the existing window to the front. Detached boards display at most
+five columns.
 
 Closing a detached window removes only that view. It does not delete the panel,
-slots, or alarms. Detached window position and size are not persisted; a newly
-detached view starts at a new default position. The underlying panel remains
-saved per world.
+slots, or alarms. Position, size, and open state are saved per world. Reopening
+uses the previous position, and panels that were open when the world was saved
+are restored on the next start.
 
 ## Creating a custom alarm
 
@@ -264,16 +279,30 @@ You can start a rule from a global panel or an object panel.
 
 1. Open the target panel.
 2. Click **+ NEW NOTIFICATION** or a free plus slot.
-3. Select the source for the first condition.
-4. Select a measured value.
-5. Choose a calculation, comparison operator, and target value.
-6. Click **+ ADD ROW**.
-7. Add further rows if required.
-8. Enter the notification text and choose severity, active color, sound, and
-   acknowledgement behavior.
-9. Save the notification.
+3. Enter the **MESSAGE TITLE** at the top. It appears in the alarm slot and in
+   history.
+4. Select the source for the first condition.
+5. Select a measured value.
+6. Choose a calculation, comparison operator, and target value.
+7. Click **+ ADD ROW**.
+8. Add further rows if required.
+9. Choose severity, active color, sound, and acknowledgement behavior, then
+   use **ALARM ENABLED** to decide whether the saved rule is evaluated.
+   Activation/reset timing and escalation are under **ADVANCED SETTINGS**.
+   Its collapsed header shows whether defaults apply, settings are configured,
+   or an input needs attention.
+10. Check the fixed action bar. **SAVE & ACTIVATE** becomes available once the
+    title, target panel, at least one condition, color, and timing values are
+    valid and **ALARM ENABLED** is selected. When the toggle is off, **SAVE
+    INACTIVE** stores the same fully configured rule without evaluating it.
 
 Every condition row displays its current value while its source is available.
+
+The action bar remains visible while scrolling and reports **READY TO SAVE** or
+**INCOMPLETE**. If a rule cannot be saved, validation identifies a missing
+title, condition, or target panel as well as invalid color or timing values.
+At an extremely small window size with high UI scaling, the same bar collapses
+to one compact row; complete action names remain available in tooltips.
 
 ### Using a game object as the source
 
@@ -401,7 +430,14 @@ display slots, not duplicate alarm states.
 
 - The alarm editor is a separate, scrollable native window. It can remain open
   while the main window is minimized.
-- Double-click a custom slot to edit its rule.
+- **ADVANCED SETTINGS** starts collapsed so a standard alarm does not require
+  scrolling past timing and escalation controls. Its summary shows whether
+  defaults or configured values are present and flags invalid hidden values;
+  the header is available in normal keyboard focus order.
+- Use **EDIT** on a custom slot to open its rule; double-click remains available
+  as a shortcut.
+- Inactive custom rules carry an **INACTIVE** badge and are not evaluated until
+  they are saved and activated.
 - If another unsaved draft is already open, UNMA keeps the old draft and shows
   a prominent warning instead of silently replacing it.
 - Closing an editor that contains a draft offers four choices:
@@ -490,7 +526,12 @@ content scale.
   own UI scale. Window minimums grow with the selected content scale within
   the available viewport; panel and area settings also stack their controls
   so required actions remain reachable at 200 percent.
-- Edit and save the Warning, Critical, and Emergency colors.
+- Edit and save the Warning, Critical, and Emergency colors in `#RRGGBB`
+  format. Invalid color codes are explained beside the field and are not
+  applied.
+- Under **ACCESSIBILITY**, enable **REDUCED MOTION** to replace flashing alarm
+  backgrounds with stable highlighting. Alarm state, severity, and
+  acknowledgement remain identifiable in text.
 - View the custom-sound directory and re-read supported WAV and Ogg files
   without restarting the game.
 - Inspect information about system alarms, detached panels, the alarm state
@@ -504,8 +545,8 @@ are mod settings whose startup defaults are listed below.
 
 UNMA blocks clicks, drags, and mouse-wheel input inside its visible native
 windows from affecting the game world behind them. Outside those windows,
-building selection, camera movement, and zoom remain available. Native text
-fields block game shortcuts only while they own keyboard focus.
+building selection, camera movement, and zoom remain available. Game shortcuts
+are blocked only while a keyboard-operable UNMA control owns focus.
 
 The startup defaults in `config.json` are:
 
@@ -574,7 +615,8 @@ importing:
   acknowledgement;
 - system-alarm configuration;
 - alarm colors and UI scale;
-- window positions and sizes; this category is unselected by default.
+- window positions, sizes, and open detached panels; this category is
+  unselected by default.
 
 The startup options in `config.json`, including global audio enablement and
 volume, already apply independently of a save and are not duplicated in the
@@ -643,13 +685,14 @@ archive. The following survive saving and reloading:
 - completed history events;
 - instrument panels, instruments, sources, calculations, and display scales;
 - customized system-alarm stages plus Vanilla behavior and sound overrides;
-- content scale, launcher position, and main-window/editor sizes.
+- content scale, launcher position, and the positions, sizes, and open state of
+  main, editor, and detached windows.
 
 Schema 20 migrates configurations from earlier UNMA versions with every
 existing panel unassigned. Their previous **ALL** board behavior therefore
 remains unchanged until areas are deliberately created and assigned.
 The Incident Lens stores no configuration or result of its own. The separate
-default profile does not extend a world file either, so 0.10.1 remains on
+default profile does not extend a world file either, so 0.10.2 remains on
 schema 20. If a configuration from a newer UNMA schema is found,
 this version leaves the main file and its backup artifacts byte-for-byte
 untouched, uses safe defaults, and blocks configuration writes for the session
