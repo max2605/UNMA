@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.3 – 2026-08-12
+
+- Alle editierbaren Freitext-, Such-, Farb-, Zahlen- und Zeitfelder verwenden
+  jetzt einen dunkelgrünen Hintergrund mit fetter weißer Schrift. Normal-,
+  Hover-, Aktiv- und Fokuszustände behalten den hohen Kontrast; der Fokus wird
+  zusätzlich durch eine grüne Kontur hervorgehoben.
+- Hauptfenster, Meldungseditor und abgekoppelte Tafeln lassen sich wieder
+  flüssig an ihrer Titelleiste verschieben und behalten die Position nach dem
+  Loslassen zuverlässig bei.
+- Die Viewportbegrenzung setzt eine Fensterposition nicht mehr bei jedem
+  UI-Update zurück, sondern nur nach einer tatsächlichen Auflösungs- oder
+  Skalierungsänderung. Die endgültige Drag-Position wird nach dem nächsten
+  UI-Layout-Takt übernommen und nur korrigiert, wenn sie außerhalb des
+  sichtbaren Bereichs liegt.
+- Öffentliche API und Assembly-Bindung bleiben V1, das Persistenzschema bleibt
+  20; für bestehende Spielstände ist keine Migration erforderlich.
+- Release-Build, 138.275 Core-Assertions sowie sämtliche IL-/Reflection-,
+  Lokalisierungs-, Rollback- und Paketprüfungen wurden erfolgreich ausgeführt.
+
 ## 0.10.2 – 2026-08-12
 
 - Der Meldungseditor zeigt den **MELDUNGSTITEL** jetzt als erstes Feld und

@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.10.2** und
+Diese Anleitung gilt für **UNMA 0.10.3** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -751,7 +751,7 @@ vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
 **ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
 zugewiesen werden.
 Die Incident-Linse speichert weder Konfiguration noch Ergebnis. Auch das
-separate Standardprofil erweitert die Weltdatei nicht; 0.10.2 bleibt daher bei
+separate Standardprofil erweitert die Weltdatei nicht; 0.10.3 bleibt daher bei
 Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
 UNMA-Schema, lässt sie Hauptdatei und Sicherungsartefakte bytegenau unangetastet,
 verwendet sichere Vorgaben und sperrt Konfigurationsschreibvorgänge für die

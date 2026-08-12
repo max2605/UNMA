@@ -2955,7 +2955,7 @@ public sealed class UnmaRuntime : IDisposable
             {
                 var recommendedProfile =
                     ConfigurationTransferPolicy
-                        .CreateRecommendedQuietProfile("0.10.2");
+                        .CreateRecommendedQuietProfile("0.10.3");
                 if (m_transferProfileStore.SaveIfMissing(
                         recommendedProfile,
                         out var alreadyExists,
@@ -2984,7 +2984,7 @@ public sealed class UnmaRuntime : IDisposable
             if (ConfigurationTransferPolicy
                 .TryRefreshPreviousRecommendedProfile(
                     m_transferProfile,
-                    "0.10.2",
+                    "0.10.3",
                     out var upgradedRecommendedProfile))
             {
                 // Keep custom and on-disk profiles untouched. This refreshes
@@ -3023,7 +3023,7 @@ public sealed class UnmaRuntime : IDisposable
                 snapshot,
                 selection ?? new TransferProfileSelection(),
                 profileName,
-                "0.10.2");
+                "0.10.3");
             if (!m_transferProfileStore.Save(profile, out var error))
             {
                 LastTransferProfileError = error;

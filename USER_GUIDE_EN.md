@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.10.2** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.3** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -692,7 +692,7 @@ Schema 20 migrates configurations from earlier UNMA versions with every
 existing panel unassigned. Their previous **ALL** board behavior therefore
 remains unchanged until areas are deliberately created and assigned.
 The Incident Lens stores no configuration or result of its own. The separate
-default profile does not extend a world file either, so 0.10.2 remains on
+default profile does not extend a world file either, so 0.10.3 remains on
 schema 20. If a configuration from a newer UNMA schema is found,
 this version leaves the main file and its backup artifacts byte-for-byte
 untouched, uses safe defaults, and blocks configuration writes for the session

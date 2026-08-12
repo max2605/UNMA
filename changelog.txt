@@ -1,3 +1,11 @@
+v0.10.3 | 2026-08-12
+Input contrast and window dragging
+* Changed every editable free-text, search, color, numeric, and timing field to a dark-green background with bold white text across normal, hover, active, and focused states.
+* Restored smooth title-bar dragging for the main window, alarm editor, and detached panels, including reliable position retention after releasing the pointer.
+* Reapplied viewport constraints only after real resolution or UI-scale changes, deferred final drag-position capture until UI layout settles, and clamped only positions outside the visible area.
+* Retained public API and assembly binding V1 plus persistence schema 20, requiring no save migration.
+* Passed 138,275 core assertions plus all Release, IL/reflection, localization, rollback, and package checks.
+
 v0.10.2 | 2026-08-12
 Operator ergonomics and accessibility
 * Moved the message title to the top of the alarm editor, explained where it is displayed, and exposed each rule's active state so disabled panel clones can be enabled from the live UI.

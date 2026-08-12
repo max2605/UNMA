@@ -520,6 +520,83 @@ internal static class Program
             "internal readonly struct NativeControlMetadata",
             StringComparison.Ordinal));
 
+        var ensureStyles = ExtractSourceMethod(
+            editorSource,
+            "private void EnsureStyles()");
+        var textFieldStyleStart = ensureStyles.IndexOf(
+            "m_textFieldStyle = new GUIStyle()",
+            StringComparison.Ordinal);
+        var textFieldStyleEnd = ensureStyles.IndexOf(
+            "m_historyHeaderStyle =",
+            textFieldStyleStart,
+            StringComparison.Ordinal);
+        IsTrue(textFieldStyleStart >= 0);
+        IsTrue(textFieldStyleEnd > textFieldStyleStart);
+        var textFieldStyleSource = ensureStyles.Substring(
+            textFieldStyleStart,
+            textFieldStyleEnd - textFieldStyleStart);
+        IsTrue(textFieldStyleSource.Contains(
+            "fontStyle = FontStyle.Bold",
+            StringComparison.Ordinal));
+        IsTrue(textFieldStyleSource.Contains(
+            "CoiUiPalette.InputBackground",
+            StringComparison.Ordinal));
+        IsTrue(textFieldStyleSource.Contains(
+            "textColor = Color.white",
+            StringComparison.Ordinal));
+        IsTrue(textFieldStyleSource.Contains(
+            "m_textFieldStyle.onFocused.background = " +
+            "m_textFieldStyle.focused.background;",
+            StringComparison.Ordinal));
+        AreEqual(
+            8,
+            Regex.Matches(
+                textFieldStyleSource,
+                "textColor = Color\\.white",
+                RegexOptions.CultureInvariant).Count);
+        foreach (var expectedBackground in new[]
+                 {
+                     "m_textFieldStyle.hover.background = " +
+                     "m_textFieldStyle.normal.background;",
+                     "m_textFieldStyle.active.background = " +
+                     "m_textFieldStyle.normal.background;",
+                     "m_textFieldStyle.onNormal.background = " +
+                     "m_textFieldStyle.normal.background;",
+                     "m_textFieldStyle.onHover.background = " +
+                     "m_textFieldStyle.normal.background;",
+                     "m_textFieldStyle.onActive.background = " +
+                     "m_textFieldStyle.normal.background;",
+                     "m_textFieldStyle.onFocused.background = " +
+                     "m_textFieldStyle.focused.background;",
+                 })
+        {
+            IsTrue(textFieldStyleSource.Contains(
+                expectedBackground,
+                StringComparison.Ordinal));
+        }
+
+        var paletteSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Ui",
+            "CoiUiPalette.cs"));
+        IsTrue(paletteSource.Contains(
+            "InputBackground = Rgb(0x10, 0x35, 0x22)",
+            StringComparison.Ordinal));
+
+        var textFieldCallCount = Regex.Matches(
+            editorSource,
+            "NativeGUILayout\\.TextField\\(",
+            RegexOptions.CultureInvariant).Count;
+        var styledTextFieldCallCount = Regex.Matches(
+            editorSource,
+            "(?=NativeGUILayout\\.TextField\\(" +
+            "(?:(?!NativeGUILayout\\.TextField\\(|;)[\\s\\S])*?" +
+            "m_textFieldStyle)",
+            RegexOptions.CultureInvariant).Count;
+        IsTrue(textFieldCallCount > 0);
+        AreEqual(textFieldCallCount, styledTextFieldCallCount);
+
         var launcherMove = ExtractSourceMethod(
             editorSource,
             "private void HandleNativeLauncherMoved(float x, float y)");
@@ -623,15 +700,37 @@ internal static class Program
                 shellSource,
                 "private void HandleWindowMoved(Vector2 _)");
             IsTrue(windowMoved.Contains(
-                "m_window.FrameWorldPosition",
+                "var moveVersion = ++m_positionRestoreVersion;",
                 StringComparison.Ordinal));
             IsTrue(windowMoved.Contains(
                 "m_window.IsPinned",
                 StringComparison.Ordinal));
             IsTrue(windowMoved.Contains(
+                "ScheduleFrameWorldPositionRead(",
+                StringComparison.Ordinal));
+            IsFalse(windowMoved.Contains(
+                "m_window.FrameWorldPosition",
+                StringComparison.Ordinal));
+            IsFalse(windowMoved.Contains(
+                "RestoreEffectivePositionFromPreferred(",
+                StringComparison.Ordinal));
+
+            var completeWindowMove = ExtractSourceMethod(
+                shellSource,
+                "private void CompleteWindowMove(");
+            IsTrue(completeWindowMove.Contains(
+                "moveVersion != m_positionRestoreVersion",
+                StringComparison.Ordinal));
+            IsTrue(completeWindowMove.Contains(
                 "NormalizePreferredPosition(current)",
                 StringComparison.Ordinal));
-            IsTrue(windowMoved.Contains(
+            IsTrue(completeWindowMove.Contains(
+                "var effectivePosition = ClampPosition(",
+                StringComparison.Ordinal));
+            IsTrue(completeWindowMove.Contains(
+                "if (!PositionsApproximately(current, effectivePosition))",
+                StringComparison.Ordinal));
+            IsTrue(completeWindowMove.Contains(
                 "RestoreEffectivePositionFromPreferred(force: true);",
                 StringComparison.Ordinal));
 
@@ -677,6 +776,19 @@ internal static class Program
                 StringComparison.Ordinal);
             IsTrue(scheduledGuardIndex >= 0);
             IsTrue(scheduledMutationIndex > scheduledGuardIndex);
+
+            var scheduledPositionRead = ExtractSourceMethod(
+                shellSource,
+                "public void ScheduleFrameWorldPositionRead(");
+            IsTrue(scheduledPositionRead.Contains(
+                "if (shouldRead?.Invoke() != true)",
+                StringComparison.Ordinal));
+            IsTrue(scheduledPositionRead.Contains(
+                "onRead?.Invoke(FrameWorldPosition);",
+                StringComparison.Ordinal));
+            IsTrue(scheduledPositionRead.Contains(
+                ".StartingIn(16);",
+                StringComparison.Ordinal));
 
             var restorePosition = ExtractSourceMethod(
                 shellSource,
@@ -845,11 +957,16 @@ internal static class Program
                 shellSource,
                 "public void RefreshViewportConstraints()");
             IsTrue(refreshViewport.Contains(
-                "UpdateViewportSignature();",
+                "if (m_disposed || !UpdateViewportSignature())",
                 StringComparison.Ordinal));
-            IsTrue(refreshViewport.Contains(
+            var unchangedViewportReturn = refreshViewport.IndexOf(
+                "return;",
+                StringComparison.Ordinal);
+            var refreshPreferredSize = refreshViewport.IndexOf(
                 "ApplyPreferredWindowSize();",
-                StringComparison.Ordinal));
+                StringComparison.Ordinal);
+            IsTrue(unchangedViewportReturn >= 0);
+            IsTrue(refreshPreferredSize > unchangedViewportReturn);
 
             var updateViewportSignature = ExtractSourceMethod(
                 shellSource,
@@ -8229,13 +8346,13 @@ internal static class Program
                 VanillaNotificationBehavior.Ignored,
         };
         var profile = ConfigurationTransferPolicy
-            .CreateRecommendedQuietProfile("0.10.2");
+            .CreateRecommendedQuietProfile("0.10.3");
 
         AreEqual(
             UnmaTransferProfile.CurrentProfileSchemaVersion,
             profile.ProfileSchemaVersion);
         AreEqual("UNMA Recommended Quiet", profile.Metadata.Name);
-        AreEqual("0.10.2", profile.Metadata.SourceVersion);
+        AreEqual("0.10.3", profile.Metadata.SourceVersion);
         IsTrue(DateTime.TryParse(
             profile.Metadata.CreatedUtc,
             System.Globalization.CultureInfo.InvariantCulture,
@@ -8286,6 +8403,7 @@ internal static class Program
 
         var legacyProfile = ConfigurationTransferPolicy.CloneProfile(profile);
         legacyProfile.Metadata.Name = "UNMA Recommended Silent";
+        legacyProfile.Metadata.SourceVersion = "0.10.2";
         legacyProfile.Metadata.CreatedUtc = "legacy-created-utc";
         legacyProfile.NotificationRules.RemoveAll(rule =>
             rule.Behavior == VanillaNotificationBehavior.Ignored);
@@ -8296,7 +8414,7 @@ internal static class Program
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 legacyProfile,
-                "0.10.2",
+                "0.10.3",
                 out var upgradedLegacyProfile));
         IsFalse(ReferenceEquals(legacyProfile, upgradedLegacyProfile));
         AreEqual("UNMA Recommended Silent", legacyProfile.Metadata.Name);
@@ -8317,6 +8435,7 @@ internal static class Program
 
         var previousQuietProfile =
             ConfigurationTransferPolicy.CloneProfile(profile);
+        previousQuietProfile.Metadata.SourceVersion = "0.10.2";
         previousQuietProfile.Metadata.CreatedUtc = "quiet-created-utc";
         foreach (var rule in previousQuietProfile.NotificationRules.Where(
                      rule => rule.Behavior ==
@@ -8327,7 +8446,7 @@ internal static class Program
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 previousQuietProfile,
-                "0.10.2",
+                "0.10.3",
                 out var refreshedQuietProfile));
         AreEqual(
             2,
@@ -8347,7 +8466,7 @@ internal static class Program
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 customProfile,
-                "0.10.2",
+                "0.10.3",
                 out var unchangedCustomProfile));
         IsTrue(ReferenceEquals(customProfile, unchangedCustomProfile));
 
@@ -8359,7 +8478,7 @@ internal static class Program
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 divergentQuietProfile,
-                "0.10.2",
+                "0.10.3",
                 out var unchangedDivergentProfile));
         IsTrue(ReferenceEquals(
             divergentQuietProfile,

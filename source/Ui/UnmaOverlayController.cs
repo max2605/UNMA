@@ -14143,25 +14143,38 @@ public sealed class UnmaOverlayController : MonoBehaviour
         m_textFieldStyle = new GUIStyle()
         {
             fontSize = 13,
+            fontStyle = FontStyle.Bold,
             padding = new RectOffset(9, 9, 5, 5),
             border = new RectOffset(3, 3, 3, 3),
             normal =
             {
-                textColor = CoiUiPalette.TextBright,
+                textColor = Color.white,
                 background = CoiButtonTexture(
                     "field",
-                    CoiUiPalette.SurfaceRaised,
-                    CoiUiPalette.BorderLight),
+                    CoiUiPalette.InputBackground,
+                    CoiUiPalette.InputBorder),
             },
             focused =
             {
-                textColor = CoiUiPalette.TextBright,
+                textColor = Color.white,
                 background = CoiButtonTexture(
                     "field-focus",
-                    CoiUiPalette.Border,
-                    CoiUiPalette.Yellow),
+                    CoiUiPalette.InputBackground,
+                    CoiUiPalette.Green),
             },
         };
+        m_textFieldStyle.hover.textColor = Color.white;
+        m_textFieldStyle.hover.background = m_textFieldStyle.normal.background;
+        m_textFieldStyle.active.textColor = Color.white;
+        m_textFieldStyle.active.background = m_textFieldStyle.normal.background;
+        m_textFieldStyle.onNormal.textColor = Color.white;
+        m_textFieldStyle.onNormal.background = m_textFieldStyle.normal.background;
+        m_textFieldStyle.onHover.textColor = Color.white;
+        m_textFieldStyle.onHover.background = m_textFieldStyle.normal.background;
+        m_textFieldStyle.onActive.textColor = Color.white;
+        m_textFieldStyle.onActive.background = m_textFieldStyle.normal.background;
+        m_textFieldStyle.onFocused.textColor = Color.white;
+        m_textFieldStyle.onFocused.background = m_textFieldStyle.focused.background;
         m_historyHeaderStyle = new GUIStyle(m_labelStyle)
         {
             fontSize = 12,

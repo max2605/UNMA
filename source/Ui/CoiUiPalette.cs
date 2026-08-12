@@ -14,6 +14,9 @@ internal static class CoiUiPalette
     public static readonly Color BorderSoft = Rgb(0x3D, 0x3F, 0x40);
     public static readonly Color BorderLight = Rgb(0x76, 0x77, 0x79);
 
+    public static readonly Color InputBackground = Rgb(0x10, 0x35, 0x22);
+    public static readonly Color InputBorder = Rgb(0x42, 0x73, 0x4C);
+
     public static readonly Color TextMuted = Rgb(0xA0, 0xA0, 0xA0);
     public static readonly Color Text = Rgb(0xC6, 0xC6, 0xC6);
     public static readonly Color Symbol = Rgb(0xDC, 0xE2, 0xE8);

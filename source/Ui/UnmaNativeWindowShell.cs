@@ -132,6 +132,22 @@ internal sealed class UnmaNativeWindowShell : IDisposable
                 .StartingIn(16);
         }
 
+        public void ScheduleFrameWorldPositionRead(
+            Func<bool> shouldRead,
+            Action<Vector2> onRead)
+        {
+            Frame.RootElement.schedule
+                .Execute(() =>
+                {
+                    if (shouldRead?.Invoke() != true)
+                    {
+                        return;
+                    }
+                    onRead?.Invoke(FrameWorldPosition);
+                })
+                .StartingIn(16);
+        }
+
         public void BringFrameToFront()
         {
             RootElement.BringToFront();
@@ -590,17 +606,18 @@ internal sealed class UnmaNativeWindowShell : IDisposable
 
     public void RefreshViewportConstraints()
     {
-        if (!m_disposed)
+        if (m_disposed || !UpdateViewportSignature())
         {
-            UpdateViewportSignature();
-            if (m_temporarilyFullscreen)
-            {
-                ApplyFullscreenContentSize();
-            }
-            else
-            {
-                ApplyPreferredWindowSize();
-            }
+            return;
+        }
+
+        if (m_temporarilyFullscreen)
+        {
+            ApplyFullscreenContentSize();
+        }
+        else
+        {
+            ApplyPreferredWindowSize();
         }
     }
 
@@ -748,15 +765,35 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             return;
         }
 
-        var current = m_window.FrameWorldPosition;
-        if (!IsFinite(current.x) || !IsFinite(current.y))
+        // UI Toolkit settles WorldBound after WindowDragger's PointerUpEvent.
+        // Reading and restoring it synchronously can capture the pre-drag
+        // position and snap the frame back as soon as the button is released.
+        var moveVersion = ++m_positionRestoreVersion;
+        m_window.ScheduleFrameWorldPositionRead(
+            () => !m_disposed &&
+                  moveVersion == m_positionRestoreVersion &&
+                  m_window.IsOpen &&
+                  !m_window.IsPinned &&
+                  !m_temporarilyFullscreen,
+            current => CompleteWindowMove(moveVersion, current));
+    }
+
+    private void CompleteWindowMove(int moveVersion, Vector2 current)
+    {
+        if (m_disposed || moveVersion != m_positionRestoreVersion ||
+            !IsFinite(current.x) || !IsFinite(current.y))
         {
             return;
         }
 
         m_preferredFrameWorldPosition =
             NormalizePreferredPosition(current);
-        RestoreEffectivePositionFromPreferred(force: true);
+        var effectivePosition = ClampPosition(m_preferredFrameWorldPosition);
+        m_effectiveFrameWorldPosition = effectivePosition;
+        if (!PositionsApproximately(current, effectivePosition))
+        {
+            RestoreEffectivePositionFromPreferred(force: true);
+        }
     }
 
     private void ApplyPreferredWindowSize()
