@@ -19,6 +19,14 @@ $timingMemoryPolicyTypeName = "UNMA.Domain.AlarmTimingMemoryPolicy"
 $escalationPolicyTypeName = "UNMA.Domain.AlarmEscalationPolicy"
 $attentionQueuePolicyTypeName = "UNMA.Domain.AlarmAttentionQueuePolicy"
 $attentionRequestTypeName = "UNMA.Domain.AlarmAttentionRequest"
+$operatorSilenceReminderPolicyTypeName =
+    "UNMA.Domain.OperatorSilenceReminderPolicy"
+$operatorSilenceReminderSnapshotTypeName =
+    "UNMA.Domain.OperatorSilenceReminderSnapshot"
+$groupedVanillaPolicyTypeName =
+    "UNMA.Domain.GroupedVanillaNotificationPolicy"
+$groupedVanillaTrackerTypeName =
+    "UNMA.Domain.GroupedVanillaNotificationTracker"
 $forecastPolicyTypeName = "UNMA.Domain.InstrumentForecastPolicy"
 $forecastResultTypeName = "UNMA.Domain.InstrumentForecastResult"
 $alarmAreaPolicyTypeName = "UNMA.Domain.AlarmAreaPolicy"
@@ -26,6 +34,7 @@ $alarmAreaDefinitionTypeName = "UNMA.Domain.AlarmAreaDefinition"
 $alarmAreaFilterTypeName = "UNMA.Domain.AlarmAreaFilter"
 $alarmAreaFilterKindTypeName = "UNMA.Domain.AlarmAreaFilterKind"
 $alarmViewTypeName = "UNMA.Domain.AlarmView"
+$alarmMemoryTypeName = "UNMA.Domain.AlarmMemoryDefinition"
 $alarmHistoryTypeName = "UNMA.Domain.AlarmHistoryDefinition"
 $alarmIncidentPolicyTypeName = "UNMA.Domain.AlarmIncidentPolicy"
 $alarmIncidentActiveSampleTypeName =
@@ -35,7 +44,9 @@ $alarmIncidentSnapshotTypeName = "UNMA.Domain.AlarmIncidentSnapshot"
 $panelProjectionTypeName = "UNMA.Domain.PanelSlotProjection"
 $entityTypeName = "Mafi.Core.Entities.IEntity"
 $entitiesManagerTypeName = "Mafi.Core.Entities.IEntitiesManager"
+$calendarTypeName = "Mafi.Core.Simulation.ICalendar"
 $nonSaveableEventTypeName = "Mafi.IEventNonSaveable``1"
+$nonSaveableSignalEventTypeName = "Mafi.IEventNonSaveable"
 
 function Assert-Condition {
     param(
@@ -83,6 +94,24 @@ function Test-SameField {
         $null -ne $Right -and
         $Left.MetadataToken -eq $Right.MetadataToken -and
         $Left.Module.ModuleVersionId -eq $Right.Module.ModuleVersionId
+}
+
+function Get-FieldInstructions {
+    param(
+        [System.Reflection.MethodBase[]]$Methods,
+        [System.Reflection.FieldInfo]$Field,
+        [string[]]$OpCodes = @("ldfld", "stfld")
+    )
+
+    foreach ($method in @($Methods)) {
+        foreach ($instruction in @(Read-MethodInstructions $method)) {
+            if ($OpCodes -contains $instruction.OpCode.Name -and
+                $instruction.Operand -is [System.Reflection.FieldInfo] -and
+                (Test-SameField $instruction.Operand $Field)) {
+                $instruction
+            }
+        }
+    }
 }
 
 function Get-OperandSize {
@@ -323,6 +352,79 @@ function Assert-EntitySubscription {
         "$($Method.Name) must bind OnEntityRemoved exactly once."
 }
 
+function Assert-SignalSubscription {
+    param(
+        [System.Reflection.MethodBase]$Method,
+        [System.Reflection.FieldInfo]$EventField,
+        [string]$RequiredOperation,
+        [string]$ForbiddenOperation,
+        [string]$HandlerName,
+        [string]$EventLabel
+    )
+
+    $instructions = @(Read-MethodInstructions $Method)
+    $fieldIndexes = @()
+    for ($index = 0; $index -lt $instructions.Count; $index++) {
+        $instruction = $instructions[$index]
+        if ($instruction.OpCode.Name -eq "ldfld" -and
+            $instruction.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $instruction.Operand $EventField)) {
+            $fieldIndexes += $index
+        }
+    }
+    Assert-Condition `
+        ($fieldIndexes.Count -eq 1) `
+        "$($Method.Name) must load the $EventLabel event field exactly once."
+
+    $fieldIndex = $fieldIndexes[0]
+    $operationIndex = -1
+    for ($index = $fieldIndex + 1;
+        $index -lt $instructions.Count;
+        $index++) {
+        if (Test-IsRuntimeOwnedEventCall `
+                $instructions[$index] `
+                @($RequiredOperation, $ForbiddenOperation)) {
+            $operationIndex = $index
+            break
+        }
+    }
+    Assert-Condition `
+        ($operationIndex -gt $fieldIndex) `
+        "$($Method.Name) has no matching $EventLabel event operation."
+
+    $operation = [System.Reflection.MethodBase](
+        $instructions[$operationIndex].Operand)
+    Assert-Condition `
+        ($operation.Name -eq $RequiredOperation) `
+        ("{0} uses saveable {1} for {2}; expected {3}." -f
+            $Method.Name,
+            $ForbiddenOperation,
+            $EventLabel,
+            $RequiredOperation)
+    Assert-Condition `
+        ((Get-GenericTypeDefinitionName $operation.DeclaringType) -eq
+            $nonSaveableSignalEventTypeName) `
+        "$($Method.Name) must call $nonSaveableSignalEventTypeName."
+
+    $handlerCount = 0
+    for ($index = $fieldIndex + 1;
+        $index -lt $operationIndex;
+        $index++) {
+        $instruction = $instructions[$index]
+        if (($instruction.OpCode.Name -eq "ldftn" -or
+                $instruction.OpCode.Name -eq "ldvirtftn") -and
+            (Test-IsMethodInstruction `
+                $instruction `
+                $runtimeTypeName `
+                $HandlerName)) {
+            $handlerCount++
+        }
+    }
+    Assert-Condition `
+        ($handlerCount -eq 1) `
+        "$($Method.Name) must bind $HandlerName exactly once."
+}
+
 $resolvedAssemblyPath = (Resolve-Path -LiteralPath $AssemblyPath).Path
 $resolvedManagedPath = (Resolve-Path -LiteralPath $ManagedPath).Path
 
@@ -368,6 +470,10 @@ $attentionRequestType = $assembly.GetType(
     $attentionRequestTypeName,
     $true,
     $false)
+$operatorSilenceReminderSnapshotType = $assembly.GetType(
+    $operatorSilenceReminderSnapshotTypeName,
+    $true,
+    $false)
 $forecastResultType = $assembly.GetType(
     $forecastResultTypeName,
     $true,
@@ -386,6 +492,10 @@ $alarmAreaFilterKindType = $assembly.GetType(
     $false)
 $alarmViewType = $assembly.GetType(
     $alarmViewTypeName,
+    $true,
+    $false)
+$alarmMemoryType = $assembly.GetType(
+    $alarmMemoryTypeName,
     $true,
     $false)
 $alarmHistoryType = $assembly.GetType(
@@ -422,11 +532,30 @@ $restoreConfiguration = @(
     $methods | Where-Object Name -eq "RestoreConfiguration")
 $restoreAlarmTimingStates = @(
     $methods | Where-Object Name -eq "RestoreAlarmTimingStates")
+$restoreAlarmMemories = @(
+    $methods | Where-Object Name -eq "RestoreAlarmMemories")
+$capturePersistentAlarmState = @(
+    $methods | Where-Object Name -eq "CapturePersistentAlarmState")
 $advanceRuleTiming = @(
     $methods | Where-Object Name -eq "AdvanceRuleTiming")
 $setAlarm = @($methods | Where-Object Name -eq "SetAlarm")
+$clearAlarm = @($methods | Where-Object Name -eq "ClearAlarm")
+$cloneAlarmView = @($methods | Where-Object {
+    $_.Name -eq "Clone" -and
+    @($_.GetParameters()).Count -eq 2 -and
+    $_.GetParameters()[0].ParameterType -eq $alarmViewType
+})
 $tryTakeAttentionRequest = @(
     $methods | Where-Object Name -eq "TryTakeAttentionRequest")
+$tryTakeOperatorSilenceReminder = @(
+    $methods | Where-Object Name -eq "TryTakeOperatorSilenceReminder")
+$onNewMonthStart = @(
+    $methods | Where-Object Name -eq "OnNewMonthStart")
+$acknowledgeAlarmStateLocked = @(
+    $methods | Where-Object Name -eq "AcknowledgeAlarmStateLocked")
+$acknowledgeProjectedSlots = @(
+    $methods | Where-Object Name -eq "AcknowledgeProjectedSlots")
+$acknowledgeAll = @($methods | Where-Object Name -eq "AcknowledgeAll")
 $shouldEnqueueAttention = @(
     $methods | Where-Object Name -eq "ShouldEnqueueAttentionRequest")
 $tryGetInstrumentForecast = @(
@@ -474,14 +603,41 @@ Assert-Condition `
     ($restoreAlarmTimingStates.Count -eq 1) `
     "RestoreAlarmTimingStates was not found exactly once."
 Assert-Condition `
+    ($restoreAlarmMemories.Count -eq 1) `
+    "RestoreAlarmMemories was not found exactly once."
+Assert-Condition `
+    ($capturePersistentAlarmState.Count -eq 1) `
+    "CapturePersistentAlarmState was not found exactly once."
+Assert-Condition `
     ($advanceRuleTiming.Count -eq 1) `
     "AdvanceRuleTiming was not found exactly once."
 Assert-Condition `
     ($setAlarm.Count -eq 1) `
     "SetAlarm was not found exactly once."
 Assert-Condition `
+    ($clearAlarm.Count -eq 1) `
+    "ClearAlarm was not found exactly once."
+Assert-Condition `
+    ($cloneAlarmView.Count -eq 1) `
+    "AlarmView Clone was not found exactly once."
+Assert-Condition `
     ($tryTakeAttentionRequest.Count -eq 1) `
     "TryTakeAttentionRequest was not found exactly once."
+Assert-Condition `
+    ($tryTakeOperatorSilenceReminder.Count -eq 1) `
+    "TryTakeOperatorSilenceReminder was not found exactly once."
+Assert-Condition `
+    ($onNewMonthStart.Count -eq 1) `
+    "OnNewMonthStart was not found exactly once."
+Assert-Condition `
+    ($acknowledgeAlarmStateLocked.Count -eq 1) `
+    "AcknowledgeAlarmStateLocked was not found exactly once."
+Assert-Condition `
+    ($acknowledgeProjectedSlots.Count -eq 1) `
+    "AcknowledgeProjectedSlots was not found exactly once."
+Assert-Condition `
+    ($acknowledgeAll.Count -eq 1) `
+    "AcknowledgeAll was not found exactly once."
 Assert-Condition `
     ($shouldEnqueueAttention.Count -eq 1) `
     "ShouldEnqueueAttentionRequest was not found exactly once."
@@ -667,6 +823,232 @@ Assert-Condition `
     "RestoreAlarmTimingStates must use the exact escalation occurrence ID."
 Write-Host `
     "UNMA escalation runtime IL/reflection regression passed."
+
+# Operator acknowledgement has persistent provenance which must survive every
+# alarm-memory copy boundary, be set through every acknowledgement route, and
+# be cleared with the occurrence. The monthly hand-off is presentation-only.
+$viewOperatorSilencedField = $alarmViewType.GetField(
+    "IsOperatorSilenced",
+    $bindingFlags)
+$viewOperatorSilencedTickField = $alarmViewType.GetField(
+    "OperatorSilencedAtGameTick",
+    $bindingFlags)
+$memoryOperatorSilencedField = $alarmMemoryType.GetField(
+    "IsOperatorSilenced",
+    $bindingFlags)
+$memoryOperatorSilencedTickField = $alarmMemoryType.GetField(
+    "OperatorSilencedAtGameTick",
+    $bindingFlags)
+Assert-Condition `
+    ($null -ne $viewOperatorSilencedField -and
+        $viewOperatorSilencedField.FieldType -eq [bool] -and
+        $null -ne $viewOperatorSilencedTickField -and
+        $viewOperatorSilencedTickField.FieldType -eq [long]) `
+    "AlarmView operator-silence provenance fields changed."
+Assert-Condition `
+    ($null -ne $memoryOperatorSilencedField -and
+        $memoryOperatorSilencedField.FieldType -eq [bool] -and
+        $null -ne $memoryOperatorSilencedTickField -and
+        $memoryOperatorSilencedTickField.FieldType -eq [long]) `
+    "AlarmMemoryDefinition operator-silence fields changed."
+$defaultView = [Activator]::CreateInstance($alarmViewType)
+$defaultMemory = [Activator]::CreateInstance($alarmMemoryType)
+Assert-Condition `
+    (-not $defaultView.IsOperatorSilenced -and
+        $defaultView.OperatorSilencedAtGameTick -eq -1 -and
+        -not $defaultMemory.IsOperatorSilenced -and
+        $defaultMemory.OperatorSilencedAtGameTick -eq -1) `
+    "Operator-silence provenance defaults must remain false/-1."
+
+$restoreInstructions = @(Read-MethodInstructions $restoreAlarmMemories[0])
+foreach ($mapping in @(
+        [pscustomobject]@{
+            Source = $memoryOperatorSilencedField
+            Target = $viewOperatorSilencedField
+            Label = "operator-silenced flag"
+        },
+        [pscustomobject]@{
+            Source = $memoryOperatorSilencedTickField
+            Target = $viewOperatorSilencedTickField
+            Label = "operator-silenced game tick"
+        })) {
+    $sourceLoads = @($restoreInstructions | Where-Object {
+        $_.OpCode.Name -eq "ldfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $mapping.Source)
+    })
+    $targetStores = @($restoreInstructions | Where-Object {
+        $_.OpCode.Name -eq "stfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $mapping.Target)
+    })
+    Assert-Condition `
+        ($sourceLoads.Count -eq 1 -and $targetStores.Count -eq 1) `
+        "RestoreAlarmMemories must restore the $($mapping.Label) exactly once."
+}
+
+$captureImplementationMethods = @($capturePersistentAlarmState[0])
+$captureImplementationMethods += @($methods | Where-Object {
+    $_.Name -like "<CapturePersistentAlarmState>*"
+})
+foreach ($nestedType in @($runtimeType.GetNestedTypes(
+        [System.Reflection.BindingFlags]::NonPublic))) {
+    $captureImplementationMethods += @($nestedType.GetMethods($bindingFlags) |
+        Where-Object {
+            $_.Name -like "<CapturePersistentAlarmState>*"
+        })
+}
+foreach ($mapping in @(
+        [pscustomobject]@{
+            Source = $viewOperatorSilencedField
+            Target = $memoryOperatorSilencedField
+            Label = "operator-silenced flag"
+        },
+        [pscustomobject]@{
+            Source = $viewOperatorSilencedTickField
+            Target = $memoryOperatorSilencedTickField
+            Label = "operator-silenced game tick"
+        })) {
+    $sourceLoads = @(Get-FieldInstructions `
+        -Methods $captureImplementationMethods `
+        -Field $mapping.Source `
+        -OpCodes @("ldfld"))
+    $targetStores = @(Get-FieldInstructions `
+        -Methods $captureImplementationMethods `
+        -Field $mapping.Target `
+        -OpCodes @("stfld"))
+    Assert-Condition `
+        ($sourceLoads.Count -ge 1 -and $targetStores.Count -ge 1) `
+        "CapturePersistentAlarmState must capture the $($mapping.Label)."
+}
+
+$cloneInstructions = @(Read-MethodInstructions $cloneAlarmView[0])
+foreach ($field in @(
+        $viewOperatorSilencedField,
+        $viewOperatorSilencedTickField)) {
+    $loads = @($cloneInstructions | Where-Object {
+        $_.OpCode.Name -eq "ldfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $field)
+    })
+    $stores = @($cloneInstructions | Where-Object {
+        $_.OpCode.Name -eq "stfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $field)
+    })
+    Assert-Condition `
+        ($loads.Count -eq 1 -and $stores.Count -eq 1) `
+        "AlarmView Clone must preserve $($field.Name) exactly once."
+}
+
+$singleAckInstructions = @(
+    Read-MethodInstructions $acknowledgeAlarmStateLocked[0])
+$masterAckInstructions = @(Read-MethodInstructions $acknowledgeAll[0])
+foreach ($field in @(
+        $viewOperatorSilencedField,
+        $viewOperatorSilencedTickField)) {
+    $singleStores = @($singleAckInstructions | Where-Object {
+        $_.OpCode.Name -eq "stfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $field)
+    })
+    $masterStores = @($masterAckInstructions | Where-Object {
+        $_.OpCode.Name -eq "stfld" -and
+            $_.Operand -is [System.Reflection.FieldInfo] -and
+            (Test-SameField $_.Operand $field)
+    })
+    Assert-Condition `
+        ($singleStores.Count -ge 2) `
+        "Individual acknowledgement must set and clear $($field.Name)."
+    Assert-Condition `
+        ($masterStores.Count -ge 2) `
+        "Master acknowledgement must set and clear $($field.Name)."
+}
+$projectedAckCalls = @(
+    Read-MethodInstructions $acknowledgeProjectedSlots[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $runtimeTypeName `
+            "AcknowledgeAlarmStateLocked"
+    })
+$dashboardAckHelperCalls = @(
+    Read-MethodInstructions $tryAcknowledgeDashboard[0] | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $runtimeTypeName `
+            "AcknowledgeAlarmStateLocked"
+    })
+Assert-Condition `
+    ($projectedAckCalls.Count -eq 1 -and
+        $dashboardAckHelperCalls.Count -eq 1) `
+    "Panel/tile and scoped dashboard acknowledgement must share provenance marking."
+
+foreach ($resetMethod in @($setAlarm[0], $clearAlarm[0])) {
+    foreach ($field in @(
+            $viewOperatorSilencedField,
+            $viewOperatorSilencedTickField)) {
+        $resetStores = @(Get-FieldInstructions `
+            -Methods @($resetMethod) `
+            -Field $field `
+            -OpCodes @("stfld"))
+        Assert-Condition `
+            ($resetStores.Count -ge 1) `
+            "$($resetMethod.Name) must reset $($field.Name) with the occurrence."
+    }
+}
+
+$reminderParameters = @(
+    $tryTakeOperatorSilenceReminder[0].GetParameters())
+Assert-Condition `
+    ($tryTakeOperatorSilenceReminder[0].IsPublic -and
+        $tryTakeOperatorSilenceReminder[0].ReturnType -eq [bool] -and
+        $reminderParameters.Count -eq 1 -and
+        $reminderParameters[0].IsOut -and
+        $reminderParameters[0].ParameterType.IsByRef -and
+        $reminderParameters[0].ParameterType.GetElementType() -eq
+            $operatorSilenceReminderSnapshotType) `
+    "TryTakeOperatorSilenceReminder public one-shot contract changed."
+$takeReminderInstructions = @(
+    Read-MethodInstructions $tryTakeOperatorSilenceReminder[0])
+foreach ($instruction in $takeReminderInstructions) {
+    if ($instruction.Operand -isnot [System.Reflection.MethodBase]) {
+        continue
+    }
+    $called = [System.Reflection.MethodBase]$instruction.Operand
+    Assert-Condition `
+        (-not ($called.Name -like "Acknowledge*" -or
+            $called.Name -eq "PersistAlarmState" -or
+            $called.Name -eq "SaveConfiguration" -or
+            $called.Name -like "*Audio*" -or
+            $called.Name -like "*Snooze*")) `
+        "Taking the monthly reminder must remain presentation-only."
+}
+
+$monthInstructions = @(Read-MethodInstructions $onNewMonthStart[0])
+$monthPolicyCalls = @($monthInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $operatorSilenceReminderPolicyTypeName `
+        "Build"
+})
+Assert-Condition `
+    ($monthPolicyCalls.Count -eq 1) `
+    "OnNewMonthStart must build one operator-silence reminder snapshot."
+foreach ($instruction in $monthInstructions) {
+    if ($instruction.Operand -isnot [System.Reflection.MethodBase]) {
+        continue
+    }
+    $called = [System.Reflection.MethodBase]$instruction.Operand
+    Assert-Condition `
+        (-not ($called.Name -like "Acknowledge*" -or
+            $called.Name -eq "PersistAlarmState" -or
+            $called.Name -eq "SaveConfiguration" -or
+            $called.Name -like "*Play*" -or
+            $called.Name -like "*Siren*")) `
+        "OnNewMonthStart must not mutate acknowledgement, persistence, or audio."
+}
+Write-Host `
+    "UNMA operator-silence persistence and acknowledgement IL regression passed."
 
 # Historian consumers use one runtime query rather than independently reading
 # range, current value, and samples. Keep its window-aware contract and pure
@@ -1089,10 +1471,20 @@ Assert-Condition `
         @($activeUnacknowledged))) `
     "Filtered dashboard must acknowledge active unacknowledged alarms."
 Assert-Condition `
-    (-not [bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
+    ([bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
         $null,
         @($activeAcknowledged))) `
-    "Filtered dashboard must not acknowledge already acknowledged alarms."
+    "Filtered dashboard must add operator provenance to game-acknowledged alarms."
+$activeOperatorSilenced = [Activator]::CreateInstance($alarmViewType)
+$activeOperatorSilenced.IsActive = $true
+$activeOperatorSilenced.IsAcknowledged = $true
+$activeOperatorSilenced.IsOperatorSilenced = $true
+$activeOperatorSilenced.OperatorSilencedAtGameTick = [long]123
+Assert-Condition `
+    (-not [bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
+        $null,
+        @($activeOperatorSilenced))) `
+    "Filtered dashboard must not re-acknowledge operator-silenced alarms."
 Assert-Condition `
     (-not [bool]$canAcknowledgeFilteredDashboardAlarm[0].Invoke(
         $null,
@@ -1719,8 +2111,8 @@ foreach ($ignoredHotPath in @(
         }
     })
     Assert-Condition `
-        ($resolveBehaviorIndices.Count -eq 1) `
-        "$($ignoredHotPath.Method) must resolve Ignored exactly once."
+        ($resolveBehaviorIndices.Count -ge 1) `
+        "$($ignoredHotPath.Method) must resolve Ignored before mutation."
     foreach ($downstreamName in $ignoredHotPath.Downstream) {
         $downstreamIndices = @(for (
                 $index = 0;
@@ -1740,6 +2132,128 @@ foreach ($ignoredHotPath in @(
                 "$downstreamName.")
     }
 }
+
+$groupedVanillaTrackerType = $assembly.GetType(
+    $groupedVanillaTrackerTypeName,
+    $true,
+    $false)
+$groupLifecycleMethods = @{
+    OnNotificationAdded = @{
+        TrackerCall = "Add"
+        RuntimeCall = "SetGroupedVanillaAlarm"
+    }
+    OnNotificationRemoved = @{
+        TrackerCall = "Remove"
+        RuntimeCall = "SetGroupedVanillaAlarm"
+    }
+    OnNotificationSuppressChanged = @{
+        TrackerCall = "Add"
+        RuntimeCall = "SetGroupedVanillaAlarm"
+    }
+}
+foreach ($entry in $groupLifecycleMethods.GetEnumerator()) {
+    $method = @($methods | Where-Object Name -eq $entry.Key)
+    Assert-Condition `
+        ($method.Count -eq 1) `
+        "$($entry.Key) grouped lifecycle hook is missing."
+    $instructions = @(Read-MethodInstructions $method[0])
+    $trackerCalls = @($instructions | Where-Object {
+        ($_.OpCode.Name -eq "call" -or
+            $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq
+            $groupedVanillaTrackerTypeName -and
+        $_.Operand.Name -eq $entry.Value.TrackerCall
+    })
+    $runtimeCalls = @($instructions | Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $runtimeTypeName `
+            $entry.Value.RuntimeCall
+    })
+    Assert-Condition `
+        ($trackerCalls.Count -eq 1 -and $runtimeCalls.Count -eq 1) `
+        ("$($entry.Key) must update grouped membership and refresh " +
+            "the single grouped alarm exactly once.")
+}
+
+$suppressChangedMethod = @(
+    $methods | Where-Object Name -eq "OnNotificationSuppressChanged")
+$suppressChangedInstructions = @(
+    Read-MethodInstructions $suppressChangedMethod[0])
+$allMembersSuppressedCalls = @(
+    $suppressChangedInstructions | Where-Object {
+        ($_.OpCode.Name -eq "call" -or
+            $_.OpCode.Name -eq "callvirt") -and
+        $_.Operand -is [System.Reflection.MethodBase] -and
+        $_.Operand.DeclaringType.FullName -eq
+            $groupedVanillaPolicyTypeName -and
+        $_.Operand.Name -eq "AreAllMembersSuppressed"
+    })
+Assert-Condition `
+    ($suppressChangedMethod.Count -eq 1 -and
+        $allMembersSuppressedCalls.Count -eq 1) `
+    ("Grouped Vanilla suppression must refresh member state and only " +
+        "acknowledge when every active member is suppressed.")
+
+$flushGroupedClear = @(
+    $methods | Where-Object Name -eq "FlushGroupedVanillaNotificationClear")
+Assert-Condition `
+    ($flushGroupedClear.Count -eq 1) `
+    "Deferred grouped Vanilla clear hook is missing."
+$flushInstructions = @(Read-MethodInstructions $flushGroupedClear[0])
+$takePendingClearCalls = @($flushInstructions | Where-Object {
+    ($_.OpCode.Name -eq "call" -or
+        $_.OpCode.Name -eq "callvirt") -and
+    $_.Operand -is [System.Reflection.MethodBase] -and
+    $_.Operand.DeclaringType.FullName -eq
+        $groupedVanillaTrackerTypeName -and
+    $_.Operand.Name -eq "TryTakePendingLastClear"
+})
+$flushClearCalls = @($flushInstructions | Where-Object {
+    Test-IsMethodInstruction $_ $runtimeTypeName "ClearAlarm"
+})
+$flushPruneCalls = @($flushInstructions | Where-Object {
+    Test-IsMethodInstruction `
+        $_ `
+        $runtimeTypeName `
+        "PruneInactiveVanillaHistory"
+})
+Assert-Condition `
+    ($takePendingClearCalls.Count -eq 1 -and
+        $flushClearCalls.Count -eq 1 -and
+        $flushPruneCalls.Count -eq 1) `
+    ("Grouped Vanilla final removal must consume one deferred clear, " +
+        "close one occurrence, and prune once.")
+
+$updateEndForUi = @($methods | Where-Object Name -eq "OnUpdateEndForUi")
+$updateFlushCalls = @(Read-MethodInstructions $updateEndForUi[0] |
+    Where-Object {
+        Test-IsMethodInstruction `
+            $_ `
+            $runtimeTypeName `
+            "FlushGroupedVanillaNotificationClear"
+    })
+Assert-Condition `
+    ($updateEndForUi.Count -eq 1 -and $updateFlushCalls.Count -eq 1) `
+    "UpdateEndForUi must flush the grouped final clear exactly once."
+
+$alarmKeyForNotification = @(
+    $methods | Where-Object Name -eq "AlarmKeyForNotification")
+$alarmKeyInstructions = @(
+    Read-MethodInstructions $alarmKeyForNotification[0])
+$groupKeyCalls = @($alarmKeyInstructions | Where-Object {
+    ($_.OpCode.Name -eq "call" -or
+        $_.OpCode.Name -eq "callvirt") -and
+    $_.Operand -is [System.Reflection.MethodBase] -and
+    $_.Operand.DeclaringType.FullName -eq $groupedVanillaPolicyTypeName -and
+    $_.Operand.Name -eq "AlarmKeyForNotification"
+})
+Assert-Condition `
+    ($alarmKeyForNotification.Count -eq 1 -and
+        $groupKeyCalls.Count -eq 1) `
+    "Grouped Vanilla notifications must resolve to the stable group key."
+Write-Host "UNMA grouped-Vanilla lifecycle IL regression passed."
 
 $configurationNormalize = @($configurationType.GetMethods($bindingFlags) |
     Where-Object Name -eq "Normalize")
@@ -1861,6 +2375,64 @@ Assert-EntitySubscription `
     "RemoveNonSaveable" `
     "Remove"
 
+$monthGetterLocations = @()
+foreach ($constructor in $constructors) {
+    $instructions = @(Read-MethodInstructions $constructor)
+    for ($index = 0; $index -lt $instructions.Count; $index++) {
+        if (Test-IsMethodInstruction `
+                $instructions[$index] `
+                $calendarTypeName `
+                "get_NewMonthStart") {
+            $monthGetterLocations += [pscustomobject]@{
+                Constructor = $constructor
+                Instructions = $instructions
+                Index = $index
+            }
+        }
+    }
+}
+Assert-Condition `
+    ($monthGetterLocations.Count -eq 1) `
+    "NewMonthStart must be obtained exactly once in the runtime constructor."
+
+$monthGetterLocation = $monthGetterLocations[0]
+$monthEventField = $null
+for ($index = $monthGetterLocation.Index + 1;
+    $index -lt $monthGetterLocation.Instructions.Count;
+    $index++) {
+    $instruction = $monthGetterLocation.Instructions[$index]
+    if ($instruction.OpCode.Name -eq "stfld" -and
+        $instruction.Operand -is [System.Reflection.FieldInfo]) {
+        $monthEventField = [System.Reflection.FieldInfo]$instruction.Operand
+        break
+    }
+    if ($instruction.Operand -is [System.Reflection.MethodBase]) {
+        break
+    }
+}
+Assert-Condition `
+    ($null -ne $monthEventField) `
+    "NewMonthStart is not stored in a dedicated non-saveable event field."
+Assert-Condition `
+    ($monthEventField.FieldType.FullName -eq
+        $nonSaveableSignalEventTypeName) `
+    "The NewMonthStart field is not narrowed to $nonSaveableSignalEventTypeName."
+
+Assert-SignalSubscription `
+    $initialize[0] `
+    $monthEventField `
+    "AddNonSaveable" `
+    "Add" `
+    "OnNewMonthStart" `
+    "NewMonthStart"
+Assert-SignalSubscription `
+    $dispose[0] `
+    $monthEventField `
+    "RemoveNonSaveable" `
+    "Remove" `
+    "OnNewMonthStart" `
+    "NewMonthStart"
+
 foreach ($method in @($constructors + $methods)) {
     foreach ($instruction in @(Read-MethodInstructions $method)) {
         if (Test-IsRuntimeOwnedEventCall $instruction @("Add", "Remove")) {
@@ -1875,5 +2447,6 @@ foreach ($method in @($constructors + $methods)) {
 
 Write-Host (
     "UNMA save-event IL regression passed: EntityRemoved uses " +
-    "AddNonSaveable/RemoveNonSaveable and no saveable runtime-owner " +
-    "event registration exists.")
+    "AddNonSaveable/RemoveNonSaveable, NewMonthStart uses the matching " +
+    "runtime-only lifecycle, and no saveable runtime-owner event " +
+    "registration exists.")

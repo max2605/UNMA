@@ -204,6 +204,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_soundOverrideScroll;
     private Vector2 m_systemAlarmScroll;
     private Vector2 m_optionsScroll;
+    private Vector2 m_operatorSilenceReminderScroll;
     private bool m_optionsColorDraftInitialized;
     private string m_optionsWarningColor = "";
     private string m_optionsCriticalColor = "";
@@ -365,6 +366,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private bool m_statusPersistent;
     private AlarmView m_testAlarm;
     private float m_testAlarmUntil;
+    private OperatorSilenceReminderSnapshot m_operatorSilenceReminder;
     private long m_historyCacheRevision = -1;
     private IReadOnlyList<AlarmHistoryDefinition> m_historyCache =
         Array.Empty<AlarmHistoryDefinition>();
@@ -530,9 +532,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             m_inspectorAlarmButtons?.Update();
             m_inputBlocker?.EnsureActive();
+            var handledAttentionRequest = false;
             if (m_runtime.TryTakeAttentionRequest(out var attentionRequest))
             {
                 HandleAttentionRequest(attentionRequest);
+                handledAttentionRequest = true;
+            }
+            if (!handledAttentionRequest &&
+                m_operatorSilenceReminder == null &&
+                m_runtime.TryTakeOperatorSilenceReminder(
+                    out var silenceReminder))
+            {
+                HandleOperatorSilenceReminder(silenceReminder);
             }
         }
 
@@ -1122,6 +1133,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawSelectedMainTab()
     {
+        if (m_operatorSilenceReminder != null)
+        {
+            DrawOperatorSilenceReminder();
+            return;
+        }
+
         DrawStatusMessage();
         switch (m_tab)
         {
@@ -1144,6 +1161,68 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 DrawBoard();
                 break;
         }
+    }
+
+    private void DrawOperatorSilenceReminder()
+    {
+        var reminder = m_operatorSilenceReminder;
+        if (reminder == null)
+        {
+            return;
+        }
+
+        NativeGUILayout.BeginVertical(m_panelStyle);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "operator_silence.reminder.title",
+                "ACKNOWLEDGED ALARMS STILL SILENT"),
+            m_sectionStyle,
+            NativeGUILayout.Height(38f));
+        NativeGUILayout.Space(8f);
+        NativeGUILayout.Label(
+            UnmaText.Get(
+                "operator_silence.reminder.intro",
+                "These active alarm occurrences were acknowledged in the alarm window at least one game month ago. They remain visible, but their alarm audio is silent."),
+            m_labelStyle);
+        NativeGUILayout.Space(6f);
+        NativeGUILayout.Label(
+            UnmaText.Format(
+                "operator_silence.reminder.summary",
+                "{0} active alarms in {1} groups",
+                reminder.AlarmCount,
+                reminder.GroupCount),
+            m_smallLabelStyle);
+        NativeGUILayout.Space(8f);
+
+        m_operatorSilenceReminderScroll =
+            NativeGUILayout.BeginScrollView(
+                m_operatorSilenceReminderScroll,
+                NativeGUILayout.ExpandHeight(true));
+        foreach (var group in reminder.Groups)
+        {
+            var countSuffix = group.Count > 1
+                ? " ×" + group.Count.ToString(
+                    CultureInfo.InvariantCulture)
+                : "";
+            NativeGUILayout.Label(
+                group.Label + countSuffix,
+                m_labelStyle,
+                NativeGUILayout.Height(30f));
+        }
+        NativeGUILayout.EndScrollView();
+
+        NativeGUILayout.Space(8f);
+        if (NativeGUILayout.Button(
+                UnmaText.Get(
+                    "operator_silence.reminder.dismiss",
+                    "DISMISS"),
+                m_primaryButtonStyle,
+                NativeGUILayout.Height(36f)))
+        {
+            m_operatorSilenceReminder = null;
+            m_operatorSilenceReminderScroll = Vector2.zero;
+        }
+        NativeGUILayout.EndVertical();
     }
 
     private void DrawBoard()
@@ -9514,7 +9593,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawVanillaBehaviorControls(AlarmView candidate)
     {
-        if (candidate.EntityId >= 0)
+        var isGrouped = GroupedVanillaNotificationPolicy
+            .IsGroupedOverrideId(candidate.OverrideId);
+        if (!isGrouped && candidate.EntityId >= 0)
         {
             DrawVanillaBehaviorRow(
                 candidate,
@@ -9524,7 +9605,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     "NUR DIESES OBJEKT"));
         }
 
-        if (!string.IsNullOrWhiteSpace(candidate.EntityPrototypeId))
+        if (!isGrouped &&
+            !string.IsNullOrWhiteSpace(candidate.EntityPrototypeId))
         {
             DrawVanillaBehaviorRow(
                 candidate,
@@ -11091,6 +11173,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                 out _);
                         var hasRightActionColumn =
                             alarm.RequiresAcknowledgement ||
+                            alarm.IsActive && alarm.IsAcknowledged ||
                             hasNavigationButton;
                         var tileClickRect = hasRightActionColumn
                             ? new Rect(
@@ -11352,7 +11435,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "alarm_tile.audio_snoozed_badge",
                 "Z · 1M") + " · " + badge;
         }
-        var acknowledgementInset = alarm.RequiresAcknowledgement ? 32f : 0f;
+        if (alarm.IsActive && alarm.IsOperatorSilenced)
+        {
+            badge = UnmaText.Get(
+                "alarm_tile.behavior_silent",
+                "SILENT") + " · " + badge;
+        }
+        if (alarm.IsActive &&
+            GroupedVanillaNotificationPolicy.IsGroupedOverrideId(
+                alarm.OverrideId))
+        {
+            var memberCount = Math.Max(
+                1,
+                (int)Math.Round(alarm.LastValue));
+            badge = "×" + memberCount.ToString(
+                CultureInfo.InvariantCulture) + " · " + badge;
+        }
+        var acknowledgementInset =
+            alarm.RequiresAcknowledgement ||
+            alarm.IsActive && alarm.IsAcknowledged
+                ? 32f
+                : 0f;
         NativeGUI.Label(
             new Rect(
                 inner.x + 7f,
@@ -11413,7 +11516,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
         AlarmView alarm,
         PanelDefinition panel)
     {
-        if (!IsEntityVanillaTile(panel, alarm))
+        if (!IsEntityVanillaTile(panel, alarm) ||
+            GroupedVanillaNotificationPolicy.IsGroupedOverrideId(
+                alarm.OverrideId))
         {
             return;
         }
@@ -11501,17 +11606,17 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void AcknowledgeAllAlarms()
     {
-        var count = m_runtime.UnacknowledgedCount;
+        var count = m_runtime.AcknowledgeableCount;
         m_runtime.AcknowledgeAll();
         m_audio.StopAlarm();
         SetStatus(count > 0
             ? UnmaText.Format(
                 "board.acknowledged_count",
-                "Acknowledged {0} alarm(s).",
+                "Acknowledged and silenced {0} alarm(s).",
                 count)
             : UnmaText.Get(
-                "board.no_unacknowledged",
-                "No unacknowledged alarms."));
+                "board.no_acknowledgeable",
+                "No alarms need acknowledgement or manual silence."));
     }
 
     private void AcknowledgePanelAlarms(PanelDefinition panel)
@@ -11555,16 +11660,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     ? "board.area_acknowledged_count"
                     : "board.acknowledged_count",
                 isAreaScope
-                    ? "Acknowledged {0} alarm(s) in this area."
-                    : "Acknowledged {0} alarm(s).",
+                    ? "Acknowledged and silenced {0} alarm(s) in this area."
+                    : "Acknowledged and silenced {0} alarm(s).",
                 count)
             : UnmaText.Get(
                 isAreaScope
-                    ? "board.area_no_unacknowledged"
-                    : "board.no_unacknowledged",
+                    ? "board.area_no_acknowledgeable"
+                    : "board.no_acknowledgeable",
                 isAreaScope
-                    ? "No unacknowledged alarms in this area."
-                    : "No unacknowledged alarms."));
+                    ? "No alarms in this area need acknowledgement or manual silence."
+                    : "No alarms need acknowledgement or manual silence."));
     }
 
     private void NavigateToNextUnacknowledgedAlarm(PanelDefinition panel)
@@ -11749,6 +11854,23 @@ public sealed class UnmaOverlayController : MonoBehaviour
         SynchronizeNativeLauncher();
     }
 
+    private void HandleOperatorSilenceReminder(
+        OperatorSilenceReminderSnapshot reminder)
+    {
+        if (reminder == null || reminder.AlarmCount <= 0)
+        {
+            return;
+        }
+
+        m_operatorSilenceReminder = reminder;
+        m_operatorSilenceReminderScroll = Vector2.zero;
+        m_isOpen = true;
+        m_clearGuiFocusPending = true;
+        SynchronizeNativeWindowVisibility();
+        m_nativeWindowShell?.BringToFront();
+        SynchronizeNativeLauncher();
+    }
+
     private void DrawAlarmNavigationButton(
         Rect tileRect,
         AlarmView alarm,
@@ -11821,7 +11943,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         AlarmView alarm,
         PanelDefinition panel)
     {
-        if (alarm?.RequiresAcknowledgement != true || panel == null)
+        if (alarm == null || panel == null)
         {
             return;
         }
@@ -11831,20 +11953,84 @@ public sealed class UnmaOverlayController : MonoBehaviour
             tileRect.y + 4f,
             36f,
             36f);
+        if (alarm.IsActive && alarm.IsOperatorSilenced)
+        {
+            var silentTooltip = UnmaText.Get(
+                "alarm_tile.operator_silent_tooltip",
+                "Acknowledged and silent for this occurrence. After one game month it is eligible for the monthly reminder while active; notification-setting exclusions still apply.");
+            if (NativeGUI.Button(
+                    buttonRect,
+                    new GUIContent(
+                        UnmaText.Get("alarm_tile.operator_silent", "S"),
+                        silentTooltip),
+                    m_primaryButtonStyle,
+                    new NativeControlMetadata(
+                        "alarm-operator-silent-" +
+                        PanelSlotProjection.StableAlarmId(alarm),
+                        silentTooltip,
+                        false,
+                        -1)))
+            {
+                SetStatus(silentTooltip);
+            }
+            return;
+        }
+
+        if (alarm.IsActive && alarm.IsAcknowledged)
+        {
+            var markSilentTooltip = UnmaText.Get(
+                "alarm_tile.mark_operator_silent_tooltip",
+                "Mark this already acknowledged occurrence as manually silent. After one game month it is eligible for monthly reminders; notification-setting exclusions still apply.");
+            if (NativeGUI.Button(
+                    buttonRect,
+                    new GUIContent(
+                        UnmaText.Get("alarm_tile.operator_silent", "S"),
+                        markSilentTooltip),
+                    m_dangerButtonStyle,
+                    new NativeControlMetadata(
+                        "alarm-mark-operator-silent-" +
+                        PanelSlotProjection.StableAlarmId(alarm),
+                        markSilentTooltip)))
+            {
+                var markedSlotId =
+                    PanelSlotProjection.StableAlarmId(alarm);
+                var markedSilent = IsAreaScopedDashboard(panel)
+                    ? m_runtime.TryAcknowledgeDashboard(
+                          NormalizeAlarmAreaFilter(),
+                          new[] { markedSlotId },
+                          out var markedCount) && markedCount > 0
+                    : m_runtime.AcknowledgeAlarm(
+                        panel.Id,
+                        markedSlotId);
+                if (markedSilent)
+                {
+                    SetStatus(UnmaText.Get(
+                        "board.acknowledged_one",
+                        "Alarm acknowledged and silenced."));
+                }
+            }
+            return;
+        }
+
+        if (!alarm.RequiresAcknowledgement)
+        {
+            return;
+        }
+
         if (!NativeGUI.Button(
                 buttonRect,
                 new GUIContent(
                     UnmaText.Get("alarm_tile.acknowledge", "Q"),
                     UnmaText.Get(
                         "alarm_tile.acknowledge_tooltip",
-                        "Acknowledge this alarm.")),
+                        "Acknowledge and silence this alarm occurrence.")),
                 m_dangerButtonStyle,
                 new NativeControlMetadata(
                     "alarm-acknowledge-" +
                     PanelSlotProjection.StableAlarmId(alarm),
                     UnmaText.Get(
                         "alarm_tile.acknowledge_tooltip",
-                        "Acknowledge this alarm."))))
+                        "Acknowledge and silence this alarm occurrence."))))
         {
             return;
         }
@@ -11858,10 +12044,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             : m_runtime.AcknowledgeAlarm(panel.Id, slotId);
         if (acknowledged)
         {
-            m_audio.StopAlarm();
             SetStatus(UnmaText.Get(
                 "board.acknowledged_one",
-                "Alarm acknowledged."));
+                "Alarm acknowledged and silenced."));
         }
     }
 

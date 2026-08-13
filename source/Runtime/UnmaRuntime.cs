@@ -253,6 +253,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly IProductsManager m_productsManager;
     private readonly MaintenanceManager m_maintenanceManager;
     private readonly ICalendar m_calendar;
+    private readonly IEventNonSaveable m_newMonthStartEvent;
     private readonly ISimLoopEvents m_simLoopEvents;
     private readonly UnmaStateStore m_store;
     private readonly UnmaTransferProfileStore m_transferProfileStore;
@@ -262,6 +263,8 @@ public sealed class UnmaRuntime : IDisposable
     private readonly ExternalProviderDescriptor[] m_externalProviders;
     private readonly Dictionary<string, AlarmState> m_alarms =
         new(StringComparer.Ordinal);
+    private readonly GroupedVanillaNotificationTracker
+        m_groupedVanillaNotifications = new();
     private readonly List<AlarmHistoryDefinition> m_alarmHistory = new();
     private readonly HashSet<string> m_previousExternalKeys =
         new(StringComparer.Ordinal);
@@ -355,6 +358,8 @@ public sealed class UnmaRuntime : IDisposable
     private long m_alarmHistoryRevision;
     private long m_alarmIncidentHistoryCaptureRevision = -1;
     private AlarmIncidentHistoryCapture m_alarmIncidentHistoryCapture;
+    private OperatorSilenceReminderSnapshot
+        m_pendingOperatorSilenceReminder;
     private long m_nextEvaluationTimestamp;
     private long m_nextEvaluationErrorLogTimestamp;
     private long m_externalDefinitionRevision;
@@ -369,6 +374,7 @@ public sealed class UnmaRuntime : IDisposable
     private Dictionary<string, double> m_lastSystemMetrics =
         new(StringComparer.Ordinal);
     private bool m_simListenerAdded;
+    private bool m_monthStartListenerAdded;
     private int m_alarmPersistenceSuppressionDepth;
     private bool m_alarmPersistencePending;
     private bool m_disposed;
@@ -411,6 +417,9 @@ public sealed class UnmaRuntime : IDisposable
         m_productsManager = productsManager;
         m_maintenanceManager = maintenanceManager;
         m_calendar = calendar;
+        // Keep this UI-reminder event runtime-only. A saveable subscription
+        // would make the runtime service part of the game save graph.
+        m_newMonthStartEvent = calendar.NewMonthStart;
         m_simLoopEvents = simLoopEvents;
         m_store = store;
         m_transferProfileStore = transferProfileStore;
@@ -487,6 +496,9 @@ public sealed class UnmaRuntime : IDisposable
             var currentNotifications = m_notificationsManager
                 .FetchAllNotifications()
                 .ToArray();
+            RefreshGroupedVanillaNotificationMembers(
+                currentNotifications,
+                replaceCurrentMembers: true);
             foreach (var notification in currentNotifications)
             {
                 OnNotificationAdded(notification);
@@ -507,6 +519,10 @@ public sealed class UnmaRuntime : IDisposable
             this,
             OnUpdateEndForUi);
         m_simListenerAdded = true;
+        m_newMonthStartEvent.AddNonSaveable(
+            this,
+            OnNewMonthStart);
+        m_monthStartListenerAdded = true;
     }
 
     private void RestoreAlarmMemories()
@@ -519,6 +535,9 @@ public sealed class UnmaRuntime : IDisposable
         var closedSuppressedHistory = false;
         foreach (var memory in Configuration.AlarmMemories)
         {
+            var groupedMemory =
+                GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    memory.OverrideId);
             var ignoredVanillaMemory = string.Equals(
                     memory.Source,
                     "vanilla",
@@ -526,8 +545,8 @@ public sealed class UnmaRuntime : IDisposable
                 VanillaNotificationSuppressionPolicy.ResolveBehavior(
                     vanillaRules,
                     memory.OverrideId,
-                    memory.EntityId,
-                    memory.EntityPrototypeId) ==
+                    groupedMemory ? -1 : memory.EntityId,
+                    groupedMemory ? "" : memory.EntityPrototypeId) ==
                 VanillaNotificationBehavior.Ignored;
             if (ignoredVanillaMemory || IsSuppressedVanillaAlarm(
                     memory.Source,
@@ -566,6 +585,9 @@ public sealed class UnmaRuntime : IDisposable
             state.View.Severity = memory.Severity;
             state.View.IsActive = memory.IsActive;
             state.View.IsAcknowledged = memory.IsAcknowledged;
+            state.View.IsOperatorSilenced = memory.IsOperatorSilenced;
+            state.View.OperatorSilencedAtGameTick =
+                memory.OperatorSilencedAtGameTick;
             state.View.IsGoneUnacknowledged =
                 memory.IsGoneUnacknowledged;
             state.View.IsMissingSource = memory.IsMissingSource;
@@ -1639,6 +1661,10 @@ public sealed class UnmaRuntime : IDisposable
 
         if (entityId < 0)
         {
+            entityId = alarm?.EntityId ?? -1;
+        }
+        if (entityId < 0)
+        {
             TryParseEntityId(
                 PanelSlotProjection.StableAlarmId(alarm),
                 out entityId);
@@ -1745,6 +1771,14 @@ public sealed class UnmaRuntime : IDisposable
         }
 
         PanelSlotDefinition[] slots;
+        var groupedBehavior = ResolveVanillaNotificationBehavior(
+            vanillaRules,
+            GroupedVanillaNotificationPolicy.OverrideId,
+            -1,
+            "");
+        var showGroupedPersistentSlot =
+            groupedBehavior != VanillaNotificationBehavior.Hidden &&
+            groupedBehavior != VanillaNotificationBehavior.Ignored;
         lock (m_configurationGate)
         {
             slots = (panel.Slots ?? new List<PanelSlotDefinition>())
@@ -1752,6 +1786,9 @@ public sealed class UnmaRuntime : IDisposable
                 .Where(slot =>
                     slot != null &&
                     IsPersistedSlotAllowedOnPanelLocked(panel, slot) &&
+                    (showGroupedPersistentSlot ||
+                     !GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                         slot.AlarmId)) &&
                     !VanillaNotificationSuppressionPolicy
                         .IsSlotSuppressed(
                             slot,
@@ -2224,6 +2261,22 @@ public sealed class UnmaRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// Takes the silent monthly summary queued on the first day of a game
+    /// month. The UI owns presentation; taking it never changes alarms,
+    /// history, acknowledgement, or audio state.
+    /// </summary>
+    public bool TryTakeOperatorSilenceReminder(
+        out OperatorSilenceReminderSnapshot reminder)
+    {
+        lock (m_gate)
+        {
+            reminder = m_pendingOperatorSilenceReminder;
+            m_pendingOperatorSilenceReminder = null;
+            return reminder != null;
+        }
+    }
+
     private bool IsAttentionRequestRelevantLocked(
         AlarmAttentionRequest request)
     {
@@ -2585,7 +2638,8 @@ public sealed class UnmaRuntime : IDisposable
     {
         return view != null &&
                view.IsActive &&
-               view.RequiresAcknowledgement;
+               (view.RequiresAcknowledgement ||
+                !view.IsOperatorSilenced);
     }
 
     public bool TryGetNextDashboardUnacknowledged(
@@ -2746,7 +2800,8 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     m_alarmHistoryRevision++;
                 }
-            });
+            },
+            includeAcknowledgedActive: true);
 
         var prunedExternal = PruneRetiredExternalAlarms();
         if (acknowledgedCount > 0 || prunedExternal)
@@ -2761,7 +2816,8 @@ public sealed class UnmaRuntime : IDisposable
         PanelDefinition panel,
         ISet<string> targetSlotIds,
         Func<AlarmState, bool> applyLocked,
-        Action<int> completedLocked = null)
+        Action<int> completedLocked = null,
+        bool includeAcknowledgedActive = false)
     {
         if (panel == null || applyLocked == null)
         {
@@ -2798,7 +2854,10 @@ public sealed class UnmaRuntime : IDisposable
         {
             foreach (var alarm in m_alarms.Values)
             {
-                if (!alarm.View.RequiresAcknowledgement)
+                if (!alarm.View.RequiresAcknowledgement &&
+                    !(includeAcknowledgedActive &&
+                      alarm.View.IsActive &&
+                      !alarm.View.IsOperatorSilenced))
                 {
                     continue;
                 }
@@ -2866,7 +2925,7 @@ public sealed class UnmaRuntime : IDisposable
 
     private bool AcknowledgeAlarmStateLocked(AlarmState alarm)
     {
-        if (alarm == null || !alarm.View.RequiresAcknowledgement)
+        if (alarm == null)
         {
             return false;
         }
@@ -2876,10 +2935,20 @@ public sealed class UnmaRuntime : IDisposable
             UpdateHistoryFromStateLocked(alarm, true, true);
             alarm.View.IsGoneUnacknowledged = false;
             alarm.View.IsAcknowledged = false;
+            alarm.View.IsOperatorSilenced = false;
+            alarm.View.OperatorSilencedAtGameTick = -1;
             return true;
         }
 
+        if (!alarm.View.IsActive ||
+            alarm.View.IsAcknowledged && alarm.View.IsOperatorSilenced)
+        {
+            return false;
+        }
+
         alarm.View.IsAcknowledged = true;
+        alarm.View.IsOperatorSilenced = true;
+        alarm.View.OperatorSilencedAtGameTick = CurrentGameTick;
         UpdateHistoryFromStateLocked(alarm, false, true);
         return true;
     }
@@ -2887,6 +2956,7 @@ public sealed class UnmaRuntime : IDisposable
     public void AcknowledgeAll()
     {
         var changed = false;
+        var currentGameTick = CurrentGameTick;
         lock (m_gate)
         {
             foreach (var item in m_alarmHistory)
@@ -2906,12 +2976,18 @@ public sealed class UnmaRuntime : IDisposable
                 {
                     alarm.View.IsGoneUnacknowledged = false;
                     alarm.View.IsAcknowledged = false;
+                    alarm.View.IsOperatorSilenced = false;
+                    alarm.View.OperatorSilencedAtGameTick = -1;
                     changed = true;
                 }
                 else if (alarm.View.IsActive &&
-                         !alarm.View.IsAcknowledged)
+                         (!alarm.View.IsAcknowledged ||
+                          !alarm.View.IsOperatorSilenced))
                 {
                     alarm.View.IsAcknowledged = true;
+                    alarm.View.IsOperatorSilenced = true;
+                    alarm.View.OperatorSilencedAtGameTick =
+                        currentGameTick;
                     changed = true;
                 }
             }
@@ -3300,6 +3376,9 @@ public sealed class UnmaRuntime : IDisposable
                     Severity = state.View.Severity,
                     IsActive = state.View.IsActive,
                     IsAcknowledged = state.View.IsAcknowledged,
+                    IsOperatorSilenced = state.View.IsOperatorSilenced,
+                    OperatorSilencedAtGameTick =
+                        state.View.OperatorSilencedAtGameTick,
                     IsGoneUnacknowledged =
                         state.View.IsGoneUnacknowledged,
                     IsMissingSource = state.View.IsMissingSource,
@@ -4589,11 +4668,13 @@ public sealed class UnmaRuntime : IDisposable
         }
 
         var rules = GetVanillaNotificationRulesSnapshot();
+        var disabledOverrideIds = GetDisabledVanillaOverrideIds();
         var globallyIgnoredOverrideIds =
             GetGloballyIgnoredHistoryPurgeOverrideIds(
                 rules,
                 affectedOverrideIds);
         var purged = false;
+        AlarmView[] externallyCleared = Array.Empty<AlarmView>();
         lock (m_gate)
         {
             var matchingStates = m_alarms
@@ -4604,11 +4685,33 @@ public sealed class UnmaRuntime : IDisposable
                         StringComparison.Ordinal) &&
                     affectedOverrideIds.Contains(
                         pair.Value.View.OverrideId ?? "") &&
-                    ResolveVanillaNotificationBehavior(
-                        pair.Value.View,
-                        rules) == VanillaNotificationBehavior.Ignored)
+                    (disabledOverrideIds.Contains(
+                         pair.Value.View.OverrideId ?? "") ||
+                     ResolveVanillaNotificationBehavior(
+                         pair.Value.View,
+                         rules) == VanillaNotificationBehavior.Ignored))
                 .ToArray();
-            var sequences = new HashSet<long>(matchingStates
+            externallyCleared = matchingStates
+                .Where(pair => pair.Value.View.IsActive)
+                .Select(pair => Clone(
+                    pair.Value.View,
+                    pair.Value.Sequence))
+                .ToArray();
+            var ignoredStates = matchingStates.Where(pair =>
+                !disabledOverrideIds.Contains(
+                    pair.Value.View.OverrideId ?? "")).ToArray();
+            foreach (var disabledState in matchingStates.Where(pair =>
+                         disabledOverrideIds.Contains(
+                             pair.Value.View.OverrideId ?? "")))
+            {
+                var history = FindHistoryLocked(
+                    disabledState.Value.Sequence);
+                history?.SetState(
+                    isGone: true,
+                    isAcknowledged: true,
+                    currentGameTicks: CurrentGameTicks);
+            }
+            var sequences = new HashSet<long>(ignoredStates
                 .Select(pair => pair.Value.Sequence)
                 .Where(sequence => sequence > 0));
             foreach (var matchingState in matchingStates)
@@ -4625,6 +4728,11 @@ public sealed class UnmaRuntime : IDisposable
                 m_alarmHistoryRevision++;
                 purged = true;
             }
+        }
+
+        foreach (var alarm in externallyCleared)
+        {
+            PublishExternalDisplayAlarm(alarm, false);
         }
 
         INotification[] currentNotifications;
@@ -4647,6 +4755,11 @@ public sealed class UnmaRuntime : IDisposable
             }
             throw;
         }
+
+        RefreshGroupedVanillaNotificationMembers(
+            currentNotifications,
+            replaceCurrentMembers: affectedOverrideIds.Contains(
+                GroupedVanillaNotificationPolicy.OverrideId));
 
         BeginAlarmPersistenceBatch();
         var replayChangedState = false;
@@ -4687,6 +4800,8 @@ public sealed class UnmaRuntime : IDisposable
             var overrideId = rule.AlarmId.Trim();
             if ((affectedOverrideIds != null &&
                  !affectedOverrideIds.Contains(overrideId)) ||
+                !GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    overrideId) &&
                 snapshot.Any(exception =>
                     exception.Scope !=
                         VanillaNotificationScope.NotificationType &&
@@ -5037,7 +5152,10 @@ public sealed class UnmaRuntime : IDisposable
 
         var candidates = runtimeCandidates
             .GroupBy(
-                candidate => candidate.EntityId >= 0
+                candidate => GroupedVanillaNotificationPolicy
+                        .IsGroupedOverride(candidate.OverrideId)
+                    ? candidate.OverrideId
+                    : candidate.EntityId >= 0
                     ? candidate.SlotId
                     : candidate.OverrideId,
                 StringComparer.Ordinal)
@@ -5075,6 +5193,19 @@ public sealed class UnmaRuntime : IDisposable
 
         foreach (var rule in persistedVanillaRules)
         {
+            if (GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    rule.AlarmId))
+            {
+                if (!candidates.Values.Any(candidate => string.Equals(
+                        candidate.OverrideId,
+                        rule.AlarmId,
+                        StringComparison.Ordinal)))
+                {
+                    candidates[rule.AlarmId] =
+                        CreateVanillaOverrideCandidate(rule.AlarmId);
+                }
+                continue;
+            }
             var alreadyRepresented = candidates.Values.Any(candidate =>
                 string.Equals(
                     candidate.OverrideId,
@@ -5288,6 +5419,15 @@ public sealed class UnmaRuntime : IDisposable
 
         if (SaveConfiguration())
         {
+            foreach (var removedState in removedStates.Where(item =>
+                         item.State.View.IsActive))
+            {
+                PublishExternalDisplayAlarm(
+                    Clone(
+                        removedState.State.View,
+                        removedState.State.Sequence),
+                    false);
+            }
             return true;
         }
 
@@ -5833,6 +5973,8 @@ public sealed class UnmaRuntime : IDisposable
         entityPrototypeId = entityPrototypeId?.Trim() ?? "";
         if (!VanillaNotificationSuppressionPolicy.IsVanillaOverrideId(
                 overrideId) ||
+            GroupedVanillaNotificationPolicy.IsGroupedOverride(overrideId) &&
+            scope != VanillaNotificationScope.NotificationType ||
             scope == VanillaNotificationScope.Entity && entityId < 0 ||
             scope == VanillaNotificationScope.EntityPrototype &&
             entityPrototypeId.Length == 0)
@@ -5873,6 +6015,11 @@ public sealed class UnmaRuntime : IDisposable
         {
             if (behavior != VanillaNotificationBehavior.Ignored)
             {
+                if (GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                        overrideId))
+                {
+                    ReplayCurrentVanillaNotifications(overrideId);
+                }
                 return true;
             }
             PurgeIgnoredVanillaAlarms(
@@ -5909,6 +6056,7 @@ public sealed class UnmaRuntime : IDisposable
             scope == VanillaNotificationScope.NotificationType &&
             GetGloballyIgnoredHistoryPurgeOverrideIds(rules)
                 .Contains(overrideId);
+        AlarmView[] externallyCleared = Array.Empty<AlarmView>();
         lock (m_gate)
         {
             var matchingStates = m_alarms
@@ -5924,6 +6072,12 @@ public sealed class UnmaRuntime : IDisposable
                     ResolveVanillaNotificationBehavior(
                         pair.Value.View,
                         rules) == VanillaNotificationBehavior.Ignored)
+                .ToArray();
+            externallyCleared = matchingStates
+                .Where(pair => pair.Value.View.IsActive)
+                .Select(pair => Clone(
+                    pair.Value.View,
+                    pair.Value.Sequence))
                 .ToArray();
             var sequences = new HashSet<long>(
                 matchingStates
@@ -5944,6 +6098,10 @@ public sealed class UnmaRuntime : IDisposable
             }
             m_alarmHistoryRevision++;
         }
+        foreach (var alarm in externallyCleared)
+        {
+            PublishExternalDisplayAlarm(alarm, false);
+        }
     }
 
     private bool MatchesVanillaScopeIncludingAliases(
@@ -5952,6 +6110,12 @@ public sealed class UnmaRuntime : IDisposable
         AlarmView view)
     {
         if (view == null)
+        {
+            return false;
+        }
+        if (GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                view.OverrideId) &&
+            scope != VanillaNotificationScope.NotificationType)
         {
             return false;
         }
@@ -6131,6 +6295,8 @@ public sealed class UnmaRuntime : IDisposable
                     }
                     state.View.IsGoneUnacknowledged = false;
                     state.View.IsAcknowledged = false;
+                    state.View.IsOperatorSilenced = false;
+                    state.View.OperatorSilencedAtGameTick = -1;
                     clearedGoneAlarm = true;
                 }
                 if (clearedGoneAlarm)
@@ -6161,6 +6327,13 @@ public sealed class UnmaRuntime : IDisposable
                 OnUpdateEndForUi);
             m_simListenerAdded = false;
         }
+        if (m_monthStartListenerAdded)
+        {
+            m_newMonthStartEvent.RemoveNonSaveable(
+                this,
+                OnNewMonthStart);
+            m_monthStartListenerAdded = false;
+        }
         m_notificationsManager.NotificationAdded -= OnNotificationAdded;
         m_notificationsManager.NotificationRemoved -= OnNotificationRemoved;
         m_notificationsManager.NotificationSuppressChanged -=
@@ -6168,11 +6341,86 @@ public sealed class UnmaRuntime : IDisposable
         m_entityRemovedEvent.RemoveNonSaveable(
             this,
             OnEntityRemoved);
+        m_groupedVanillaNotifications.Clear();
+    }
+
+    private void OnNewMonthStart()
+    {
+        if (m_disposed)
+        {
+            return;
+        }
+
+        AlarmView[] alarms;
+        lock (m_gate)
+        {
+            alarms = m_alarms.Values
+                .Where(state => state.View.IsActive &&
+                                state.View.IsOperatorSilenced)
+                .Select(state => Clone(state.View, state.Sequence))
+                .ToArray();
+        }
+
+        var rules = GetVanillaNotificationRulesSnapshot();
+        var currentGameTick = CurrentGameTick;
+        var snapshot = OperatorSilenceReminderPolicy.Build(
+            alarms.Select(alarm => new OperatorSilenceReminderSample(
+                !string.IsNullOrWhiteSpace(alarm.OverrideId)
+                    ? alarm.OverrideId
+                    : PanelSlotProjection.StableAlarmId(alarm),
+                GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    alarm.OverrideId)
+                    ? GroupedVanillaNotificationPolicy.FormatTitle(
+                        alarm.Name,
+                        Math.Max(1, (int)Math.Round(alarm.LastValue)))
+                    : alarm.Name,
+                alarm.IsActive,
+                alarm.IsOperatorSilenced,
+                ResolveVanillaNotificationBehavior(alarm, rules),
+                alarm.SoundId,
+                alarm.OperatorSilencedAtGameTick)),
+            currentGameTick,
+            GameTimeWindowPolicy.SimTicksPerMonth);
+
+        lock (m_gate)
+        {
+            // Coalesce missed UI presentation into the newest monthly state.
+            m_pendingOperatorSilenceReminder = snapshot.AlarmCount > 0
+                ? snapshot
+                : null;
+        }
+    }
+
+    public int AcknowledgeableCount
+    {
+        get
+        {
+            var disabledVanillaOverrideIds =
+                GetDisabledVanillaOverrideIds();
+            var vanillaRules = GetVanillaNotificationRulesSnapshot();
+            lock (m_gate)
+            {
+                return m_alarms.Values.Count(state =>
+                    (state.View.RequiresAcknowledgement ||
+                     state.View.IsActive &&
+                     !state.View.IsOperatorSilenced) &&
+                    !IsSuppressedVanillaAlarm(
+                        state.View,
+                        disabledVanillaOverrideIds) &&
+                    !IsVanillaAlarmHidden(state.View, vanillaRules));
+            }
+        }
     }
 
     private void OnUpdateEndForUi()
     {
-        if (m_disposed || !m_gameplayActive)
+        if (m_disposed)
+        {
+            return;
+        }
+
+        FlushGroupedVanillaNotificationClear();
+        if (!m_gameplayActive)
         {
             return;
         }
@@ -7422,6 +7670,8 @@ public sealed class UnmaRuntime : IDisposable
             state.View.IsActive = true;
             state.View.IsAcknowledged = history.IsAcknowledged;
             state.View.IsGoneUnacknowledged = false;
+            state.View.IsOperatorSilenced = false;
+            state.View.OperatorSilencedAtGameTick = -1;
             state.View.IsMissingSource = false;
             state.View.SoundId = soundId;
             state.View.OverrideId = overrideId;
@@ -9030,6 +9280,21 @@ public sealed class UnmaRuntime : IDisposable
     {
         var id = notification.Proto.Id.Value;
         var overrideId = "vanilla:" + id;
+        if (GroupedVanillaNotificationPolicy.IsGroupedPrototype(id))
+        {
+            var snapshot = m_groupedVanillaNotifications.Add(
+                CreateGroupedVanillaNotificationMember(notification));
+            if (!GetVanillaNotificationEnabled(overrideId) ||
+                ResolveVanillaNotificationBehavior(
+                    overrideId,
+                    -1,
+                    "") == VanillaNotificationBehavior.Ignored)
+            {
+                return;
+            }
+            SetGroupedVanillaAlarm(snapshot);
+            return;
+        }
         if (!GetVanillaNotificationEnabled(overrideId))
         {
             return;
@@ -9105,6 +9370,22 @@ public sealed class UnmaRuntime : IDisposable
     {
         var prototypeId = notification.Proto.Id.Value;
         var overrideId = "vanilla:" + prototypeId;
+        if (GroupedVanillaNotificationPolicy.IsGroupedPrototype(prototypeId))
+        {
+            var snapshot = m_groupedVanillaNotifications.Remove(
+                NotificationKey(notification));
+            if (snapshot.HasMembers &&
+                GetVanillaNotificationEnabled(overrideId) &&
+                ResolveVanillaNotificationBehavior(
+                    overrideId,
+                    -1,
+                    "") != VanillaNotificationBehavior.Ignored)
+            {
+                SetGroupedVanillaAlarm(snapshot);
+            }
+            Interlocked.Exchange(ref m_nextEvaluationTimestamp, 0L);
+            return;
+        }
         if (!GetVanillaNotificationEnabled(overrideId))
         {
             return;
@@ -9151,7 +9432,56 @@ public sealed class UnmaRuntime : IDisposable
 
     private void OnNotificationSuppressChanged(INotification notification)
     {
-        var overrideId = "vanilla:" + notification.Proto.Id.Value;
+        var prototypeId = notification.Proto.Id.Value;
+        var overrideId = "vanilla:" + prototypeId;
+        if (GroupedVanillaNotificationPolicy.IsGroupedPrototype(prototypeId))
+        {
+            var snapshot = m_groupedVanillaNotifications.Add(
+                CreateGroupedVanillaNotificationMember(notification));
+            if (!GetVanillaNotificationEnabled(overrideId) ||
+                ResolveVanillaNotificationBehavior(
+                    overrideId,
+                    -1,
+                    "") == VanillaNotificationBehavior.Ignored)
+            {
+                return;
+            }
+
+            SetGroupedVanillaAlarm(snapshot);
+            if (!GroupedVanillaNotificationPolicy
+                    .AreAllMembersSuppressed(snapshot))
+            {
+                return;
+            }
+
+            var groupedChanged = false;
+            lock (m_gate)
+            {
+                if (m_alarms.TryGetValue(
+                        GroupedVanillaNotificationPolicy.GroupKey,
+                        out var groupedAlarm) &&
+                    groupedAlarm.View.IsActive &&
+                    !groupedAlarm.View.IsAcknowledged)
+                {
+                    groupedChanged = true;
+                    groupedAlarm.View.IsAcknowledged = true;
+                    var history = FindHistoryLocked(groupedAlarm.Sequence);
+                    if (history != null && !history.IsGone)
+                    {
+                        history.SetState(
+                            isGone: false,
+                            isAcknowledged: true,
+                            currentGameTicks: CurrentGameTicks);
+                    }
+                    m_alarmHistoryRevision++;
+                }
+            }
+            if (groupedChanged)
+            {
+                PersistAlarmState();
+            }
+            return;
+        }
         if (!GetVanillaNotificationEnabled(overrideId))
         {
             return;
@@ -9206,9 +9536,131 @@ public sealed class UnmaRuntime : IDisposable
     private static string AlarmKeyForNotification(
         INotification notification)
     {
+        var prototypeId = notification.Proto.Id.Value;
+        var occurrenceKey = NotificationKey(notification);
+        if (GroupedVanillaNotificationPolicy.IsGroupedPrototype(prototypeId))
+        {
+            return GroupedVanillaNotificationPolicy.AlarmKeyForNotification(
+                prototypeId,
+                occurrenceKey);
+        }
         return SustainedVanillaAlarmPolicy.AlarmKeyForNotification(
-            notification.Proto.Id.Value,
-            NotificationKey(notification));
+            prototypeId,
+            occurrenceKey);
+    }
+
+    private static GroupedVanillaNotificationMemberSnapshot
+        CreateGroupedVanillaNotificationMember(INotification notification)
+    {
+        GetNotificationEntityScope(
+            notification,
+            out var entityId,
+            out var entityPrototypeId);
+        var message = notification.Message.Value;
+        var entityTitle = "";
+        if (notification.Object.HasValue)
+        {
+            entityTitle = notification.Object.Value.DefaultTitle.Value ?? "";
+        }
+        var title = string.IsNullOrWhiteSpace(message)
+            ? GroupedVanillaNotificationPolicy.PrototypeId
+            : message;
+        var detail = GroupedVanillaNotificationPolicy.PrototypeId;
+        if (!string.IsNullOrWhiteSpace(entityTitle))
+        {
+            detail += " · " + entityTitle;
+        }
+        return new GroupedVanillaNotificationMemberSnapshot(
+            NotificationKey(notification),
+            title,
+            detail,
+            notification.IsSuppressed,
+            entityId,
+            entityPrototypeId,
+            entityTitle);
+    }
+
+    private void RefreshGroupedVanillaNotificationMembers(
+        IEnumerable<INotification> notifications,
+        bool replaceCurrentMembers)
+    {
+        if (!replaceCurrentMembers)
+        {
+            return;
+        }
+        var current = (notifications ??
+                     Enumerable.Empty<INotification>())
+                 .Where(item => item != null &&
+                     GroupedVanillaNotificationPolicy.IsGroupedPrototype(
+                         item.Proto.Id.Value))
+                 .OrderBy(
+                     NotificationKey,
+                     StringComparer.Ordinal)
+                 .ToArray();
+        var currentKeys = new HashSet<string>(
+            current.Select(NotificationKey),
+            StringComparer.Ordinal);
+        foreach (var staleKey in m_groupedVanillaNotifications
+                     .GetNotificationKeys()
+                     .Where(key => !currentKeys.Contains(key)))
+        {
+            m_groupedVanillaNotifications.Remove(staleKey);
+        }
+        foreach (var notification in current)
+        {
+            m_groupedVanillaNotifications.Add(
+                CreateGroupedVanillaNotificationMember(notification));
+        }
+    }
+
+    private void SetGroupedVanillaAlarm(
+        GroupedVanillaNotificationSnapshot snapshot)
+    {
+        if (snapshot == null || !snapshot.HasMembers)
+        {
+            return;
+        }
+        var representative = snapshot.OldestRepresentative;
+        SetAlarm(
+            GroupedVanillaNotificationPolicy.GroupKey,
+            GroupedVanillaNotificationPolicy.FormatTitle(
+                representative.Title,
+                1),
+            GroupedVanillaNotificationPolicy.FormatDetail(
+                representative.Detail,
+                snapshot.Count),
+            "vanilla",
+            "",
+            AlarmSeverity.Critical,
+            true,
+            false,
+            ResolveConfiguredSound(
+                GroupedVanillaNotificationPolicy.OverrideId),
+            ColorFor(AlarmSeverity.Critical),
+            snapshot.Count,
+            GroupedVanillaNotificationPolicy.AreAllMembersSuppressed(
+                snapshot),
+            GroupedVanillaNotificationPolicy.OverrideId,
+            ResolveAutoAcknowledgeOnClear(
+                GroupedVanillaNotificationPolicy.OverrideId),
+            GroupedVanillaNotificationPolicy.OverrideId,
+            slotId: GroupedVanillaNotificationPolicy.SlotId,
+            entityId: representative.EntityId,
+            entityPrototypeId: representative.EntityPrototypeId,
+            entityTitle: representative.EntityTitle);
+    }
+
+    private void FlushGroupedVanillaNotificationClear()
+    {
+        if (!m_groupedVanillaNotifications.TryTakePendingLastClear(out _))
+        {
+            return;
+        }
+        ClearAlarm(
+            GroupedVanillaNotificationPolicy.GroupKey,
+            ResolveAutoAcknowledgeOnClear(
+                GroupedVanillaNotificationPolicy.OverrideId));
+        PruneInactiveVanillaHistory(500);
     }
 
     private static void GetNotificationEntityScope(
@@ -9278,6 +9730,9 @@ public sealed class UnmaRuntime : IDisposable
             var wasActive = state.View.IsActive;
             var previousSeverity = state.View.Severity;
             var wasAcknowledged = state.View.IsAcknowledged;
+            var wasOperatorSilenced = state.View.IsOperatorSilenced;
+            var previousOperatorSilencedAtGameTick =
+                state.View.OperatorSilencedAtGameTick;
             var wasGoneUnacknowledged =
                 state.View.IsGoneUnacknowledged;
             var previousName = state.View.Name;
@@ -9320,6 +9775,11 @@ public sealed class UnmaRuntime : IDisposable
             state.View.IsAcknowledged = transition.IsAcknowledged;
             state.View.IsGoneUnacknowledged =
                 transition.IsGoneUnacknowledged;
+            if (transition.IsNewOccurrence || !transition.IsActive)
+            {
+                state.View.IsOperatorSilenced = false;
+                state.View.OperatorSilencedAtGameTick = -1;
+            }
             state.View.IsMissingSource = missingSource;
             state.View.SoundId = string.IsNullOrWhiteSpace(soundId)
                 ? "auto"
@@ -9427,9 +9887,12 @@ public sealed class UnmaRuntime : IDisposable
                 (wasActive || wasGoneUnacknowledged ||
                  state.View.IsLatched) &&
                 (created ||
-                 wasActive != state.View.IsActive ||
-                 wasAcknowledged != state.View.IsAcknowledged ||
-                 wasGoneUnacknowledged !=
+                  wasActive != state.View.IsActive ||
+                  wasAcknowledged != state.View.IsAcknowledged ||
+                  wasOperatorSilenced != state.View.IsOperatorSilenced ||
+                  previousOperatorSilencedAtGameTick !=
+                  state.View.OperatorSilencedAtGameTick ||
+                  wasGoneUnacknowledged !=
                  state.View.IsGoneUnacknowledged ||
                  previousSeverity != state.View.Severity ||
                  !string.Equals(
@@ -9497,6 +9960,9 @@ public sealed class UnmaRuntime : IDisposable
             {
                 var wasActive = state.View.IsActive;
                 var wasAcknowledged = state.View.IsAcknowledged;
+                var wasOperatorSilenced = state.View.IsOperatorSilenced;
+                var previousOperatorSilencedAtGameTick =
+                    state.View.OperatorSilencedAtGameTick;
                 var wasGoneUnacknowledged =
                     state.View.IsGoneUnacknowledged;
                 var transition = AlarmEvaluation.Transition(
@@ -9511,6 +9977,8 @@ public sealed class UnmaRuntime : IDisposable
                 state.View.IsAcknowledged = transition.IsAcknowledged;
                 state.View.IsGoneUnacknowledged =
                     transition.IsGoneUnacknowledged;
+                state.View.IsOperatorSilenced = false;
+                state.View.OperatorSilencedAtGameTick = -1;
                 var occurrenceAcknowledged = wasAcknowledged ||
                                              autoAcknowledgeOnClear;
                 var historyChanged = false;
@@ -9524,6 +9992,9 @@ public sealed class UnmaRuntime : IDisposable
                 changed =
                     wasActive != state.View.IsActive ||
                     wasAcknowledged != state.View.IsAcknowledged ||
+                    wasOperatorSilenced != state.View.IsOperatorSilenced ||
+                    previousOperatorSilencedAtGameTick !=
+                    state.View.OperatorSilencedAtGameTick ||
                     wasGoneUnacknowledged !=
                     state.View.IsGoneUnacknowledged ||
                     historyChanged;
@@ -9638,13 +10109,17 @@ public sealed class UnmaRuntime : IDisposable
             if (m_alarms.TryGetValue(key, out var state))
             {
                 changed = state.View.IsLatched ||
-                          state.View.IsAcknowledged;
+                          state.View.IsAcknowledged ||
+                          state.View.IsOperatorSilenced ||
+                          state.View.OperatorSilencedAtGameTick >= 0;
                 var historyChanged = CloseHistoryLocked(
                     state.Sequence,
                     state.View.IsAcknowledged);
                 state.View.IsActive = false;
                 state.View.IsAcknowledged = false;
                 state.View.IsGoneUnacknowledged = false;
+                state.View.IsOperatorSilenced = false;
+                state.View.OperatorSilencedAtGameTick = -1;
                 changed |= historyChanged;
                 if (historyChanged)
                 {
@@ -9705,6 +10180,10 @@ public sealed class UnmaRuntime : IDisposable
                 state.View.Name,
                 StringComparison.Ordinal) ||
             !string.Equals(
+                history.Detail,
+                state.View.Detail,
+                StringComparison.Ordinal) ||
+            !string.Equals(
                 history.Source,
                 state.View.Source,
                 StringComparison.Ordinal) ||
@@ -9716,6 +10195,7 @@ public sealed class UnmaRuntime : IDisposable
 
         history.AlarmKey = state.View.Key;
         history.Message = state.View.Name;
+        history.Detail = state.View.Detail;
         history.Source = state.View.Source;
         history.PanelId = state.View.PanelId;
         history.Severity = state.View.Severity;
@@ -9875,6 +10355,11 @@ public sealed class UnmaRuntime : IDisposable
         int entityId,
         string entityPrototypeId)
     {
+        if (GroupedVanillaNotificationPolicy.IsGroupedOverride(overrideId))
+        {
+            entityId = -1;
+            entityPrototypeId = "";
+        }
         var behavior = VanillaNotificationSuppressionPolicy.ResolveBehavior(
             rules,
             overrideId,
@@ -10032,6 +10517,12 @@ public sealed class UnmaRuntime : IDisposable
                 UnmaText.Get("auto.daf987e22580") + exception.Message);
             return;
         }
+
+        RefreshGroupedVanillaNotificationMembers(
+            currentNotifications,
+            replaceCurrentMembers:
+                GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    overrideId));
 
         BeginAlarmPersistenceBatch();
         try
@@ -10351,6 +10842,11 @@ public sealed class UnmaRuntime : IDisposable
         if (PanelTopologyPolicy.IsEntityPanel(panel) &&
             string.Equals(view.Source, "vanilla", StringComparison.Ordinal))
         {
+            if (GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    view.OverrideId))
+            {
+                return false;
+            }
             return panel.IncludeVanilla &&
                    view.EntityId == panel.OwnerEntityId;
         }
@@ -10431,6 +10927,8 @@ public sealed class UnmaRuntime : IDisposable
                 continue;
             }
             changed |= panel.Slots.RemoveAll(slot =>
+                GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                    slot?.AlarmId) ||
                 !IsPersistedSlotAllowedOnPanelLocked(panel, slot)) > 0;
         }
         return changed;
@@ -10487,6 +10985,9 @@ public sealed class UnmaRuntime : IDisposable
             Severity = source.Severity,
             IsActive = source.IsActive,
             IsAcknowledged = source.IsAcknowledged,
+            IsOperatorSilenced = source.IsOperatorSilenced,
+            OperatorSilencedAtGameTick =
+                source.OperatorSilencedAtGameTick,
             IsGoneUnacknowledged = source.IsGoneUnacknowledged,
             IsMissingSource = source.IsMissingSource,
             LastValue = source.LastValue,

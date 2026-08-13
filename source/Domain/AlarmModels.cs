@@ -322,6 +322,8 @@ public sealed class AlarmMemoryDefinition
     [DataMember(Order = 20)] public int EntityId = -1;
     [DataMember(Order = 21)] public string EntityPrototypeId = "";
     [DataMember(Order = 22)] public string EntityTitle = "";
+    [DataMember(Order = 23)] public bool IsOperatorSilenced;
+    [DataMember(Order = 24)] public long OperatorSilencedAtGameTick = -1;
 }
 
 [DataContract]
@@ -733,7 +735,9 @@ public sealed class UnmaConfiguration
                     panel.OwnerEntityPrototypeId?.Trim() ?? "";
                 panel.OwnerEntityType = panel.OwnerEntityType?.Trim() ?? "";
             }
-            NormalizePanelSlots(panel.Slots);
+            NormalizePanelSlots(
+                panel.Slots,
+                isEntityPanel: panel.OwnerEntityId > 0);
         }
 
         var dashboardPanel = loadedSchemaVersion >= 10
@@ -1110,7 +1114,17 @@ public sealed class UnmaConfiguration
             {
                 memory.IsAcknowledged = false;
             }
+            if (!memory.IsActive ||
+                !memory.IsAcknowledged ||
+                !memory.IsOperatorSilenced ||
+                memory.OperatorSilencedAtGameTick < 0)
+            {
+                memory.IsOperatorSilenced = false;
+                memory.OperatorSilencedAtGameTick = -1;
+            }
         }
+
+        MigrateGroupedVanillaAlarmMemories();
 
         if (loadedSchemaVersion < 9)
         {
@@ -1262,8 +1276,14 @@ public sealed class UnmaConfiguration
                 VanillaNotificationSuppressionPolicy.ResolveBehavior(
                     VanillaNotificationRules,
                     memory.OverrideId,
-                    memory.EntityId,
-                    memory.EntityPrototypeId) ==
+                    GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                        memory.OverrideId)
+                        ? -1
+                        : memory.EntityId,
+                    GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                        memory.OverrideId)
+                        ? ""
+                        : memory.EntityPrototypeId) ==
                 VanillaNotificationBehavior.Ignored)
             .ToArray();
         var ignoredSequences = new HashSet<long>(ignoredMemories
@@ -1279,7 +1299,10 @@ public sealed class UnmaConfiguration
                 rule.Scope == VanillaNotificationScope.NotificationType &&
                 rule.Behavior == VanillaNotificationBehavior.Ignored)
             .Select(rule => rule.AlarmId)
-            .Where(overrideId => !VanillaNotificationRules.Any(exception =>
+            .Where(overrideId =>
+                GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    overrideId) ||
+                !VanillaNotificationRules.Any(exception =>
                 exception.Scope !=
                     VanillaNotificationScope.NotificationType &&
                 exception.Behavior != VanillaNotificationBehavior.Ignored &&
@@ -1368,11 +1391,112 @@ public sealed class UnmaConfiguration
         }
     }
 
+    private void MigrateGroupedVanillaAlarmMemories()
+    {
+        var memories = AlarmMemories
+            .Where(memory =>
+                memory != null &&
+                string.Equals(
+                    memory.Source,
+                    "vanilla",
+                    StringComparison.Ordinal) &&
+                GroupedVanillaNotificationPolicy.IsGroupedOverride(
+                    memory.OverrideId))
+            .OrderBy(memory => memory.Sequence)
+            .ToArray();
+        if (memories.Length == 0)
+        {
+            return;
+        }
+
+        var active = memories.Where(memory => memory.IsActive).ToArray();
+        var target = active.Length > 0
+            ? active.OrderBy(memory => memory.Sequence).First()
+            : memories.OrderBy(memory => memory.Sequence).Last();
+        var requiresAcknowledgement = active.Length > 0
+            ? active.Any(memory => !memory.IsAcknowledged)
+            : memories.Any(memory => memory.IsGoneUnacknowledged);
+        var allActiveOperatorSilenced = active.Length > 0 &&
+            active.All(memory =>
+                memory.IsAcknowledged &&
+                memory.IsOperatorSilenced &&
+                memory.OperatorSilencedAtGameTick >= 0);
+        var activeMemberCount = active.Sum(memory =>
+            GroupedVanillaNotificationPolicy.IsGroupKey(memory.Key)
+                ? Math.Max(1, (int)Math.Round(memory.LastValue))
+                : 1);
+
+        target.Key = GroupedVanillaNotificationPolicy.GroupKey;
+        target.OverrideId = GroupedVanillaNotificationPolicy.OverrideId;
+        target.OccurrenceId = GroupedVanillaNotificationPolicy.OverrideId;
+        target.SlotId = GroupedVanillaNotificationPolicy.SlotId;
+        target.IsActive = active.Length > 0;
+        target.IsAcknowledged = target.IsActive &&
+            !requiresAcknowledgement;
+        target.IsGoneUnacknowledged =
+            !target.IsActive && requiresAcknowledgement;
+        target.IsOperatorSilenced =
+            target.IsActive &&
+            target.IsAcknowledged &&
+            allActiveOperatorSilenced;
+        target.OperatorSilencedAtGameTick = target.IsOperatorSilenced
+            ? active.Max(memory => memory.OperatorSilencedAtGameTick)
+            : -1;
+        target.LastValue = activeMemberCount;
+
+        var targetHistory = AlarmHistory.Find(history =>
+            history != null && history.Sequence == target.Sequence);
+        if (targetHistory != null)
+        {
+            targetHistory.AlarmKey = target.Key;
+            targetHistory.IsGone = !target.IsActive;
+            targetHistory.IsAcknowledged = target.IsAcknowledged;
+        }
+        foreach (var memory in memories)
+        {
+            if (ReferenceEquals(memory, target))
+            {
+                continue;
+            }
+            var history = AlarmHistory.Find(item =>
+                item != null && item.Sequence == memory.Sequence);
+            if (history != null)
+            {
+                history.IsGone = true;
+            }
+            AlarmMemories.Remove(memory);
+        }
+    }
+
     private static void NormalizePanelSlots(
-        List<PanelSlotDefinition> slots)
+        List<PanelSlotDefinition> slots,
+        bool isEntityPanel = false)
     {
         slots.RemoveAll(slot =>
             slot == null || string.IsNullOrWhiteSpace(slot.AlarmId));
+        if (isEntityPanel)
+        {
+            slots.RemoveAll(slot =>
+                GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                    slot.AlarmId));
+        }
+        else
+        {
+            foreach (var slot in slots)
+            {
+                slot.AlarmId = GroupedVanillaNotificationPolicy
+                    .CanonicalizeSlotId(slot.AlarmId);
+                if (GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                        slot.AlarmId))
+                {
+                    slot.DisplayName =
+                        GroupedVanillaNotificationPolicy.PrototypeId;
+                    slot.Detail =
+                        GroupedVanillaNotificationPolicy.PrototypeId;
+                    slot.Source = "vanilla";
+                }
+            }
+        }
         var alarmIds = new HashSet<string>(StringComparer.Ordinal);
         slots.RemoveAll(slot => !alarmIds.Add(slot.AlarmId.Trim()));
         foreach (var slot in slots)
@@ -1483,7 +1607,9 @@ public sealed class UnmaConfiguration
                     panel,
                     PanelSlotProjection.CreateSlot(view));
             }
-            NormalizePanelSlots(panel.Slots);
+            NormalizePanelSlots(
+                panel.Slots,
+                isEntityPanel: panel.OwnerEntityId > 0);
         }
     }
 
@@ -1949,6 +2075,8 @@ public sealed class AlarmView
     public bool IsGoneUnacknowledged;
     public bool IsMissingSource;
     public double LastValue;
+    public bool IsOperatorSilenced;
+    public long OperatorSilencedAtGameTick = -1;
 
     public bool RequiresAcknowledgement =>
         IsGoneUnacknowledged || IsActive && !IsAcknowledged;

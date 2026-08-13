@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+- Quittieraktionen schalten jetzt genau die betroffene aktive Alarmfolge still
+  und kennzeichnen sie dauerhaft mit `S` und **LEISE**. Neue Alarmfolgen werden
+  wieder normal hörbar und müssen erneut quittiert werden.
+- Am Monatsersten erscheint lautlos eine nach Meldungsart und Anzahl gruppierte
+  Erinnerung für aktive Alarmfolgen, die seit mindestens einem Spielmonat
+  durch eine Bedienerquittierung stillstehen. Bewusste `Silent`-/`Hidden`-/
+  `Ignored`-Konfigurationen und tonlose Regeln bleiben davon getrennt.
+- `NotEnoughPowerForEntity` bildet jetzt eine wichtige Gruppenepisode: `0 → 1`
+  erzeugt genau ein Kommen, weitere betroffene Gebäude aktualisieren nur `×N`
+  und setzen weder Ton, Quittierung noch Verlauf zurück. Erst `1 → 0` schließt
+  die Gruppe; das nächste `0 → 1` beginnt eine neue Alarmfolge. Für die Gruppe
+  gilt die Meldungstypregel `Normal`/`Silent`/`Hidden`/`Ignored`. Gespeicherte
+  Entity- und Prototypregeln bleiben erhalten, ruhen für diesen Typ jedoch.
+  Ein Bediener-`S` bleibt von konfiguriertem `Silent` getrennt und kann erst
+  nach einem vollen Spielmonat in der lautlosen Erinnerung erscheinen.
+- **UNMA Recommended Quiet** setzt jetzt zusätzlich die globale Meldungsart
+  `NotEnoughFuelToRefuel` auf `IGNORED`. `VehicleNoFuel`, `NotEnoughPower` und
+  `NotEnoughPowerForEntity` erhalten bewusst keine Regel und bleiben als
+  wichtige Hinweise normal sowie hörbar. Die neue Gruppierung unterdrückt den
+  Stromalarm nicht; `NotEnoughPowerForEntity` steht weder auf Recommended Quiet
+  noch auf Ignored.
+- Exakt erkannte, unveränderte Built-ins werden nur im Speicher aktualisiert:
+  **Recommended Silent** 0.10.1/0.10.2 mit sechs Silent-Regeln, der
+  0.10.2-Quiet-Zwischenstand mit zusätzlich zwei Hidden-Regeln sowie der
+  bisherige 0.10.1-/0.10.2-/0.10.3-Quiet-Stand mit zusätzlich zwei
+  Ignored-Regeln. Dateien, abweichende und benutzerdefinierte Profile bleiben
+  unverändert. Die neue Regel wirkt erst nach geprüfter Vorschau und
+  bestätigtem Import; die originale CoI-Meldung bleibt unverändert.
+- Release-Build, 139.722 Core-Assertions sowie sämtliche IL-/Reflection-,
+  Lokalisierungs- und Rollbackprüfungen wurden erfolgreich ausgeführt.
+
 ## 0.10.3 – 2026-08-12
 
 - Alle editierbaren Freitext-, Such-, Farb-, Zahlen- und Zeitfelder verwenden

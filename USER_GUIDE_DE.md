@@ -1,7 +1,7 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.10.3** und
-**Captain of Industry 0.8.6c**.
+Diese Anleitung gilt für **UNMA 0.10.3 mit den aktuellen unveröffentlichten
+Änderungen** und **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
 um eine frei konfigurierbare industrielle Schlitzmelder-Tafel. Sie spiegelt
@@ -128,6 +128,35 @@ UNMA arbeitet wie eine klassische industrielle Meldeanlage.
 
 Das Quittieren einer aktiven Meldung beseitigt ihre Aktivfarbe nicht. Die Farbe
 bleibt sichtbar, bis die überwachte Ursache wieder im Normalbereich liegt.
+Gleichzeitig wird genau diese aktive Alarmfolge stillgeschaltet: oben rechts
+ersetzt ein hervorgehobenes `S` die Quittiertaste, und der Zustandskopf zeigt
+**LEISE**. Eine neue Alarmfolge derselben Meldungsart muss erneut quittiert
+werden.
+
+`NotEnoughPowerForEntity` besitzt dafür eine eigene Gruppenepisode. Sobald das
+erste Gebäude Leistung verliert, erzeugt der Übergang `0 → 1` genau ein
+Kommen. Weitere betroffene Gebäude aktualisieren dieselbe Meldung nur auf
+`×N`; sie lösen keinen weiteren Ton aus, setzen die Quittierung nicht zurück
+und erzeugen keinen zusätzlichen Verlaufseintrag. Solange mindestens ein
+Gebäude betroffen ist, bleibt die Gruppenepisode aktiv. Erst `1 → 0`, also das
+Verschwinden der letzten zugrunde liegenden Strommeldung, schließt sie. Ein
+späteres `0 → 1` beginnt wieder eine neue, hörbare und zu quittierende
+Alarmfolge.
+
+Ein `S` beziehungsweise **LEISE** an dieser Gruppe ist weiterhin eine bewusste
+Bedienerquittierung der laufenden Episode. Dieser Bedienerzustand ist nicht die
+Konfiguration **SILENT** unter **MELDUNGSOPTIONEN** und wird durch weitere
+Gebäude in derselben Episode nicht zurückgesetzt. Nach einem vollen Spielmonat
+kann genau dieser Bedienerzustand in der lautlosen Monatserinnerung erscheinen;
+konfiguriertes **SILENT** bleibt davon ausgeschlossen.
+
+Am ersten Tag jedes Spielmonats prüft UNMA diesen Bedienerzustand. Alarmfolgen,
+die seit mindestens einem vollen Spielmonat manuell quittiert und noch aktiv
+sind, erscheinen in einer lautlosen Zusammenfassung, nach Meldungsart gruppiert
+(`×3`, `×5`, `×20000`). Meldungen, die über **MELDUNGSOPTIONEN** bewusst auf
+**SILENT**, **HIDDEN** oder **IGNORED** stehen, und Regeln mit ausgeschaltetem
+Ton gehören nicht in diese Liste. Das Popup erzeugt selbst weder Alarmton noch
+Verlaufseintrag und ändert keinen Alarmzustand.
 
 Abgeschlossene `KGQ`-Einträge bleiben im Verlauf gespeichert, bis sie dort
 ausdrücklich gelöscht werden. Nur abgeschlossene Einträge können gelöscht
@@ -278,7 +307,9 @@ das Objekt und öffnet seinen Inspector.
 Die Taste **Q** quittiert nur den sichtbaren Schlitz. **PANEL QUITTIEREN**
 quittiert alle auf der aktuellen Tafel dargestellten Zustände, einschließlich
 aller in einem Objektschlitz zusammengefassten Ereignisse. **ALLES
-QUITTIEREN** bleibt die ausdrückliche globale Aktion.
+QUITTIEREN** bleibt die ausdrückliche globale Aktion. Jede dieser bewussten
+Quittieraktionen schaltet die betroffene aktive Alarmfolge bis zu ihrem Ende
+still; `S` und **LEISE** machen das sichtbar.
 
 Die Taste **Z** pausiert nur den Alarmton dieses Schlitzes für einen
 Spielmonat. Das Kennzeichen wechselt zu **AUDIO Z · 1 MONAT**; **R** setzt den
@@ -515,6 +546,14 @@ globalen Meldungstypregeln. Beim vollständigen Ignorieren
 entfernt UNMA außerdem passende aktive und jüngere Ereignisse, die noch sicher
 zugeordnet werden können.
 
+Die gruppierte Strommeldung `NotEnoughPowerForEntity` ist die bewusste
+Ausnahme: Für die gesamte Gruppe gilt ausschließlich ihre Meldungstypregel
+**NORMAL**, **SILENT**, **HIDDEN** oder **IGNORED**. Bereits gespeicherte
+Entity- und Prototypregeln werden nicht gelöscht, bleiben für diesen
+Gruppentyp aber ruhend. Damit kann ein einzelnes Gebäude weder eine globale
+Stromgruppe erneut auslösen noch ihr Verhalten während derselben Episode
+wechseln.
+
 Diese Einstellungen wirken ausschließlich auf UNMA. Die ursprüngliche
 Captain-of-Industry-Benachrichtigung wird weder deaktiviert noch verändert.
 
@@ -623,9 +662,11 @@ außerhalb der Weltdateien unter:
 
 Nur wenn diese Datei tatsächlich fehlt, erzeugt und persistiert UNMA das
 eingebaute Profil **UNMA Recommended Quiet**. Exakt erkannte, unveränderte
-frühere Built-ins – **UNMA Recommended Silent** mit sechs Silent-Regeln sowie
-der Quiet-Zwischenstand mit zwei zusätzlichen Hidden-Regeln – werden beim Laden
-nur im Speicher auf das aktuelle Quiet-Profil gebracht; ihre Seed-Dateien
+frühere Built-ins werden beim Laden nur im Speicher auf das aktuelle
+Quiet-Profil gebracht: **UNMA Recommended Silent** aus 0.10.1 oder 0.10.2 mit
+sechs Silent-Regeln, der Quiet-Zwischenstand aus 0.10.2 mit diesen sechs Silent-
+und zwei zusätzlichen Hidden-Regeln sowie der bisherige Quiet-Stand aus 0.10.1,
+0.10.2 oder 0.10.3 mit sechs Silent- und zwei Ignored-Regeln. Ihre Seed-Dateien
 bleiben unverändert. Abweichende und benutzerdefinierte Profile werden weder
 ergänzt noch überschrieben. Das eingebaute Profil wird nicht automatisch in
 einen Spielstand importiert: Auch dafür müssen zuerst die Vorschau geprüft und
@@ -649,19 +690,28 @@ Zusätzlich setzt das Profil diese Meldungsarten auf **IGNORED** beziehungsweise
 **NICHT LOGGEN · KOMPLETT IGNORIEREN**:
 
 - `TruckCannotDeliver`;
-- `TruckCannotDeliverMixedCargo`.
+- `TruckCannotDeliverMixedCargo`;
+- `NotEnoughFuelToRefuel`.
 
-CoI nimmt diese Fahrzeugmeldungen häufig zurück und sendet sie mit einer neuen,
-flüchtigen `NotificationId` erneut. **IGNORED** verwirft jedes neue Ereignis in
-UNMA noch vor `SetAlarm`, Verlaufserzeugung und Persistenz. Dadurch wachsen
-weder der UNMA-Verlauf noch die Incident-Linse und die Spielstand-Persistenz
-mit jedem Flackern weiter. Beim bestätigten Import und beim Normalisieren der
-Konfiguration bereinigt UNMA passende aktive Zustände und Memories. Ältere
-globale Verlaufseinträge werden ebenfalls entfernt, sofern keine spezifischere,
-nicht ignorierende Entity- oder Prototypregel erhalten bleiben muss. Die
-ursprüngliche Captain-of-Industry-Meldung bleibt sichtbar und unverändert.
-`CannotDeliverFromMineTower`, `VehicleGoalUnreachable` und `VehicleNoFuel` sind
-bewusst nicht Teil dieser Empfehlung und bleiben normal sowie hörbar.
+CoI nimmt die beiden `TruckCannotDeliver`-Meldungen häufig zurück und sendet sie
+mit einer neuen, flüchtigen `NotificationId` erneut. `NotEnoughFuelToRefuel`
+ist der globale Hinweis „Not enough fuel to refuel a vehicle“. **IGNORED**
+verwirft jedes passende neue Ereignis in UNMA noch vor `SetAlarm`,
+Verlaufserzeugung und Persistenz. Dadurch wachsen weder der UNMA-Verlauf noch
+die Incident-Linse und die Spielstand-Persistenz mit jedem Flackern weiter.
+Beim bestätigten Import und beim Normalisieren der Konfiguration bereinigt UNMA
+passende aktive Zustände und Memories. Ältere globale Verlaufseinträge werden
+ebenfalls entfernt, sofern keine spezifischere, nicht ignorierende Entity- oder
+Prototypregel erhalten bleiben muss. Spezifischere Ausnahmen gewinnen stets vor
+der globalen Meldungsartregel. Die ursprüngliche Captain-of-Industry-Meldung
+bleibt sichtbar und unverändert. `VehicleNoFuel`, `NotEnoughPower` und
+`NotEnoughPowerForEntity` erhalten durch das empfohlene Profil keine Regel und
+bleiben als wichtige Hinweise normal sowie hörbar. `NotEnoughPowerForEntity`
+steht insbesondere weder auf Recommended Quiet noch auf **IGNORED**: Seine
+Gruppenepisode verhindert Wiederholungsspam, ohne den wichtigen Stromalarm zu
+unterdrücken. Gespeicherte Entity- und Prototypregeln bleiben erhalten, ruhen
+für diesen Gruppentyp jedoch. Keine dieser Empfehlungen wirkt vor der geprüften
+Importvorschau und der ausdrücklichen Bestätigung.
 
 Beim Speichern und Importieren sind folgende Kategorien einzeln auswählbar:
 

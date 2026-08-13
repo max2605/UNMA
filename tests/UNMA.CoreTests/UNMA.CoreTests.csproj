@@ -29,6 +29,8 @@
              Link="Domain\AlarmEscalationPolicy.cs" />
     <Compile Include="..\..\source\Domain\AlarmAudioSnoozePolicy.cs"
              Link="Domain\AlarmAudioSnoozePolicy.cs" />
+    <Compile Include="..\..\source\Domain\OperatorSilenceReminderPolicy.cs"
+             Link="Domain\OperatorSilenceReminderPolicy.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
              Link="Domain\PanelSlotProjection.cs" />
     <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
@@ -45,6 +47,8 @@
              Link="Domain\CustomRuleLifecyclePolicy.cs" />
     <Compile Include="..\..\source\Domain\SustainedVanillaAlarmPolicy.cs"
              Link="Domain\SustainedVanillaAlarmPolicy.cs" />
+    <Compile Include="..\..\source\Domain\GroupedVanillaNotificationPolicy.cs"
+             Link="Domain\GroupedVanillaNotificationPolicy.cs" />
     <Compile Include="..\..\source\Domain\VanillaNotificationSuppressionPolicy.cs"
              Link="Domain\VanillaNotificationSuppressionPolicy.cs" />
     <Compile Include="..\..\source\Domain\TransferProfileModels.cs"

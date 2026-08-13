@@ -328,6 +328,15 @@ public static class PanelSlotProjection
             view.Severity = active.Max(candidate => candidate.Severity);
             view.IsMissingSource = active.Any(candidate =>
                 candidate.IsMissingSource);
+            view.IsOperatorSilenced =
+                view.IsAcknowledged &&
+                active.All(candidate =>
+                    candidate.IsOperatorSilenced &&
+                    candidate.OperatorSilencedAtGameTick >= 0);
+            view.OperatorSilencedAtGameTick = view.IsOperatorSilenced
+                ? active.Max(candidate =>
+                        candidate.OperatorSilencedAtGameTick)
+                : -1;
         }
         else if (gone.Length > 0)
         {
@@ -337,12 +346,16 @@ public static class PanelSlotProjection
             view.Severity = gone.Max(candidate => candidate.Severity);
             view.IsMissingSource = gone.Any(candidate =>
                 candidate.IsMissingSource);
+            view.IsOperatorSilenced = false;
+            view.OperatorSilencedAtGameTick = -1;
         }
         else
         {
             view.IsActive = false;
             view.IsAcknowledged = false;
             view.IsGoneUnacknowledged = false;
+            view.IsOperatorSilenced = false;
+            view.OperatorSilencedAtGameTick = -1;
         }
         return view;
     }
@@ -387,6 +400,9 @@ public static class PanelSlotProjection
             IsGoneUnacknowledged = source.IsGoneUnacknowledged,
             IsMissingSource = source.IsMissingSource,
             LastValue = source.LastValue,
+            IsOperatorSilenced = source.IsOperatorSilenced,
+            OperatorSilencedAtGameTick =
+                source.OperatorSilencedAtGameTick,
         };
     }
 }

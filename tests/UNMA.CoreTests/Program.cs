@@ -31,7 +31,10 @@ internal static class Program
         TestAlarmEscalationModelNormalization();
         TestAlarmTimingMemoryPolicy();
         TestAlarmAudioSnoozePolicy();
+        TestOperatorSilenceReminderPolicy();
         TestSustainedVanillaAlarmPolicy();
+        TestGroupedVanillaNotificationPolicy();
+        TestGroupedVanillaNotificationNormalization();
         TestVanillaNotificationSuppressionPolicy();
         TestIgnoredVanillaPersistenceCleanup();
         TestAlarmHistoryState();
@@ -49,6 +52,7 @@ internal static class Program
         TestCustomRuleLifecyclePolicy();
         TestPanelSlotProjection();
         TestConfigurationRoundTrip();
+        TestAlarmMemoryOperatorSilenceRoundTrip();
         TestAlarmHistoryRoundTrip();
         TestConfigurationMigration();
         TestReducedMotionConfigurationContract();
@@ -422,12 +426,21 @@ internal static class Program
         var mainTab = ExtractSourceMethod(
             editorSource,
             "private void DrawSelectedMainTab()");
+        var silenceReminderGate = mainTab.IndexOf(
+            "m_operatorSilenceReminder != null",
+            StringComparison.Ordinal);
+        var silenceReminderDraw = mainTab.IndexOf(
+            "DrawOperatorSilenceReminder();",
+            StringComparison.Ordinal);
         var mainStatus = mainTab.IndexOf(
             "DrawStatusMessage();",
             StringComparison.Ordinal);
         var mainSwitch = mainTab.IndexOf(
             "switch (m_tab)",
             StringComparison.Ordinal);
+        IsTrue(silenceReminderGate >= 0);
+        IsTrue(silenceReminderDraw > silenceReminderGate);
+        IsTrue(mainStatus > silenceReminderDraw);
         IsTrue(mainStatus >= 0 && mainStatus < mainSwitch);
         var detachedPanel = ExtractSourceMethod(
             editorSource,
@@ -445,6 +458,230 @@ internal static class Program
         IsTrue(alarmTile.Contains(
             "AlarmUiErgonomics.ShouldUseLightText(",
             StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "alarm.IsActive && alarm.IsOperatorSilenced",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "\"alarm_tile.behavior_silent\"",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "var acknowledgementInset =",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "alarm.RequiresAcknowledgement",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "alarm.IsActive && alarm.IsAcknowledged",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "GroupedVanillaNotificationPolicy.IsGroupedOverrideId(",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "Math.Round(alarm.LastValue)",
+            StringComparison.Ordinal));
+
+        var vanillaBehaviorControls = ExtractSourceMethod(
+            editorSource,
+            "private void DrawVanillaBehaviorControls(AlarmView candidate)");
+        IsTrue(vanillaBehaviorControls.Contains(
+            "var isGrouped = GroupedVanillaNotificationPolicy",
+            StringComparison.Ordinal));
+        IsTrue(vanillaBehaviorControls.Contains(
+            "if (!isGrouped && candidate.EntityId >= 0)",
+            StringComparison.Ordinal));
+        IsTrue(vanillaBehaviorControls.Contains(
+            "VanillaNotificationScope.NotificationType",
+            StringComparison.Ordinal));
+
+        var entityVanillaBehaviorButtons = ExtractSourceMethod(
+            editorSource,
+            "private void DrawEntityVanillaBehaviorButtons(");
+        IsTrue(entityVanillaBehaviorButtons.Contains(
+            "GroupedVanillaNotificationPolicy.IsGroupedOverrideId(",
+            StringComparison.Ordinal));
+
+        var alarmAcknowledgeButton = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmAcknowledgeButton(");
+        var silentButtonGate = alarmAcknowledgeButton.IndexOf(
+            "alarm.IsActive && alarm.IsOperatorSilenced",
+            StringComparison.Ordinal);
+        var silentButtonControl = alarmAcknowledgeButton.IndexOf(
+            "\"alarm-operator-silent-\"",
+            StringComparison.Ordinal);
+        var acknowledgeGate = alarmAcknowledgeButton.IndexOf(
+            "if (!alarm.RequiresAcknowledgement)",
+            StringComparison.Ordinal);
+        IsTrue(silentButtonGate >= 0);
+        IsTrue(silentButtonControl > silentButtonGate);
+        IsTrue(acknowledgeGate > silentButtonControl);
+        IsTrue(alarmAcknowledgeButton.Contains(
+            "m_primaryButtonStyle",
+            StringComparison.Ordinal));
+        IsTrue(alarmAcknowledgeButton.Contains(
+            "m_runtime.AcknowledgeAlarm(panel.Id, slotId)",
+            StringComparison.Ordinal));
+        IsTrue(alarmAcknowledgeButton.Contains(
+            "alarm.IsActive && alarm.IsAcknowledged",
+            StringComparison.Ordinal));
+        IsTrue(alarmAcknowledgeButton.Contains(
+            "\"alarm-mark-operator-silent-\"",
+            StringComparison.Ordinal));
+        IsTrue(alarmAcknowledgeButton.Contains(
+            "After one game month",
+            StringComparison.Ordinal));
+        IsTrue(alarmAcknowledgeButton.Contains(
+            "notification-setting exclusions still apply.",
+            StringComparison.Ordinal));
+
+        var update = ExtractSourceMethod(
+            editorSource,
+            "private void Update()");
+        IsTrue(update.Contains(
+            "m_runtime.TryTakeOperatorSilenceReminder(",
+            StringComparison.Ordinal));
+        IsTrue(update.Contains(
+            "HandleOperatorSilenceReminder(silenceReminder);",
+            StringComparison.Ordinal));
+
+        var handleSilenceReminder = ExtractSourceMethod(
+            editorSource,
+            "private void HandleOperatorSilenceReminder(");
+        IsTrue(handleSilenceReminder.Contains(
+            "m_operatorSilenceReminder = reminder;",
+            StringComparison.Ordinal));
+        IsTrue(handleSilenceReminder.Contains(
+            "m_isOpen = true;",
+            StringComparison.Ordinal));
+        IsFalse(handleSilenceReminder.Contains(
+            "m_audio.",
+            StringComparison.Ordinal));
+
+        var drawSilenceReminder = ExtractSourceMethod(
+            editorSource,
+            "private void DrawOperatorSilenceReminder()");
+        IsTrue(drawSilenceReminder.Contains(
+            "foreach (var group in reminder.Groups)",
+            StringComparison.Ordinal));
+        IsTrue(drawSilenceReminder.Contains(
+            "group.Count.ToString(",
+            StringComparison.Ordinal));
+        IsTrue(drawSilenceReminder.Contains(
+            "m_operatorSilenceReminder = null;",
+            StringComparison.Ordinal));
+        IsFalse(drawSilenceReminder.Contains(
+            "m_audio.",
+            StringComparison.Ordinal));
+
+        var runtimeSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Runtime",
+            "UnmaRuntime.cs"));
+        var getViews = ExtractSourceMethod(
+            runtimeSource,
+            "public IReadOnlyList<AlarmView> GetViews(PanelDefinition panel)");
+        IsTrue(getViews.Contains(
+            "var showGroupedPersistentSlot =",
+            StringComparison.Ordinal));
+        IsTrue(getViews.Contains(
+            "GroupedVanillaNotificationPolicy.IsGroupedSlotId(",
+            StringComparison.Ordinal));
+        var setVanillaBehavior = ExtractSourceMethod(
+            runtimeSource,
+            "public bool SetVanillaNotificationBehavior(");
+        IsTrue(setVanillaBehavior.Contains(
+            "scope != VanillaNotificationScope.NotificationType",
+            StringComparison.Ordinal));
+        IsTrue(setVanillaBehavior.Contains(
+            "ReplayCurrentVanillaNotifications(overrideId);",
+            StringComparison.Ordinal));
+        var initialize = ExtractSourceMethod(
+            runtimeSource,
+            "public void Initialize()");
+        var groupedSeed = initialize.IndexOf(
+            "RefreshGroupedVanillaNotificationMembers(",
+            StringComparison.Ordinal);
+        var notificationReplay = initialize.IndexOf(
+            "OnNotificationAdded(notification);",
+            StringComparison.Ordinal);
+        IsTrue(groupedSeed >= 0 && groupedSeed < notificationReplay);
+        var setGroupedAlarm = ExtractSourceMethod(
+            runtimeSource,
+            "private void SetGroupedVanillaAlarm(");
+        IsTrue(setGroupedAlarm.Contains(
+            "GroupedVanillaNotificationPolicy.AreAllMembersSuppressed(",
+            StringComparison.Ordinal));
+        IsTrue(setGroupedAlarm.Contains(
+            "representative.Detail,\n                snapshot.Count)",
+            StringComparison.Ordinal));
+        var purgeIgnored = ExtractSourceMethod(
+            runtimeSource,
+            "private void PurgeIgnoredVanillaAlarms(");
+        IsTrue(purgeIgnored.Contains(
+            "PublishExternalDisplayAlarm(alarm, false);",
+            StringComparison.Ordinal));
+        var setVanillaEnabled = ExtractSourceMethod(
+            runtimeSource,
+            "public bool SetVanillaNotificationEnabled(");
+        IsTrue(setVanillaEnabled.Contains(
+            "PublishExternalDisplayAlarm(",
+            StringComparison.Ordinal));
+        var reconcileTransferred = ExtractSourceMethod(
+            runtimeSource,
+            "private void ReconcileTransferredVanillaNotifications(");
+        IsTrue(reconcileTransferred.Contains(
+            "PublishExternalDisplayAlarm(alarm, false);",
+            StringComparison.Ordinal));
+        IsTrue(reconcileTransferred.Contains(
+            "disabledOverrideIds.Contains(",
+            StringComparison.Ordinal));
+        IsTrue(reconcileTransferred.Contains(
+            "var ignoredStates = matchingStates.Where(",
+            StringComparison.Ordinal));
+        IsTrue(reconcileTransferred.Contains(
+            "history?.SetState(",
+            StringComparison.Ordinal));
+        var refreshGroupedMembers = ExtractSourceMethod(
+            runtimeSource,
+            "private void RefreshGroupedVanillaNotificationMembers(");
+        IsTrue(refreshGroupedMembers.Contains(
+            ".GetNotificationKeys()",
+            StringComparison.Ordinal));
+        IsTrue(refreshGroupedMembers.Contains(
+            ".OrderBy(",
+            StringComparison.Ordinal));
+        IsFalse(refreshGroupedMembers.Contains(
+            "m_groupedVanillaNotifications.Clear();",
+            StringComparison.Ordinal));
+        IsTrue(refreshGroupedMembers.Contains(
+            "m_groupedVanillaNotifications.Remove(staleKey);",
+            StringComparison.Ordinal));
+        var suppressChanged = ExtractSourceMethod(
+            runtimeSource,
+            "private void OnNotificationSuppressChanged(");
+        var groupedSuppressGate = suppressChanged.IndexOf(
+            "GroupedVanillaNotificationPolicy.IsGroupedPrototype(",
+            StringComparison.Ordinal);
+        var groupedMemberRefresh = suppressChanged.IndexOf(
+            "m_groupedVanillaNotifications.Add(",
+            StringComparison.Ordinal);
+        var groupedAllSuppressed = suppressChanged.IndexOf(
+            "GroupedVanillaNotificationPolicy\n" +
+            "                    .AreAllMembersSuppressed(snapshot)",
+            StringComparison.Ordinal);
+        var groupedSuppressReturn = suppressChanged.IndexOf(
+            "return;",
+            groupedAllSuppressed,
+            StringComparison.Ordinal);
+        var legacyEntityScope = suppressChanged.IndexOf(
+            "GetNotificationEntityScope(",
+            StringComparison.Ordinal);
+        IsTrue(groupedSuppressGate >= 0);
+        IsTrue(groupedMemberRefresh > groupedSuppressGate);
+        IsTrue(groupedAllSuppressed > groupedMemberRefresh);
+        IsTrue(groupedSuppressReturn > groupedAllSuppressed);
+        IsTrue(legacyEntityScope > groupedSuppressReturn);
         var historyRows = ExtractSourceMethod(
             editorSource,
             "private void DrawHistoryRows(");
@@ -3103,6 +3340,171 @@ internal static class Program
         IsTrue(captureInstrumentEntity.Contains(
             "m_instrumentMetricScroll = Vector2.zero;",
             StringComparison.Ordinal));
+    }
+
+    private static void TestOperatorSilenceReminderPolicy()
+    {
+        const long now = 1_000;
+        const long month = GameTimeWindowPolicy.SimTicksPerMonth;
+        var samples = new OperatorSilenceReminderSample[]
+        {
+            SilenceReminderSample(
+                "group:b",
+                "Beta",
+                now - month),
+            SilenceReminderSample(
+                "group:a",
+                "Alpha later label",
+                now - month),
+            SilenceReminderSample(
+                "group:a",
+                "Alpha",
+                now - month - 1),
+            SilenceReminderSample(
+                "before-boundary",
+                "Too new",
+                now - month + 1),
+            SilenceReminderSample(
+                "inactive",
+                "Inactive",
+                now - month,
+                isActive: false),
+            SilenceReminderSample(
+                "not-operator",
+                "Not operator-silenced",
+                now - month,
+                isOperatorSilenced: false),
+            SilenceReminderSample(
+                "configured-silent",
+                "Configured silent",
+                now - month,
+                effectiveBehavior: VanillaNotificationBehavior.Silent),
+            SilenceReminderSample(
+                "configured-hidden",
+                "Configured hidden",
+                now - month,
+                effectiveBehavior: VanillaNotificationBehavior.Hidden),
+            SilenceReminderSample(
+                "configured-ignored",
+                "Configured ignored",
+                now - month,
+                effectiveBehavior: VanillaNotificationBehavior.Ignored),
+            SilenceReminderSample(
+                "soundless",
+                "Soundless",
+                now - month,
+                soundId: " NoNe "),
+            SilenceReminderSample(
+                "future",
+                "Future",
+                now + 1),
+            SilenceReminderSample(
+                "invalid-start",
+                "Invalid start",
+                -1),
+            null,
+        };
+
+        var result = OperatorSilenceReminderPolicy.Build(
+            samples,
+            now,
+            month);
+        AreEqual(now, result.CurrentGameTick);
+        AreEqual(month, result.MinimumAgeTicks);
+        AreEqual(2, result.GroupCount);
+        AreEqual(3, result.AlarmCount);
+        AreEqual("group:a", result.Groups[0].GroupId);
+        AreEqual("Alpha", result.Groups[0].Label);
+        AreEqual(2, result.Groups[0].Count);
+        AreEqual("group:b", result.Groups[1].StableGroupId);
+        AreEqual("Beta", result.Groups[1].HumanLabel);
+        AreEqual(1, result.Groups[1].AlarmCount);
+        IsTrue(result.Groups is
+            System.Collections.ObjectModel
+                .ReadOnlyCollection<OperatorSilenceReminderGroup>);
+
+        var reversed = OperatorSilenceReminderPolicy.Build(
+            samples.Reverse(),
+            now,
+            month);
+        AreEqual(
+            string.Join("|", result.Groups.Select(group =>
+                group.GroupId + ":" + group.Label + ":" + group.Count)),
+            string.Join("|", reversed.Groups.Select(group =>
+                group.GroupId + ":" + group.Label + ":" + group.Count)));
+
+        var blankFallback = OperatorSilenceReminderPolicy.Build(
+            new[]
+            {
+                SilenceReminderSample(" ", null, now - month),
+                SilenceReminderSample(null, " ", now - month),
+            },
+            now,
+            month);
+        AreEqual(1, blankFallback.GroupCount);
+        AreEqual(2, blankFallback.AlarmCount);
+        AreEqual(
+            OperatorSilenceReminderPolicy.UnknownGroupId,
+            blankFallback.Groups[0].GroupId);
+        AreEqual(
+            OperatorSilenceReminderPolicy.UnknownLabel,
+            blankFallback.Groups[0].Label);
+
+        var exactBoundary = OperatorSilenceReminderPolicy.Build(
+            new[]
+            {
+                SilenceReminderSample("exact", "Exact", now - month),
+                SilenceReminderSample(
+                    "just-before",
+                    "Just before",
+                    now - month + 1),
+            },
+            now,
+            month);
+        AreEqual(1, exactBoundary.AlarmCount);
+        AreEqual("exact", exactBoundary.Groups[0].GroupId);
+
+        var nextMonth = OperatorSilenceReminderPolicy.Build(
+            new[]
+            {
+                SilenceReminderSample("still-active", "Still active", 0),
+            },
+            month * 2,
+            month);
+        AreEqual(1, nextMonth.AlarmCount);
+        AreEqual("still-active", nextMonth.Groups[0].GroupId);
+
+        foreach (var invalid in new[]
+                 {
+                     OperatorSilenceReminderPolicy.Build(samples, -1, month),
+                     OperatorSilenceReminderPolicy.Build(samples, now, 0),
+                     OperatorSilenceReminderPolicy.Build(samples, now, -1),
+                     OperatorSilenceReminderPolicy.Build(null, now, month),
+                 })
+        {
+            AreEqual(0, invalid.GroupCount);
+            AreEqual(0, invalid.AlarmCount);
+        }
+    }
+
+    private static OperatorSilenceReminderSample SilenceReminderSample(
+        string stableGroupId,
+        string humanLabel,
+        long operatorSilencedAtGameTick,
+        bool isActive = true,
+        bool isOperatorSilenced = true,
+        VanillaNotificationBehavior effectiveBehavior =
+            VanillaNotificationBehavior.Normal,
+        string soundId = "auto")
+    {
+        return new OperatorSilenceReminderSample(
+            stableGroupId,
+            humanLabel,
+            isActive,
+            isOperatorSilenced,
+            effectiveBehavior,
+            soundId,
+            operatorSilencedAtGameTick);
     }
 
     private static void TestComparableValues()
@@ -6230,6 +6632,713 @@ internal static class Program
         IsFalse(genuinelyReturned.IsAcknowledged);
     }
 
+    private static void TestGroupedVanillaNotificationPolicy()
+    {
+        const string prototypeId = "NotEnoughPowerForEntity";
+        const string overrideId = "vanilla:NotEnoughPowerForEntity";
+        const string groupKey =
+            "vanilla:group:NotEnoughPowerForEntity";
+
+        AreEqual(
+            prototypeId,
+            GroupedVanillaNotificationPolicy.PrototypeId);
+        AreEqual(overrideId, GroupedVanillaNotificationPolicy.OverrideId);
+        AreEqual(groupKey, GroupedVanillaNotificationPolicy.GroupKey);
+        AreEqual(overrideId, GroupedVanillaNotificationPolicy.SlotId);
+        IsTrue(GroupedVanillaNotificationPolicy.IsGroupedPrototype(
+            prototypeId));
+        IsFalse(GroupedVanillaNotificationPolicy.IsGroupedPrototype(
+            "NotEnoughPower"));
+        IsFalse(GroupedVanillaNotificationPolicy.IsGroupedPrototype(
+            "notenoughpowerforentity"));
+        IsFalse(GroupedVanillaNotificationPolicy.IsGroupedPrototype(
+            " " + prototypeId + " "));
+        IsTrue(GroupedVanillaNotificationPolicy.IsGroupedOverride(
+            overrideId));
+        IsFalse(GroupedVanillaNotificationPolicy.IsGroupedOverride(
+            "vanilla:NotEnoughPower"));
+        IsTrue(GroupedVanillaNotificationPolicy.IsGroupedOverrideId(
+            overrideId));
+        IsFalse(GroupedVanillaNotificationPolicy.IsGroupedOverrideId(
+            "vanilla:NotEnoughPower"));
+        IsTrue(GroupedVanillaNotificationPolicy.IsGroupKey(groupKey));
+        IsFalse(GroupedVanillaNotificationPolicy.IsGroupKey(overrideId));
+        AreEqual(
+            groupKey,
+            GroupedVanillaNotificationPolicy.AlarmKeyForNotification(
+                prototypeId,
+                "vanilla:notification-17"));
+        AreEqual(
+            "vanilla:notification-17",
+            GroupedVanillaNotificationPolicy.AlarmKeyForNotification(
+                "NotEnoughPower",
+                "vanilla:notification-17"));
+        AreEqual(
+            "",
+            GroupedVanillaNotificationPolicy.AlarmKeyForNotification(
+                "NotEnoughPower",
+                null));
+
+        foreach (var groupedSlotId in new[]
+                 {
+                     overrideId,
+                     " " + overrideId + " ",
+                     groupKey,
+                     overrideId + ":entity:17",
+                     overrideId + ":legacy:ABCDEF12",
+                 })
+        {
+            IsTrue(GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                groupedSlotId));
+            AreEqual(
+                overrideId,
+                GroupedVanillaNotificationPolicy.CanonicalizeSlotId(
+                    groupedSlotId));
+        }
+        foreach (var unrelatedSlotId in new[]
+                 {
+                     "",
+                     "vanilla:NotEnoughPower",
+                     overrideId + ":entity:",
+                     overrideId + ":legacy:",
+                     overrideId + ":other:17",
+                 })
+        {
+            IsFalse(GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                unrelatedSlotId));
+        }
+        AreEqual(
+            "vanilla:Other",
+            GroupedVanillaNotificationPolicy.CanonicalizeSlotId(
+                " vanilla:Other "));
+        AreEqual(
+            prototypeId,
+            GroupedVanillaNotificationPolicy.FormatTitle("", 1));
+        AreEqual(
+            "POWER FAILURE",
+            GroupedVanillaNotificationPolicy.FormatTitle(
+                " POWER FAILURE ",
+                1));
+        AreEqual(
+            "POWER FAILURE ×3",
+            GroupedVanillaNotificationPolicy.FormatTitle(
+                "POWER FAILURE",
+                3));
+        AreEqual(
+            prototypeId + " ×2",
+            GroupedVanillaNotificationPolicy.FormatDetail(null, 2));
+        AreEqual(
+            "NotEnoughPowerForEntity · Arc furnace II ×20000",
+            GroupedVanillaNotificationPolicy.FormatDetail(
+                " NotEnoughPowerForEntity · Arc furnace II ",
+                20000));
+
+        var invalidMember = new GroupedVanillaNotificationMemberSnapshot(
+            " ",
+            "ignored",
+            "ignored");
+        var tracker = new GroupedVanillaNotificationTracker();
+        var empty = tracker.GetSnapshot();
+        AreEqual(0, empty.Count);
+        IsFalse(empty.HasMembers);
+        IsFalse(empty.IsLastClearPending);
+        IsFalse(GroupedVanillaNotificationPolicy
+            .AreAllMembersSuppressed(null));
+        IsFalse(GroupedVanillaNotificationPolicy
+            .AreAllMembersSuppressed(empty));
+        AreEqual<GroupedVanillaNotificationMemberSnapshot>(
+            null,
+            empty.OldestRepresentative);
+        AreEqual(0, tracker.Add(null).Count);
+        AreEqual(0, tracker.Add(invalidMember).Count);
+
+        var memberA = new GroupedVanillaNotificationMemberSnapshot(
+            " vanilla:notification-17 ",
+            " ARC FURNACE II ",
+            " NotEnoughPowerForEntity · Arc furnace II ",
+            isSuppressed: false,
+            entityId: 17,
+            entityPrototypeId: " AirSeparatorT2 ",
+            entityTitle: " Arc furnace II ");
+        AreEqual("vanilla:notification-17", memberA.NotificationKey);
+        AreEqual("ARC FURNACE II", memberA.Title);
+        AreEqual(
+            "NotEnoughPowerForEntity · Arc furnace II",
+            memberA.Detail);
+        IsFalse(memberA.IsSuppressed);
+        AreEqual(17, memberA.EntityId);
+        AreEqual("AirSeparatorT2", memberA.EntityPrototypeId);
+        AreEqual("Arc furnace II", memberA.EntityTitle);
+
+        var afterA = tracker.Add(memberA);
+        AreEqual(1, afterA.Count);
+        AreEqual(
+            "vanilla:notification-17",
+            tracker.GetNotificationKeys().Single());
+        Throws<NotSupportedException>(() =>
+            ((IList<string>)tracker.GetNotificationKeys()).Clear());
+        IsTrue(afterA.HasMembers);
+        IsFalse(afterA.IsLastClearPending);
+        IsFalse(GroupedVanillaNotificationPolicy
+            .AreAllMembersSuppressed(afterA));
+        IsTrue(ReferenceEquals(memberA, afterA.OldestRepresentative));
+        IsTrue(tracker.Contains(" vanilla:notification-17 "));
+        IsFalse(tracker.Contains("vanilla:notification-18"));
+
+        var refreshedA = new GroupedVanillaNotificationMemberSnapshot(
+            "vanilla:notification-17",
+            "ARC FURNACE II UPDATED",
+            "updated",
+            isSuppressed: true,
+            entityId: 17,
+            entityPrototypeId: "AirSeparatorT2",
+            entityTitle: "Arc furnace II");
+        var afterDuplicateA = tracker.Add(refreshedA);
+        AreEqual(1, afterDuplicateA.Count);
+        IsTrue(ReferenceEquals(
+            refreshedA,
+            afterDuplicateA.OldestRepresentative));
+        IsTrue(afterDuplicateA.OldestRepresentative.IsSuppressed);
+        IsTrue(GroupedVanillaNotificationPolicy
+            .AreAllMembersSuppressed(afterDuplicateA));
+
+        var memberB = new GroupedVanillaNotificationMemberSnapshot(
+            "vanilla:notification-18",
+            "COPPER ELECTROLYSIS",
+            "NotEnoughPowerForEntity · Copper electrolysis",
+            entityId: 18,
+            entityPrototypeId: "AirSeparatorT3",
+            entityTitle: "Copper electrolysis");
+        var heldOneMemberSnapshot = afterDuplicateA;
+        var afterB = tracker.Add(memberB);
+        AreEqual(2, afterB.Count);
+        IsFalse(GroupedVanillaNotificationPolicy
+            .AreAllMembersSuppressed(afterB));
+        AreEqual(1, heldOneMemberSnapshot.Count);
+        IsTrue(ReferenceEquals(
+            refreshedA,
+            afterB.OldestRepresentative));
+        Throws<NotSupportedException>(() =>
+            ((IList<GroupedVanillaNotificationMemberSnapshot>)
+                afterB.Members).Clear());
+
+        var afterRemoveB = tracker.Remove("vanilla:notification-18");
+        AreEqual(1, afterRemoveB.Count);
+        IsTrue(GroupedVanillaNotificationPolicy
+            .AreAllMembersSuppressed(afterRemoveB));
+        IsFalse(afterRemoveB.IsLastClearPending);
+        IsTrue(ReferenceEquals(
+            refreshedA,
+            afterRemoveB.OldestRepresentative));
+        var afterDuplicateRemoveB = tracker.Remove(
+            "vanilla:notification-18");
+        AreEqual(1, afterDuplicateRemoveB.Count);
+        IsFalse(afterDuplicateRemoveB.IsLastClearPending);
+
+        tracker.Add(memberB);
+        var afterRemoveOldest = tracker.Remove(
+            "vanilla:notification-17");
+        AreEqual(1, afterRemoveOldest.Count);
+        IsTrue(ReferenceEquals(
+            memberB,
+            afterRemoveOldest.OldestRepresentative));
+        var pendingLastClear = tracker.Remove(
+            "vanilla:notification-18");
+        AreEqual(0, pendingLastClear.Count);
+        IsFalse(pendingLastClear.HasMembers);
+        IsTrue(pendingLastClear.IsLastClearPending);
+        IsTrue(ReferenceEquals(
+            memberB,
+            pendingLastClear.PendingClearRepresentative));
+        AreEqual(0, tracker.GetNotificationKeys().Count);
+        var duplicatePendingRemove = tracker.Remove(
+            "vanilla:notification-18");
+        IsTrue(duplicatePendingRemove.IsLastClearPending);
+        GroupedVanillaNotificationMemberSnapshot clearRepresentative;
+
+        var reusedB = new GroupedVanillaNotificationMemberSnapshot(
+            "vanilla:notification-18",
+            "COPPER ELECTROLYSIS REUSED",
+            "reused notification id",
+            entityId: 28);
+        var readdedBeforeClear = tracker.Add(reusedB);
+        AreEqual(1, readdedBeforeClear.Count);
+        IsFalse(readdedBeforeClear.IsLastClearPending);
+        IsFalse(tracker.TryTakePendingLastClear(out clearRepresentative));
+        AreEqual<GroupedVanillaNotificationMemberSnapshot>(
+            null,
+            clearRepresentative);
+        IsTrue(ReferenceEquals(
+            reusedB,
+            readdedBeforeClear.OldestRepresentative));
+
+        tracker.Remove("vanilla:notification-18");
+        IsTrue(tracker.TryTakePendingLastClear(out clearRepresentative));
+        IsTrue(ReferenceEquals(reusedB, clearRepresentative));
+        IsFalse(tracker.TryTakePendingLastClear(out clearRepresentative));
+        AreEqual<GroupedVanillaNotificationMemberSnapshot>(
+            null,
+            clearRepresentative);
+
+        // A reused NotificationId after a committed clear is a fresh member,
+        // while a duplicate add during the same group remains deduplicated.
+        var freshA = new GroupedVanillaNotificationMemberSnapshot(
+            "vanilla:notification-17",
+            "ARC FURNACE II FRESH",
+            "fresh occurrence");
+        AreEqual(1, tracker.Add(freshA).Count);
+        AreEqual(1, tracker.Add(freshA).Count);
+        tracker.Clear();
+        var cleared = tracker.GetSnapshot();
+        AreEqual(0, cleared.Count);
+        IsFalse(cleared.IsLastClearPending);
+        IsFalse(tracker.Contains("vanilla:notification-17"));
+    }
+
+    private static void TestGroupedVanillaNotificationNormalization()
+    {
+        const string prototypeId = "NotEnoughPowerForEntity";
+        const string overrideId = "vanilla:NotEnoughPowerForEntity";
+        const string groupKey =
+            "vanilla:group:NotEnoughPowerForEntity";
+
+        var slotConfiguration = UnmaConfiguration.CreateDefault();
+        slotConfiguration.Panels = new List<PanelDefinition>
+        {
+            new()
+            {
+                Id = "global-group-migration",
+                Name = "GLOBAL",
+                IsDashboard = true,
+                IncludeVanilla = false,
+                IncludeSystem = false,
+                Slots = new List<PanelSlotDefinition>
+                {
+                    new() { AlarmId = overrideId },
+                    new() { AlarmId = overrideId + ":entity:17" },
+                    new() { AlarmId = overrideId + ":legacy:ABCDEF12" },
+                    new() { AlarmId = groupKey },
+                    new()
+                    {
+                        AlarmId =
+                            "vanilla:NotEnoughPowerForEntityExtra:entity:17",
+                    },
+                    new()
+                    {
+                        AlarmId = "vanilla:NotEnoughPower:entity:18",
+                    },
+                },
+            },
+            new()
+            {
+                Id = "entity-group-migration",
+                Name = "ENTITY",
+                OwnerEntityId = 42,
+                OwnerEntityTitle = "Arc furnace II",
+                OwnerEntityPrototypeId = "AirSeparatorT2",
+                IncludeVanilla = false,
+                IncludeSystem = false,
+                Slots = new List<PanelSlotDefinition>
+                {
+                    new() { AlarmId = overrideId },
+                    new() { AlarmId = overrideId + ":entity:42" },
+                    new() { AlarmId = overrideId + ":legacy:12345678" },
+                    new() { AlarmId = groupKey },
+                    new()
+                    {
+                        AlarmId = "vanilla:NotEnoughPower:entity:42",
+                    },
+                },
+            },
+        };
+
+        slotConfiguration.Normalize();
+
+        var normalizedGlobalSlots = slotConfiguration.Panels.Single(panel =>
+            panel.Id == "global-group-migration").Slots;
+        AreEqual(
+            1,
+            normalizedGlobalSlots.Count(slot =>
+                slot.AlarmId == overrideId));
+        var normalizedGroupedSlot = normalizedGlobalSlots.Single(slot =>
+            slot.AlarmId == overrideId);
+        AreEqual(prototypeId, normalizedGroupedSlot.DisplayName);
+        AreEqual(prototypeId, normalizedGroupedSlot.Detail);
+        AreEqual("vanilla", normalizedGroupedSlot.Source);
+        IsFalse(normalizedGlobalSlots.Any(slot =>
+            slot.AlarmId == groupKey ||
+            slot.AlarmId.StartsWith(
+                overrideId + ":entity:",
+                StringComparison.Ordinal) ||
+            slot.AlarmId.StartsWith(
+                overrideId + ":legacy:",
+                StringComparison.Ordinal)));
+        IsTrue(normalizedGlobalSlots.Any(slot =>
+            slot.AlarmId ==
+            "vanilla:NotEnoughPowerForEntityExtra:entity:17"));
+        IsTrue(normalizedGlobalSlots.Any(slot =>
+            slot.AlarmId == "vanilla:NotEnoughPower:entity:18"));
+
+        var normalizedEntitySlots = slotConfiguration.Panels.Single(panel =>
+            panel.Id == "entity-group-migration").Slots;
+        IsFalse(normalizedEntitySlots.Any(slot =>
+            GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                slot.AlarmId)));
+        IsTrue(normalizedEntitySlots.Any(slot =>
+            slot.AlarmId == "vanilla:NotEnoughPower:entity:42"));
+
+        // Repeated normalization must neither recreate legacy group slots nor
+        // remove a similarly named, non-target notification slot.
+        slotConfiguration.Normalize();
+        normalizedGlobalSlots = slotConfiguration.Panels.Single(panel =>
+            panel.Id == "global-group-migration").Slots;
+        normalizedEntitySlots = slotConfiguration.Panels.Single(panel =>
+            panel.Id == "entity-group-migration").Slots;
+        AreEqual(
+            1,
+            normalizedGlobalSlots.Count(slot =>
+                slot.AlarmId == overrideId));
+        IsFalse(normalizedEntitySlots.Any(slot =>
+            GroupedVanillaNotificationPolicy.IsGroupedSlotId(
+                slot.AlarmId)));
+        IsTrue(normalizedGlobalSlots.Any(slot =>
+            slot.AlarmId ==
+            "vanilla:NotEnoughPowerForEntityExtra:entity:17"));
+
+        var consolidated = CreateGroupedNormalizationConfiguration(
+            GroupedNormalizationMemory(
+                "vanilla:notification-10",
+                sequence: 10,
+                acknowledged: true,
+                operatorSilenced: true,
+                operatorSilencedAtGameTick: 100,
+                entityId: 10),
+            GroupedNormalizationMemory(
+                "vanilla:notification-20",
+                sequence: 20,
+                acknowledged: true,
+                operatorSilenced: true,
+                operatorSilencedAtGameTick: 300,
+                entityId: 20),
+            GroupedNormalizationMemory(
+                "vanilla:notification-30",
+                sequence: 30,
+                acknowledged: true,
+                operatorSilenced: true,
+                operatorSilencedAtGameTick: 200,
+                entityId: 30),
+            new AlarmMemoryDefinition
+            {
+                Key = "vanilla:unrelated-40",
+                Source = "vanilla",
+                OverrideId = "vanilla:NotEnoughWorkers",
+                OccurrenceId = "vanilla:NotEnoughWorkers",
+                SlotId = "vanilla:NotEnoughWorkers:entity:40",
+                Sequence = 40,
+                IsActive = true,
+                EntityId = 40,
+            });
+
+        consolidated.Normalize();
+
+        AreEqual(2, consolidated.AlarmMemories.Count);
+        var grouped = consolidated.AlarmMemories.Single(memory =>
+            memory.OverrideId == overrideId);
+        AreEqual(groupKey, grouped.Key);
+        AreEqual(overrideId, grouped.SlotId);
+        AreEqual(overrideId, grouped.OccurrenceId);
+        AreEqual(10L, grouped.Sequence);
+        IsTrue(grouped.IsActive);
+        IsTrue(grouped.IsAcknowledged);
+        IsFalse(grouped.IsGoneUnacknowledged);
+        IsTrue(grouped.IsOperatorSilenced);
+        AreEqual(300L, grouped.OperatorSilencedAtGameTick);
+        AreEqual(3d, grouped.LastValue);
+        IsTrue(consolidated.AlarmMemories.Any(memory =>
+            memory.Key == "vanilla:unrelated-40" &&
+            memory.OverrideId == "vanilla:NotEnoughWorkers"));
+
+        foreach (var supersededSequence in new long[] { 20, 30 })
+        {
+            IsTrue(consolidated.AlarmHistory.Single(history =>
+                history.Sequence == supersededSequence).IsGone);
+        }
+        var groupedHistory = consolidated.AlarmHistory.Single(history =>
+            history.Sequence == 10);
+        AreEqual(groupKey, groupedHistory.AlarmKey);
+        IsFalse(groupedHistory.IsGone);
+        IsTrue(groupedHistory.IsAcknowledged);
+        IsFalse(consolidated.AlarmHistory.Single(history =>
+            history.Sequence == 40).IsGone);
+
+        var firstGroupedMemoryCount = consolidated.AlarmMemories.Count;
+        var firstHistoryCount = consolidated.AlarmHistory.Count;
+        consolidated.Normalize();
+        grouped = consolidated.AlarmMemories.Single(memory =>
+            memory.OverrideId == overrideId);
+        AreEqual(firstGroupedMemoryCount, consolidated.AlarmMemories.Count);
+        AreEqual(firstHistoryCount, consolidated.AlarmHistory.Count);
+        AreEqual(groupKey, grouped.Key);
+        AreEqual(overrideId, grouped.SlotId);
+        AreEqual(overrideId, grouped.OccurrenceId);
+        AreEqual(10L, grouped.Sequence);
+        IsTrue(grouped.IsAcknowledged);
+        IsTrue(grouped.IsOperatorSilenced);
+        AreEqual(300L, grouped.OperatorSilencedAtGameTick);
+        AreEqual(3d, grouped.LastValue);
+
+        // A partially migrated save can contain one canonical aggregate plus
+        // a later legacy member. Preserve the aggregate's represented count.
+        var canonicalMemory = GroupedNormalizationMemory(
+            groupKey,
+            sequence: 31,
+            acknowledged: true,
+            entityId: 31);
+        canonicalMemory.SlotId = overrideId;
+        canonicalMemory.LastValue = 3d;
+        var mixedMigration = CreateGroupedNormalizationConfiguration(
+            canonicalMemory,
+            GroupedNormalizationMemory(
+                "vanilla:notification-32",
+                sequence: 32,
+                acknowledged: true,
+                entityId: 32));
+        mixedMigration.Normalize();
+        AreEqual(1, mixedMigration.AlarmMemories.Count);
+        AreEqual(4d, mixedMigration.AlarmMemories[0].LastValue);
+        mixedMigration.Normalize();
+        AreEqual(4d, mixedMigration.AlarmMemories[0].LastValue);
+
+        // A gone legacy occurrence is historical and must not reset the
+        // acknowledgement or operator silence of the still-active group.
+        var unresolved = CreateGroupedNormalizationConfiguration(
+            GroupedNormalizationMemory(
+                "vanilla:notification-41",
+                sequence: 41,
+                acknowledged: true,
+                operatorSilenced: true,
+                operatorSilencedAtGameTick: 410,
+                entityId: 41),
+            GroupedNormalizationMemory(
+                "vanilla:notification-42",
+                sequence: 42,
+                acknowledged: true,
+                operatorSilenced: true,
+                operatorSilencedAtGameTick: 420,
+                entityId: 42),
+            GroupedNormalizationMemory(
+                "vanilla:notification-43",
+                sequence: 43,
+                active: false,
+                goneUnacknowledged: true,
+                entityId: 43));
+        unresolved.Normalize();
+        var unresolvedGroup = unresolved.AlarmMemories.Single();
+        AreEqual(41L, unresolvedGroup.Sequence);
+        IsTrue(unresolvedGroup.IsActive);
+        IsTrue(unresolvedGroup.IsAcknowledged);
+        IsTrue(unresolvedGroup.IsOperatorSilenced);
+        AreEqual(420L, unresolvedGroup.OperatorSilencedAtGameTick);
+        AreEqual(2d, unresolvedGroup.LastValue);
+        IsTrue(unresolved.AlarmHistory.Single(history =>
+            history.Sequence == 41).IsAcknowledged);
+        IsTrue(unresolved.AlarmHistory.Single(history =>
+            history.Sequence == 42).IsGone);
+        IsTrue(unresolved.AlarmHistory.Single(history =>
+            history.Sequence == 43).IsGone);
+
+        // Acknowledgement can be group-wide while operator silence is not.
+        var partiallyOperatorSilenced =
+            CreateGroupedNormalizationConfiguration(
+                GroupedNormalizationMemory(
+                    "vanilla:notification-51",
+                    sequence: 51,
+                    acknowledged: true,
+                    operatorSilenced: true,
+                    operatorSilencedAtGameTick: 510,
+                    entityId: 51),
+                GroupedNormalizationMemory(
+                    "vanilla:notification-52",
+                    sequence: 52,
+                    acknowledged: true,
+                    operatorSilenced: false,
+                    entityId: 52));
+        partiallyOperatorSilenced.Normalize();
+        var partiallySilencedGroup =
+            partiallyOperatorSilenced.AlarmMemories.Single();
+        IsTrue(partiallySilencedGroup.IsAcknowledged);
+        IsFalse(partiallySilencedGroup.IsOperatorSilenced);
+        AreEqual(-1L, partiallySilencedGroup.OperatorSilencedAtGameTick);
+
+        // Group behavior is type-scoped during persistence cleanup. A global
+        // Ignored rule therefore wins over a legacy entity-level Normal
+        // exception, including history without a surviving memory.
+        var globallyIgnored = CreateGroupedNormalizationConfiguration(
+            GroupedNormalizationMemory(
+                "vanilla:notification-61",
+                sequence: 61,
+                entityId: 61),
+            new AlarmMemoryDefinition
+            {
+                Key = "vanilla:unrelated-62",
+                Source = "vanilla",
+                OverrideId = "vanilla:NotEnoughWorkers",
+                OccurrenceId = "vanilla:NotEnoughWorkers",
+                SlotId = "vanilla:NotEnoughWorkers:entity:62",
+                Sequence = 62,
+                IsActive = true,
+                EntityId = 62,
+            });
+        globallyIgnored.VanillaNotificationRules.AddRange(new[]
+        {
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.Entity,
+                EntityId = 61,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+        });
+        globallyIgnored.AlarmHistory.Add(new AlarmHistoryDefinition
+        {
+            Sequence = 63,
+            AlarmKey = "vanilla:old-group-history",
+            Source = "vanilla",
+            Detail = prototypeId + " · Old occurrence",
+        });
+        AreEqual(
+            VanillaNotificationBehavior.Normal,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                globallyIgnored.VanillaNotificationRules,
+                overrideId,
+                entityId: 61));
+        globallyIgnored.Normalize();
+        IsFalse(globallyIgnored.AlarmMemories.Any(memory =>
+            memory.OverrideId == overrideId));
+        IsFalse(globallyIgnored.AlarmHistory.Any(history =>
+            history.Detail.StartsWith(
+                prototypeId,
+                StringComparison.Ordinal)));
+        IsTrue(globallyIgnored.AlarmMemories.Any(memory =>
+            memory.OverrideId == "vanilla:NotEnoughWorkers"));
+        IsTrue(globallyIgnored.AlarmHistory.Any(history =>
+            history.Sequence == 62));
+
+        // Conversely, a global Normal group stays persisted even if the old
+        // representative entity had a more-specific Ignored exception.
+        var globallyNormal = CreateGroupedNormalizationConfiguration(
+            GroupedNormalizationMemory(
+                "vanilla:notification-71",
+                sequence: 71,
+                entityId: 71,
+                entityPrototypeId: "AirSeparatorT2"));
+        globallyNormal.VanillaNotificationRules.AddRange(new[]
+        {
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+            new VanillaNotificationRule
+            {
+                AlarmId = overrideId,
+                Scope = VanillaNotificationScope.EntityPrototype,
+                EntityPrototypeId = "AirSeparatorT2",
+                Behavior = VanillaNotificationBehavior.Ignored,
+            },
+        });
+        AreEqual(
+            VanillaNotificationBehavior.Ignored,
+            VanillaNotificationSuppressionPolicy.ResolveBehavior(
+                globallyNormal.VanillaNotificationRules,
+                overrideId,
+                entityId: 71,
+                entityPrototypeId: "AirSeparatorT2"));
+        globallyNormal.Normalize();
+        AreEqual(1, globallyNormal.AlarmMemories.Count);
+        AreEqual(groupKey, globallyNormal.AlarmMemories[0].Key);
+        AreEqual(overrideId, globallyNormal.AlarmMemories[0].SlotId);
+        AreEqual(1, globallyNormal.AlarmHistory.Count);
+        AreEqual(groupKey, globallyNormal.AlarmHistory[0].AlarmKey);
+    }
+
+    private static UnmaConfiguration
+        CreateGroupedNormalizationConfiguration(
+            params AlarmMemoryDefinition[] memories)
+    {
+        var configuration = UnmaConfiguration.CreateDefault();
+        configuration.AlarmMemories = (memories ??
+                Array.Empty<AlarmMemoryDefinition>())
+            .Where(memory => memory != null)
+            .ToList();
+        configuration.AlarmHistory = configuration.AlarmMemories
+            .Select(memory => new AlarmHistoryDefinition
+            {
+                Sequence = memory.Sequence,
+                AlarmKey = memory.Key,
+                Message = memory.Name,
+                Detail = memory.OverrideId ==
+                         GroupedVanillaNotificationPolicy.OverrideId
+                    ? GroupedVanillaNotificationPolicy.PrototypeId +
+                      " · Entity " + memory.EntityId
+                    : memory.OverrideId.StartsWith(
+                        "vanilla:",
+                        StringComparison.Ordinal)
+                        ? memory.OverrideId.Substring("vanilla:".Length) +
+                          " · Entity " + memory.EntityId
+                        : memory.Detail,
+                Source = memory.Source,
+                Severity = memory.Severity,
+                IsGone = !memory.IsActive,
+                IsAcknowledged = memory.IsAcknowledged,
+            })
+            .ToList();
+        configuration.VanillaNotificationRules.Clear();
+        return configuration;
+    }
+
+    private static AlarmMemoryDefinition GroupedNormalizationMemory(
+        string key,
+        long sequence,
+        bool active = true,
+        bool acknowledged = false,
+        bool goneUnacknowledged = false,
+        bool operatorSilenced = false,
+        long operatorSilencedAtGameTick = -1,
+        int entityId = -1,
+        string entityPrototypeId = "")
+    {
+        return new AlarmMemoryDefinition
+        {
+            Key = key,
+            Name = "NOT ENOUGH POWER",
+            Detail = GroupedVanillaNotificationPolicy.PrototypeId +
+                     " · Entity " + entityId,
+            Source = "vanilla",
+            OverrideId = GroupedVanillaNotificationPolicy.OverrideId,
+            OccurrenceId = GroupedVanillaNotificationPolicy.OverrideId,
+            SlotId = GroupedVanillaNotificationPolicy.OverrideId +
+                     ":entity:" + entityId,
+            Severity = AlarmSeverity.Critical,
+            IsActive = active,
+            IsAcknowledged = acknowledged,
+            IsGoneUnacknowledged = goneUnacknowledged,
+            IsOperatorSilenced = operatorSilenced,
+            OperatorSilencedAtGameTick = operatorSilencedAtGameTick,
+            Sequence = sequence,
+            EntityId = entityId,
+            EntityPrototypeId = entityPrototypeId,
+            EntityTitle = "Entity " + entityId,
+        };
+    }
+
     private static void TestVanillaNotificationSuppressionPolicy()
     {
         const string overrideId = "vanilla:NoRecipeSelected";
@@ -6950,6 +8059,8 @@ internal static class Program
                 Name = "AKTIV KQ",
                 IsActive = true,
                 IsAcknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 123,
                 Severity = AlarmSeverity.Critical,
                 Sequence = 20,
             },
@@ -6998,6 +8109,60 @@ internal static class Program
         AreEqual("dashboard:b", dashboard[2].SlotId);
         IsTrue(dashboard[2].IsActive);
         IsTrue(dashboard[2].IsAcknowledged);
+        IsTrue(dashboard[2].IsOperatorSilenced);
+        AreEqual(123L, dashboard[2].OperatorSilencedAtGameTick);
+
+        var allOperatorSilenced = new[]
+        {
+            new AlarmView
+            {
+                Key = "operator-silenced:one",
+                SlotId = "dashboard:operator-silenced",
+                Name = "OPERATOR SILENCED",
+                IsActive = true,
+                IsAcknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 100,
+                Sequence = 60,
+            },
+            new AlarmView
+            {
+                Key = "operator-silenced:two",
+                SlotId = "dashboard:operator-silenced",
+                Name = "OPERATOR SILENCED",
+                IsActive = true,
+                IsAcknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 200,
+                Sequence = 61,
+            },
+        };
+        var operatorSilencedProjection =
+            PanelSlotProjection.ProjectActive(allOperatorSilenced).Single();
+        IsTrue(operatorSilencedProjection.IsAcknowledged);
+        IsTrue(operatorSilencedProjection.IsOperatorSilenced);
+        AreEqual(
+            200L,
+            operatorSilencedProjection.OperatorSilencedAtGameTick);
+
+        allOperatorSilenced[0].IsOperatorSilenced = false;
+        allOperatorSilenced[0].OperatorSilencedAtGameTick = -1;
+        var mixedSilenceProjection =
+            PanelSlotProjection.ProjectActive(allOperatorSilenced).Single();
+        IsTrue(mixedSilenceProjection.IsAcknowledged);
+        IsFalse(mixedSilenceProjection.IsOperatorSilenced);
+        AreEqual(
+            -1L,
+            mixedSilenceProjection.OperatorSilencedAtGameTick);
+
+        allOperatorSilenced[0].IsAcknowledged = false;
+        var unacknowledgedSilenceProjection =
+            PanelSlotProjection.ProjectActive(allOperatorSilenced).Single();
+        IsFalse(unacknowledgedSilenceProjection.IsAcknowledged);
+        IsFalse(unacknowledgedSilenceProjection.IsOperatorSilenced);
+        AreEqual(
+            -1L,
+            unacknowledgedSilenceProjection.OperatorSilencedAtGameTick);
 
         var legacy = new AlarmView
         {
@@ -7101,6 +8266,8 @@ internal static class Program
                 SlotId = "vanilla:mixed:entity:1",
                 Name = "ALTES KG",
                 IsGoneUnacknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 99,
                 Sequence = 100,
             },
             new AlarmView
@@ -7119,12 +8286,16 @@ internal static class Program
         IsTrue(mixed.IsActive);
         IsFalse(mixed.IsGoneUnacknowledged);
         IsFalse(mixed.IsAcknowledged);
+        IsFalse(mixed.IsOperatorSilenced);
+        AreEqual(-1L, mixed.OperatorSilencedAtGameTick);
         AreEqual("AKTUELL STEHEND", mixed.Name);
 
         mixedCandidates[0].IsGoneUnacknowledged = false;
         mixed = PanelSlotProjection.Project(mixedSlot, mixedCandidates)[0];
         IsTrue(mixed.IsActive);
         IsTrue(mixed.IsAcknowledged);
+        IsFalse(mixed.IsOperatorSilenced);
+        AreEqual(-1L, mixed.OperatorSilencedAtGameTick);
 
         mixedCandidates[0].IsActive = true;
         mixedCandidates[0].Sequence = 102;
@@ -7132,6 +8303,8 @@ internal static class Program
         mixed = PanelSlotProjection.Project(mixedSlot, mixedCandidates)[0];
         IsTrue(mixed.IsActive);
         IsFalse(mixed.IsAcknowledged);
+        IsFalse(mixed.IsOperatorSilenced);
+        AreEqual(-1L, mixed.OperatorSilencedAtGameTick);
         AreEqual("NEUESTES KOMMT", mixed.Name);
 
         var legacyOne = PanelSlotProjection.LegacyVanillaSlotId(
@@ -7618,6 +8791,125 @@ internal static class Program
         AreEqual(
             "vanilla:Hidden",
             restored.Panels[1].ExcludedAlarmIds[0]);
+    }
+
+    private static void TestAlarmMemoryOperatorSilenceRoundTrip()
+    {
+        var configuration = UnmaConfiguration.CreateDefault();
+        configuration.AlarmMemories.Clear();
+        configuration.AlarmMemories.AddRange(new[]
+        {
+            new AlarmMemoryDefinition
+            {
+                Key = "operator-silenced-valid",
+                Source = "system",
+                IsActive = true,
+                IsAcknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 345,
+                Sequence = 1,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "operator-silenced-unacknowledged",
+                Source = "system",
+                IsActive = true,
+                IsAcknowledged = false,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 111,
+                Sequence = 2,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "operator-silenced-gone",
+                Source = "system",
+                IsAcknowledged = true,
+                IsGoneUnacknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = 222,
+                Sequence = 3,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "operator-silenced-invalid-tick",
+                Source = "system",
+                IsActive = true,
+                IsAcknowledged = true,
+                IsOperatorSilenced = true,
+                OperatorSilencedAtGameTick = -1,
+                Sequence = 4,
+            },
+            new AlarmMemoryDefinition
+            {
+                Key = "operator-silenced-stale-tick",
+                Source = "system",
+                IsActive = true,
+                IsAcknowledged = true,
+                IsOperatorSilenced = false,
+                OperatorSilencedAtGameTick = 444,
+                Sequence = 5,
+            },
+        });
+
+        var json = SerializeDataContractJson(configuration);
+        IsTrue(json.Contains(
+            "\"IsOperatorSilenced\":true",
+            StringComparison.Ordinal));
+        IsTrue(json.Contains(
+            "\"OperatorSilencedAtGameTick\":345",
+            StringComparison.Ordinal));
+
+        UnmaConfiguration restored;
+        using (var stream = new MemoryStream(
+                   System.Text.Encoding.UTF8.GetBytes(json)))
+        {
+            restored = (UnmaConfiguration)new DataContractJsonSerializer(
+                typeof(UnmaConfiguration)).ReadObject(stream);
+        }
+        restored.Normalize();
+
+        var valid = restored.AlarmMemories.Single(memory =>
+            memory.Key == "operator-silenced-valid");
+        IsTrue(valid.IsActive);
+        IsTrue(valid.IsAcknowledged);
+        IsTrue(valid.IsOperatorSilenced);
+        AreEqual(345L, valid.OperatorSilencedAtGameTick);
+
+        foreach (var invalidKey in new[]
+                 {
+                     "operator-silenced-unacknowledged",
+                     "operator-silenced-gone",
+                     "operator-silenced-invalid-tick",
+                     "operator-silenced-stale-tick",
+                 })
+        {
+            var invalid = restored.AlarmMemories.Single(memory =>
+                memory.Key == invalidKey);
+            IsFalse(invalid.IsOperatorSilenced);
+            AreEqual(-1L, invalid.OperatorSilencedAtGameTick);
+        }
+
+        const string legacyJson =
+            "{\"SchemaVersion\":20,\"AlarmMemories\":[{" +
+            "\"Key\":\"legacy-active-acknowledged\"," +
+            "\"Source\":\"system\",\"IsActive\":true," +
+            "\"IsAcknowledged\":true,\"Sequence\":9}]}";
+        UnmaConfiguration legacy;
+        using (var stream = new MemoryStream(
+                   System.Text.Encoding.UTF8.GetBytes(legacyJson)))
+        {
+            legacy = (UnmaConfiguration)new DataContractJsonSerializer(
+                typeof(UnmaConfiguration)).ReadObject(stream);
+        }
+        legacy.Normalize();
+        var legacyMemory = legacy.AlarmMemories.Single();
+        IsTrue(legacyMemory.IsActive);
+        IsTrue(legacyMemory.IsAcknowledged);
+        IsFalse(legacyMemory.IsOperatorSilenced);
+        AreEqual(-1L, legacyMemory.OperatorSilencedAtGameTick);
+        AreEqual(
+            UnmaConfiguration.CurrentSchemaVersion,
+            legacy.SchemaVersion);
     }
 
     private static void TestAlarmHistoryState()
@@ -8398,6 +9690,8 @@ internal static class Program
                 VanillaNotificationBehavior.Ignored,
             ["vanilla:TruckCannotDeliverMixedCargo"] =
                 VanillaNotificationBehavior.Ignored,
+            ["vanilla:NotEnoughFuelToRefuel"] =
+                VanillaNotificationBehavior.Ignored,
         };
         var profile = ConfigurationTransferPolicy
             .CreateRecommendedQuietProfile("0.10.3");
@@ -8419,7 +9713,7 @@ internal static class Program
         IsFalse(profile.Selection.Appearance);
         IsFalse(profile.Selection.SystemAlarms);
         IsFalse(profile.Selection.WindowLayout);
-        AreEqual(expectedBehaviors.Count, profile.NotificationRules.Count);
+        AreEqual(9, profile.NotificationRules.Count);
         IsTrue(expectedBehaviors.Keys.ToHashSet(StringComparer.Ordinal)
             .SetEquals(profile.NotificationRules.Select(rule => rule.AlarmId)));
         IsTrue(profile.NotificationRules.All(rule =>
@@ -8434,7 +9728,7 @@ internal static class Program
             profile.NotificationRules.Count(rule =>
                 rule.Behavior == VanillaNotificationBehavior.Silent));
         AreEqual(
-            2,
+            3,
             profile.NotificationRules.Count(rule =>
                 rule.Behavior == VanillaNotificationBehavior.Ignored));
         AreEqual(
@@ -8455,9 +9749,16 @@ internal static class Program
         AreEqual(0, profile.SystemAlarms.Count);
         IsTrue(profile.WindowLayout == null);
 
+        IsFalse(ConfigurationTransferPolicy
+            .TryRefreshPreviousRecommendedProfile(
+                profile,
+                "0.10.3",
+                out var unchangedCurrentProfile));
+        IsTrue(ReferenceEquals(profile, unchangedCurrentProfile));
+
         var legacyProfile = ConfigurationTransferPolicy.CloneProfile(profile);
         legacyProfile.Metadata.Name = "UNMA Recommended Silent";
-        legacyProfile.Metadata.SourceVersion = "0.10.2";
+        legacyProfile.Metadata.SourceVersion = "0.10.1";
         legacyProfile.Metadata.CreatedUtc = "legacy-created-utc";
         legacyProfile.NotificationRules.RemoveAll(rule =>
             rule.Behavior == VanillaNotificationBehavior.Ignored);
@@ -8483,7 +9784,7 @@ internal static class Program
             expectedBehaviors.Count,
             upgradedLegacyProfile.NotificationRules.Count);
         AreEqual(
-            2,
+            3,
             upgradedLegacyProfile.NotificationRules.Count(rule =>
                 rule.Behavior == VanillaNotificationBehavior.Ignored));
 
@@ -8491,31 +9792,68 @@ internal static class Program
             ConfigurationTransferPolicy.CloneProfile(profile);
         previousQuietProfile.Metadata.SourceVersion = "0.10.2";
         previousQuietProfile.Metadata.CreatedUtc = "quiet-created-utc";
+        previousQuietProfile.NotificationRules.RemoveAll(rule =>
+            rule.AlarmId == "vanilla:NotEnoughFuelToRefuel");
         foreach (var rule in previousQuietProfile.NotificationRules.Where(
                      rule => rule.Behavior ==
                          VanillaNotificationBehavior.Ignored))
         {
             rule.Behavior = VanillaNotificationBehavior.Hidden;
         }
+        previousQuietProfile.Selection.NotificationRuleIdentities =
+            previousQuietProfile.NotificationRules
+                .Select(ConfigurationTransferPolicy.RuleIdentity)
+                .ToList();
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 previousQuietProfile,
                 "0.10.3",
                 out var refreshedQuietProfile));
+        AreEqual(8, previousQuietProfile.NotificationRules.Count);
         AreEqual(
             2,
             previousQuietProfile.NotificationRules.Count(rule =>
                 rule.Behavior == VanillaNotificationBehavior.Hidden));
         AreEqual(
-            2,
+            3,
             refreshedQuietProfile.NotificationRules.Count(rule =>
                 rule.Behavior == VanillaNotificationBehavior.Ignored));
         AreEqual(
             "quiet-created-utc",
             refreshedQuietProfile.Metadata.CreatedUtc);
 
+        var previous103QuietProfile =
+            ConfigurationTransferPolicy.CloneProfile(profile);
+        previous103QuietProfile.Metadata.CreatedUtc = "0.10.3-created-utc";
+        previous103QuietProfile.NotificationRules.RemoveAll(rule =>
+            rule.AlarmId == "vanilla:NotEnoughFuelToRefuel");
+        previous103QuietProfile.Selection.NotificationRuleIdentities =
+            previous103QuietProfile.NotificationRules
+                .Select(ConfigurationTransferPolicy.RuleIdentity)
+                .ToList();
+        IsTrue(ConfigurationTransferPolicy
+            .TryRefreshPreviousRecommendedProfile(
+                previous103QuietProfile,
+                "0.10.3",
+                out var refreshed103QuietProfile));
+        AreEqual(8, previous103QuietProfile.NotificationRules.Count);
+        AreEqual(
+            2,
+            previous103QuietProfile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Ignored));
+        AreEqual(
+            expectedBehaviors.Count,
+            refreshed103QuietProfile.NotificationRules.Count);
+        AreEqual(
+            3,
+            refreshed103QuietProfile.NotificationRules.Count(rule =>
+                rule.Behavior == VanillaNotificationBehavior.Ignored));
+        AreEqual(
+            "0.10.3-created-utc",
+            refreshed103QuietProfile.Metadata.CreatedUtc);
+
         var customProfile = ConfigurationTransferPolicy.CloneProfile(
-            legacyProfile);
+            previous103QuietProfile);
         customProfile.Metadata.Name = "My quiet profile";
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
@@ -8525,7 +9863,7 @@ internal static class Program
         IsTrue(ReferenceEquals(customProfile, unchangedCustomProfile));
 
         var divergentQuietProfile =
-            ConfigurationTransferPolicy.CloneProfile(previousQuietProfile);
+            ConfigurationTransferPolicy.CloneProfile(previous103QuietProfile);
         divergentQuietProfile.NotificationRules.Single(rule =>
             rule.AlarmId == "vanilla:TruckCannotDeliver").Behavior =
                 VanillaNotificationBehavior.Silent;
@@ -8543,6 +9881,7 @@ internal static class Program
             "vanilla:VehicleGoalUnreachable",
             "vanilla:VehicleNoFuel",
             "vanilla:NotEnoughPower",
+            "vanilla:NotEnoughPowerForEntity",
             "vanilla:NotEnoughWorkers",
             "vanilla:LowFoodSupply",
             "vanilla:MachineIsBroken",
@@ -8575,6 +9914,18 @@ internal static class Program
                 Scope = VanillaNotificationScope.NotificationType,
                 Behavior = VanillaNotificationBehavior.Normal,
             },
+            new()
+            {
+                AlarmId = "vanilla:NotEnoughPower",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
+            new()
+            {
+                AlarmId = "vanilla:NotEnoughPowerForEntity",
+                Scope = VanillaNotificationScope.NotificationType,
+                Behavior = VanillaNotificationBehavior.Normal,
+            },
         };
         target.AlarmHistory.Add(new AlarmHistoryDefinition
         {
@@ -8582,7 +9933,7 @@ internal static class Program
         });
 
         var result = ConfigurationTransferPolicy.Merge(target, profile);
-        AreEqual(7, result.Preview.Added);
+        AreEqual(8, result.Preview.Added);
         AreEqual(1, result.Preview.Changed);
         AreEqual(0, result.Preview.Skipped);
         AreEqual(
@@ -8597,16 +9948,31 @@ internal static class Program
                 rule.AlarmId == "vanilla:UpgradeInProgress" &&
                 rule.Scope == VanillaNotificationScope.EntityPrototype)
                 .Behavior);
+        foreach (var protectedAlarmId in new[]
+                 {
+                     "vanilla:VehicleNoFuel",
+                     "vanilla:NotEnoughPower",
+                     "vanilla:NotEnoughPowerForEntity",
+                 })
+        {
+            AreEqual(
+                VanillaNotificationBehavior.Normal,
+                result.Configuration.VanillaNotificationRules.Single(rule =>
+                    rule.AlarmId == protectedAlarmId &&
+                    rule.Scope ==
+                        VanillaNotificationScope.NotificationType)
+                    .Behavior);
+        }
         AreEqual(
-            VanillaNotificationBehavior.Normal,
+            VanillaNotificationBehavior.Ignored,
             result.Configuration.VanillaNotificationRules.Single(rule =>
-                rule.AlarmId == "vanilla:VehicleNoFuel" &&
+                rule.AlarmId == "vanilla:TruckCannotDeliver" &&
                 rule.Scope == VanillaNotificationScope.NotificationType)
                 .Behavior);
         AreEqual(
             VanillaNotificationBehavior.Ignored,
             result.Configuration.VanillaNotificationRules.Single(rule =>
-                rule.AlarmId == "vanilla:TruckCannotDeliver" &&
+                rule.AlarmId == "vanilla:NotEnoughFuelToRefuel" &&
                 rule.Scope == VanillaNotificationScope.NotificationType)
                 .Behavior);
         AreEqual("preserved-history", result.Configuration.AlarmHistory[0].AlarmKey);

@@ -1,6 +1,7 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.10.3** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.3 with the current unreleased changes** and
+**Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -113,6 +114,33 @@ UNMA follows the behavior of a traditional industrial annunciator.
 
 Acknowledging an active alarm does not clear its active color. The color
 remains until the monitored condition returns to normal.
+It does silence that exact active occurrence: a highlighted `S` replaces the
+acknowledge button at the top right, and the state heading includes **SILENT**.
+A later occurrence of the same alarm type must be acknowledged again.
+
+`NotEnoughPowerForEntity` uses one dedicated group episode. When the first
+building loses power, the `0 → 1` transition raises exactly one occurrence.
+Additional affected buildings only update that same notification to `×N`;
+they produce no further sound, do not reset acknowledgement, and create no
+additional history entry. The group remains active while at least one building
+is affected. Only `1 → 0`, when the last underlying power notification clears,
+closes it. A later `0 → 1` starts a new audible occurrence that requires
+acknowledgement again.
+
+An `S` or **SILENT** marker on this group still means that the operator
+acknowledged the current episode. This operator state is separate from the
+configured **SILENT** behavior under **NOTIFICATION OPTIONS**, and additional
+buildings in the same episode do not reset it. After one full game month,
+exactly this operator state can appear in the silent monthly reminder;
+configured **SILENT** remains excluded.
+
+On the first day of every game month, UNMA checks this operator state. Active
+occurrences that have remained manually acknowledged for at least one full
+game month appear in a silent summary grouped by notification type (`×3`,
+`×5`, `×20000`). Notifications deliberately configured as **SILENT**,
+**HIDDEN**, or **IGNORED** under **NOTIFICATION OPTIONS**, and rules with no
+sound, are excluded. The popup itself creates no alarm audio or history entry
+and changes no alarm state.
 
 Completed `KGQ` history entries remain stored until you delete them. Only
 completed entries can be deleted. Deleting all completed events requires a
@@ -247,7 +275,8 @@ and opens the corresponding inspector.
 The **Q** button acknowledges only that visible slot. **PANEL ACK** acknowledges
 all unacknowledged states represented by the current panel, including every
 underlying event combined into an object slot. **MASTER ACK** remains the
-explicit global action.
+explicit global action. Each deliberate acknowledgement silences the affected
+active occurrence until it ends; `S` and **SILENT** keep that state visible.
 
 The **Z** button snoozes only that slot's alarm audio for one game month. Its
 badge changes to **AUDIO Z · 1 MONTH** and **R** resumes audio immediately.
@@ -467,6 +496,13 @@ notification-type rules. Completely ignoring a type
 also removes matching active and recent events that UNMA can still identify
 safely.
 
+The grouped `NotEnoughPowerForEntity` power notification is the deliberate
+exception: the complete group uses only its notification-type rule
+**NORMAL**, **SILENT**, **HIDDEN**, or **IGNORED**. Existing entity- and
+prototype-specific rules are not deleted, but remain dormant for this grouped
+type. One building therefore cannot retrigger the global power group or change
+its behavior during the same episode.
+
 These settings affect only UNMA. They do not disable or modify the original
 Captain of Industry notification.
 
@@ -570,12 +606,14 @@ is stored at:
 
 Only when this file is genuinely absent does UNMA create and persist the
 built-in **UNMA Recommended Quiet** profile. Exactly recognized, unchanged
-earlier built-ins – **UNMA Recommended Silent** with six Silent rules and the
-intermediate Quiet profile with two additional Hidden rules – are upgraded to
-the current Quiet profile in memory only; their seed files remain unchanged.
-Divergent and custom profiles are neither supplemented nor overwritten. The
-built-in profile is not imported into a save automatically: its preview must
-still be inspected and the import explicitly confirmed.
+earlier built-ins are upgraded to the current Quiet profile in memory only:
+**UNMA Recommended Silent** from 0.10.1 or 0.10.2 with six Silent rules, the
+intermediate 0.10.2 Quiet profile with those six Silent plus two Hidden rules,
+and the previous 0.10.1, 0.10.2, or 0.10.3 Quiet profile with six Silent plus
+two Ignored rules. Their seed files remain unchanged. Divergent and custom
+profiles are neither supplemented nor overwritten. The built-in profile is not
+imported into a save automatically: its preview must still be inspected and the
+import explicitly confirmed.
 
 The recommended profile sets only these global notification types to
 **SILENT** or **LOG · SOUND OFF**:
@@ -595,18 +633,27 @@ The profile additionally sets these notification types to **IGNORED** or
 **DO NOT LOG · IGNORE COMPLETELY**:
 
 - `TruckCannotDeliver`;
-- `TruckCannotDeliverMixedCargo`.
+- `TruckCannotDeliverMixedCargo`;
+- `NotEnoughFuelToRefuel`.
 
-CoI frequently withdraws and re-emits these vehicle notifications with a new,
-transient `NotificationId`. **IGNORED** discards each new UNMA event before
-`SetAlarm`, history creation, and persistence, preventing the flicker from
-continually increasing Incident Lens, history, and save-processing load. A
-confirmed import and configuration normalization remove matching active states
-and memories. They also remove older global history entries when no more
-specific non-ignored entity or prototype rule must preserve them. The original
-Captain of Industry notification remains visible and unchanged.
-`CannotDeliverFromMineTower`, `VehicleGoalUnreachable`, and `VehicleNoFuel` are
-deliberately excluded and remain normal and audible.
+CoI frequently withdraws and re-emits the two `TruckCannotDeliver`
+notifications with a new, transient `NotificationId`.
+`NotEnoughFuelToRefuel` is the global “Not enough fuel to refuel a vehicle”
+advisory. **IGNORED** discards each matching UNMA event before `SetAlarm`,
+history creation, and persistence, preventing flicker from continually
+increasing Incident Lens, history, and save-processing load. A confirmed import
+and configuration normalization remove matching active states and memories.
+They also remove older global history entries when no more-specific non-ignored
+entity or prototype rule must preserve them. More-specific exceptions always
+win over the global notification-type rule. The original Captain of Industry
+notification remains visible and unchanged. The recommended profile adds no
+rule for `VehicleNoFuel`, `NotEnoughPower`, or `NotEnoughPowerForEntity`; these
+important notifications remain normal and audible. In particular,
+`NotEnoughPowerForEntity` is neither Recommended Quiet nor **IGNORED**: its
+group episode prevents repetition spam without suppressing the important power
+alarm. Saved entity and prototype rules remain present but dormant for this
+grouped type. None of these recommendations takes effect before the preview
+has been inspected and the import explicitly confirmed.
 
 The following categories can be selected independently when saving and
 importing:

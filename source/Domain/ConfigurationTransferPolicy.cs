@@ -23,6 +23,14 @@ public static class ConfigurationTransferPolicy
     {
         "TruckCannotDeliver",
         "TruckCannotDeliverMixedCargo",
+        "NotEnoughFuelToRefuel",
+    };
+
+    private static readonly string[]
+        s_previousRecommendedIgnoredNotificationIds =
+    {
+        "TruckCannotDeliver",
+        "TruckCannotDeliverMixedCargo",
     };
 
     internal static bool ShouldInitializeRecommendedProfile(
@@ -102,10 +110,6 @@ public static class ConfigurationTransferPolicy
             profile.ProfileSchemaVersion !=
                 UnmaTransferProfile.CurrentProfileSchemaVersion ||
             profile.Metadata == null ||
-            !string.Equals(
-                profile.Metadata.SourceVersion,
-                "0.10.2",
-                StringComparison.Ordinal) ||
             profile.Metadata.SkippedItems != 0 ||
             (profile.Metadata.Diagnostics?.Count ?? 0) != 0 ||
             profile.Selection == null ||
@@ -134,9 +138,44 @@ public static class ConfigurationTransferPolicy
         {
             return false;
         }
-        var previousNoisyBehavior = isPreviousQuietName
-            ? VanillaNotificationBehavior.Hidden
-            : (VanillaNotificationBehavior?)null;
+
+        var sourceVersion = profile.Metadata.SourceVersion;
+        var isVersion101 = string.Equals(
+            sourceVersion,
+            "0.10.1",
+            StringComparison.Ordinal);
+        var isVersion102 = string.Equals(
+            sourceVersion,
+            "0.10.2",
+            StringComparison.Ordinal);
+        var isVersion103 = string.Equals(
+            sourceVersion,
+            "0.10.3",
+            StringComparison.Ordinal);
+        if (isLegacySilentName)
+        {
+            return (isVersion101 || isVersion102) &&
+                   MatchesPreviousRecommendedRules(profile, null);
+        }
+
+        if ((isVersion101 || isVersion102) &&
+            MatchesPreviousRecommendedRules(
+                profile,
+                VanillaNotificationBehavior.Hidden))
+        {
+            return true;
+        }
+
+        return (isVersion101 || isVersion102 || isVersion103) &&
+               MatchesPreviousRecommendedRules(
+                   profile,
+                   VanillaNotificationBehavior.Ignored);
+    }
+
+    private static bool MatchesPreviousRecommendedRules(
+        UnmaTransferProfile profile,
+        VanillaNotificationBehavior? previousNoisyBehavior)
+    {
         var rules = profile.NotificationRules ??
             new List<TransferNotificationRule>();
         var expectedBehaviors = new Dictionary<
@@ -150,7 +189,7 @@ public static class ConfigurationTransferPolicy
         if (previousNoisyBehavior.HasValue)
         {
             foreach (var notificationId in
-                     s_recommendedIgnoredNotificationIds)
+                     s_previousRecommendedIgnoredNotificationIds)
             {
                 expectedBehaviors["vanilla:" + notificationId] =
                     previousNoisyBehavior.Value;
