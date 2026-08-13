@@ -63,6 +63,8 @@
              Link="Ui\WindowResizeMath.cs" />
     <Compile Include="..\..\source\Ui\AlarmUiErgonomics.cs"
              Link="Ui\AlarmUiErgonomics.cs" />
+    <Compile Include="..\..\source\Ui\MetricPickerFilter.cs"
+             Link="Ui\MetricPickerFilter.cs" />
     <Compile Include="..\..\source\Api\ExternalApiModels.cs"
              Link="Api\ExternalApiModels.cs" />
     <Compile Include="..\..\source\Api\ExternalContractValidator.cs"

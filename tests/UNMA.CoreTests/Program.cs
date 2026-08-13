@@ -40,6 +40,7 @@ internal static class Program
         TestSystemMetricMath();
         TestGlobalRuleMetricPaths();
         TestWindowResizeMath();
+        TestMetricPickerFilter();
         TestPanelTopologyPolicy();
         TestAlarmAreaPolicy();
         TestAlarmIncidentPolicy();
@@ -3049,6 +3050,59 @@ internal static class Program
             long.MaxValue,
             long.MaxValue,
             isActive: true));
+    }
+
+    private static void TestMetricPickerFilter()
+    {
+        IsTrue(MetricPickerFilter.Matches(
+            "Power Generated Last Tick",
+            "$PowerGeneratedLastTick",
+            " generated "));
+        IsTrue(MetricPickerFilter.Matches(
+            "Productivity Counter History",
+            "$ProductivityCounterHistory.Yearly",
+            "counterhistory.year"));
+        IsTrue(MetricPickerFilter.Matches(
+            null,
+            "$stored.quantity",
+            "STORED.QUANTITY"));
+        IsTrue(MetricPickerFilter.Matches(
+            "Output Buffer Quantity",
+            null,
+            "output buffer"));
+        IsTrue(MetricPickerFilter.Matches(
+            null,
+            null,
+            "  "));
+        IsFalse(MetricPickerFilter.Matches(
+            "Destroyed",
+            "$destroyed",
+            "power"));
+
+        var repositoryRoot = FindRepositoryRoot();
+        var overlaySource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Ui",
+            "UnmaOverlayController.cs"));
+        var drawInstruments = ExtractSourceMethod(
+            overlaySource,
+            "private void DrawInstruments()");
+        IsTrue(drawInstruments.Contains(
+            "\"instrument-metric-search\"",
+            StringComparison.Ordinal));
+        IsTrue(drawInstruments.Contains(
+            "MetricPickerFilter.Matches(",
+            StringComparison.Ordinal));
+        var captureInstrumentEntity = ExtractSourceMethod(
+            overlaySource,
+            "private void CaptureInstrumentEntity()");
+        IsTrue(captureInstrumentEntity.Contains(
+            "m_instrumentMetricFilter = \"\";",
+            StringComparison.Ordinal));
+        IsTrue(captureInstrumentEntity.Contains(
+            "m_instrumentMetricScroll = Vector2.zero;",
+            StringComparison.Ordinal));
     }
 
     private static void TestComparableValues()

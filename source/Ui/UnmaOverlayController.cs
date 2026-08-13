@@ -223,6 +223,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_instrumentScroll;
     private Vector2 m_instrumentPanelTabsScroll;
     private Vector2 m_instrumentMetricScroll;
+    private string m_instrumentMetricFilter = "";
     private Vector2 m_instrumentTypePickerScroll;
     private IReadOnlyList<PanelSlotDefinition> m_panelSlotCandidates =
         Array.Empty<PanelSlotDefinition>();
@@ -2190,7 +2191,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             NativeGUILayout.Label(
                 UnmaText.Get("ui.instrument.metric", "METRIC"),
                 m_smallLabelStyle,
-                NativeGUILayout.Width(82f));
+                NativeGUILayout.Width(82f),
+                NativeGUILayout.ExpandWidth(false));
             var selectedMetric = m_instrumentDraftMetrics[
                 Math.Max(0, Math.Min(
                     m_instrumentDraftMetricIndex,
@@ -2207,6 +2209,47 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
             if (m_metricPickerOpen)
             {
+                NativeGUILayout.BeginHorizontal();
+                NativeGUILayout.Label(
+                    UnmaText.Get("ui.common.search", "Search"),
+                    m_smallLabelStyle,
+                    NativeGUILayout.Width(82f),
+                    NativeGUILayout.ExpandWidth(false));
+                var metricFilter = NativeGUILayout.TextField(
+                    m_instrumentMetricFilter,
+                    80,
+                    m_textFieldStyle,
+                    new NativeControlMetadata(
+                        "instrument-metric-search",
+                        UnmaText.Get("ui.common.search", "Search")),
+                    NativeGUILayout.ExpandWidth(true),
+                    NativeGUILayout.Height(28f));
+                if (!string.Equals(
+                        metricFilter,
+                        m_instrumentMetricFilter,
+                        StringComparison.Ordinal))
+                {
+                    m_instrumentMetricFilter = metricFilter;
+                    m_instrumentMetricScroll = Vector2.zero;
+                }
+                var clearMetricSearchTooltip = UnmaText.Get(
+                    "ui.common.clear",
+                    "Clear search");
+                if (NativeGUILayout.Button(
+                        "\u00D7",
+                        m_buttonStyle,
+                        new NativeControlMetadata(
+                            "instrument-metric-search-clear",
+                            clearMetricSearchTooltip),
+                        NativeGUILayout.Width(34f),
+                        NativeGUILayout.ExpandWidth(false),
+                        NativeGUILayout.Height(28f)))
+                {
+                    m_instrumentMetricFilter = "";
+                    m_instrumentMetricScroll = Vector2.zero;
+                }
+                NativeGUILayout.EndHorizontal();
+
                 m_instrumentMetricScroll = NativeGUILayout.BeginScrollView(
                     m_instrumentMetricScroll,
                     m_panelStyle,
@@ -2216,6 +2259,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
                      index++)
                 {
                     var metric = m_instrumentDraftMetrics[index];
+                    if (!MetricPickerFilter.Matches(
+                            metric.Label,
+                            metric.Path,
+                            m_instrumentMetricFilter))
+                    {
+                        continue;
+                    }
                     if (NativeGUILayout.Button(
                             metric.Label + "  [" + metric.Path + "]  " +
                             FormatMetricValue(metric),
@@ -2835,6 +2885,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
             metrics);
         m_instrumentDraftMetrics = metrics;
         m_instrumentDraftMetricIndex = 0;
+        m_instrumentMetricFilter = "";
+        m_instrumentMetricScroll = Vector2.zero;
         m_instrumentDraftSources.Clear();
         m_instrumentDraftSources.Add(new InstrumentSourceDefinition
         {
