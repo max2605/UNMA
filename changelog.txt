@@ -1,11 +1,12 @@
 Unreleased | 2026-08-13
-Operator silence reminders and notification grouping
+Silent-alarm tab and notification grouping
 * Acknowledgement actions now silence exactly the affected active occurrence and leave a persistent S / SILENT marker; a later occurrence is audible and requires acknowledgement again.
-* On each month start, a silent popup groups active occurrences that have remained operator-acknowledged for at least one full game month. Notification-option Silent/Hidden/Ignored choices and soundless rules are excluded.
-* NotEnoughPowerForEntity now forms one important group episode: 0 → 1 raises exactly one occurrence, additional affected buildings update only ×N without another sound, acknowledgement reset, or history entry, and only 1 → 0 closes the group. The next 0 → 1 starts a new occurrence. The group uses its notification-type Normal/Silent/Hidden/Ignored rule; saved entity and prototype rules remain present but dormant for this type. Operator S remains separate from configured Silent and becomes eligible for the silent reminder only after one full game month.
+* A dedicated SILENT ALARMS tab is refreshed silently at each month start with active occurrences that have remained operator-acknowledged for at least one full game month, grouped by notification type and count. Before the first refresh it shows a clear initial state and it never opens automatically. Notification-option Silent/Hidden/Ignored choices and soundless rules are excluded.
+* Hover tooltips fully explain the compact Q, S, Z, R, and ↗ slot actions: acknowledge, mark silent, snooze or resume audio, and open the associated game object.
+* NotEnoughPowerForEntity now forms one important group episode: 0 → 1 raises exactly one occurrence, additional affected buildings update only ×N without another sound, acknowledgement reset, or history entry, and only 1 → 0 closes the group. The next 0 → 1 starts a new occurrence. The group uses its notification-type Normal/Silent/Hidden/Ignored rule; saved entity and prototype rules remain present but dormant for this type. Operator S remains separate from configured Silent and can appear in the SILENT ALARMS tab only after one full game month.
 * UNMA Recommended Quiet now globally sets NotEnoughFuelToRefuel to Ignored. VehicleNoFuel, NotEnoughPower, and NotEnoughPowerForEntity deliberately receive no recommended rule and remain normal, audible, important notifications. Grouping reduces repeated power events without suppressing them; NotEnoughPowerForEntity is neither Recommended Quiet nor Ignored.
 * Exactly recognized, unchanged built-ins are refreshed in memory only: Recommended Silent 0.10.1/0.10.2 with six Silent rules, the intermediate 0.10.2 Quiet baseline with two additional Hidden rules, and the previous 0.10.1/0.10.2/0.10.3 Quiet baseline with two additional Ignored rules. Files, divergent profiles, and custom profiles remain untouched. The new rule takes effect only after an inspected preview and confirmed import, and the original CoI notification remains unchanged.
-* Passed 139,722 core assertions plus all Release, IL/reflection, localization, and rollback checks.
+* Passed 140,019 core assertions plus all Release, IL/reflection, localization, and rollback checks.
 
 v0.10.3 | 2026-08-12
 Input contrast and window dragging

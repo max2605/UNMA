@@ -2262,8 +2262,8 @@ public sealed class UnmaRuntime : IDisposable
     }
 
     /// <summary>
-    /// Takes the silent monthly summary queued on the first day of a game
-    /// month. The UI owns presentation; taking it never changes alarms,
+    /// Takes the latest monthly silent-alarm snapshot queued on the first day
+    /// of a game month. The UI owns presentation; taking it never changes alarms,
     /// history, acknowledgement, or audio state.
     /// </summary>
     public bool TryTakeOperatorSilenceReminder(
@@ -6385,9 +6385,9 @@ public sealed class UnmaRuntime : IDisposable
         lock (m_gate)
         {
             // Coalesce missed UI presentation into the newest monthly state.
-            m_pendingOperatorSilenceReminder = snapshot.AlarmCount > 0
-                ? snapshot
-                : null;
+            // Empty snapshots are significant: they clear an older non-empty
+            // report in the dedicated tab without opening the window.
+            m_pendingOperatorSilenceReminder = snapshot;
         }
     }
 

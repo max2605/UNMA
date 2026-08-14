@@ -5,10 +5,15 @@
 - Quittieraktionen schalten jetzt genau die betroffene aktive Alarmfolge still
   und kennzeichnen sie dauerhaft mit `S` und **LEISE**. Neue Alarmfolgen werden
   wieder normal hörbar und müssen erneut quittiert werden.
-- Am Monatsersten erscheint lautlos eine nach Meldungsart und Anzahl gruppierte
-  Erinnerung für aktive Alarmfolgen, die seit mindestens einem Spielmonat
-  durch eine Bedienerquittierung stillstehen. Bewusste `Silent`-/`Hidden`-/
-  `Ignored`-Konfigurationen und tonlose Regeln bleiben davon getrennt.
+- Der eigene Tab **STILLE ALARME** wird am Monatsersten lautlos mit aktiven
+  Alarmfolgen aktualisiert, die seit mindestens einem Spielmonat durch eine
+  Bedienerquittierung stillstehen, und gruppiert sie nach Meldungsart und
+  Anzahl. Vor dem ersten Monatswechsel zeigt er einen klaren Initialzustand und
+  öffnet sich nie automatisch. Bewusste `Silent`-/`Hidden`-/`Ignored`-
+  Konfigurationen und tonlose Regeln bleiben davon getrennt.
+- Hover-Tooltips erklären die kompakten Schlitzaktionen `Q`, `S`, `Z`, `R` und
+  `↗` vollständig: quittieren, still markieren, Ton pausieren oder fortsetzen
+  und das zugehörige Spielobjekt öffnen.
 - `NotEnoughPowerForEntity` bildet jetzt eine wichtige Gruppenepisode: `0 → 1`
   erzeugt genau ein Kommen, weitere betroffene Gebäude aktualisieren nur `×N`
   und setzen weder Ton, Quittierung noch Verlauf zurück. Erst `1 → 0` schließt
@@ -16,7 +21,7 @@
   gilt die Meldungstypregel `Normal`/`Silent`/`Hidden`/`Ignored`. Gespeicherte
   Entity- und Prototypregeln bleiben erhalten, ruhen für diesen Typ jedoch.
   Ein Bediener-`S` bleibt von konfiguriertem `Silent` getrennt und kann erst
-  nach einem vollen Spielmonat in der lautlosen Erinnerung erscheinen.
+  nach einem vollen Spielmonat im Tab **STILLE ALARME** erscheinen.
 - **UNMA Recommended Quiet** setzt jetzt zusätzlich die globale Meldungsart
   `NotEnoughFuelToRefuel` auf `IGNORED`. `VehicleNoFuel`, `NotEnoughPower` und
   `NotEnoughPowerForEntity` erhalten bewusst keine Regel und bleiben als
@@ -30,7 +35,7 @@
   Ignored-Regeln. Dateien, abweichende und benutzerdefinierte Profile bleiben
   unverändert. Die neue Regel wirkt erst nach geprüfter Vorschau und
   bestätigtem Import; die originale CoI-Meldung bleibt unverändert.
-- Release-Build, 139.722 Core-Assertions sowie sämtliche IL-/Reflection-,
+- Release-Build, 140.019 Core-Assertions sowie sämtliche IL-/Reflection-,
   Lokalisierungs- und Rollbackprüfungen wurden erfolgreich ausgeführt.
 
 ## 0.10.3 – 2026-08-12

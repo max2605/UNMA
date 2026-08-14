@@ -97,6 +97,7 @@ eight seconds; persistent errors can be closed with the **×** button.
 | **ANNUNCIATOR** | HOME, global panels, object panels, acknowledgement, and new alarm slots |
 | **INSTRUMENTS** | Live gauges, calculated values, paper recorders, and instrument alarms |
 | **HISTORY** | Completed and current alarm events |
+| **SILENT ALARMS** | Monthly snapshot of active occurrences that have remained operator-acknowledged and silent for at least one full game month |
 | **SYSTEM** | Built-in health, food, and worker monitoring |
 | **NOTIFICATION OPTIONS** | Per-notification sound, visibility, logging, and Vanilla behavior |
 | **OPTIONS** | Content scale, alarm colors, cross-save profile, sound rescan, and integration diagnostics |
@@ -131,16 +132,17 @@ An `S` or **SILENT** marker on this group still means that the operator
 acknowledged the current episode. This operator state is separate from the
 configured **SILENT** behavior under **NOTIFICATION OPTIONS**, and additional
 buildings in the same episode do not reset it. After one full game month,
-exactly this operator state can appear in the silent monthly reminder;
+exactly this operator state can appear in the **SILENT ALARMS** tab;
 configured **SILENT** remains excluded.
 
-On the first day of every game month, UNMA checks this operator state. Active
-occurrences that have remained manually acknowledged for at least one full
-game month appear in a silent summary grouped by notification type (`×3`,
-`×5`, `×20000`). Notifications deliberately configured as **SILENT**,
-**HIDDEN**, or **IGNORED** under **NOTIFICATION OPTIONS**, and rules with no
-sound, are excluded. The popup itself creates no alarm audio or history entry
-and changes no alarm state.
+On the first day of every game month, UNMA refreshes the **SILENT ALARMS** tab.
+Active occurrences that have remained manually acknowledged for at least one
+full game month appear there in a summary grouped by notification type (`×3`,
+`×5`, `×20000`). Before the first monthly refresh, the tab reports that its
+monthly report is not yet available. Notifications deliberately configured as
+**SILENT**, **HIDDEN**, or **IGNORED** under **NOTIFICATION OPTIONS**, and rules
+with no sound, are excluded. The tab never opens automatically, creates no
+alarm audio or history entry, and changes no alarm state.
 
 Completed `KGQ` history entries remain stored until you delete them. Only
 completed entries can be deleted. Deleting all completed events requires a
@@ -285,9 +287,9 @@ acknowledges, hides, clears, or removes an alarm from counters or history. A
 later occurrence receives a new sequence and is audible again.
 
 Custom alarm slots provide a visible **EDIT** action. Double-clicking continues
-to open the rule directly in the editor as a shortcut. Tooltips spell out the
-complete purpose of the object, acknowledge, audio-snooze, and audio-resume
-symbol actions.
+to open the rule directly in the editor as a shortcut. Hovering the compact
+**Q**, **S**, **Z**, **R**, or **↗** action shows a tooltip explaining exactly
+what that action acknowledges, marks silent, snoozes, resumes, or opens.
 
 ### Detached panels
 

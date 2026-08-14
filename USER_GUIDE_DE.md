@@ -111,6 +111,7 @@ sich mit der Taste **×** schließen.
 | **MELDETAFEL** | HOME, globale und objektbezogene Panels, Quittierung und neue Meldeschlitze |
 | **MESSPULT** | Live-Instrumente, berechnete Werte, Papierschreiber und Instrumentmeldungen |
 | **VERLAUF** | Aktuelle und abgeschlossene Meldungsereignisse |
+| **STILLE ALARME** | Monatliche Momentaufnahme aktiver Alarmfolgen, die seit mindestens einem vollen Spielmonat durch den Bediener quittiert und still sind |
 | **SYSTEM** | Eingebaute Überwachung für Gesundheit, Nahrung und Arbeiter |
 | **MELDUNGSOPTIONEN** | Ton, Sichtbarkeit, Protokollierung und Vanilla-Verhalten je Meldungsart |
 | **OPTIONEN** | Inhaltsskalierung, Alarmfarben, spielstandsübergreifendes Profil, Ton-Neueinlesen und Integrationsdiagnose |
@@ -147,16 +148,18 @@ Ein `S` beziehungsweise **LEISE** an dieser Gruppe ist weiterhin eine bewusste
 Bedienerquittierung der laufenden Episode. Dieser Bedienerzustand ist nicht die
 Konfiguration **SILENT** unter **MELDUNGSOPTIONEN** und wird durch weitere
 Gebäude in derselben Episode nicht zurückgesetzt. Nach einem vollen Spielmonat
-kann genau dieser Bedienerzustand in der lautlosen Monatserinnerung erscheinen;
+kann genau dieser Bedienerzustand im Tab **STILLE ALARME** erscheinen;
 konfiguriertes **SILENT** bleibt davon ausgeschlossen.
 
-Am ersten Tag jedes Spielmonats prüft UNMA diesen Bedienerzustand. Alarmfolgen,
-die seit mindestens einem vollen Spielmonat manuell quittiert und noch aktiv
-sind, erscheinen in einer lautlosen Zusammenfassung, nach Meldungsart gruppiert
-(`×3`, `×5`, `×20000`). Meldungen, die über **MELDUNGSOPTIONEN** bewusst auf
-**SILENT**, **HIDDEN** oder **IGNORED** stehen, und Regeln mit ausgeschaltetem
-Ton gehören nicht in diese Liste. Das Popup erzeugt selbst weder Alarmton noch
-Verlaufseintrag und ändert keinen Alarmzustand.
+Am ersten Tag jedes Spielmonats aktualisiert UNMA den Tab **STILLE ALARME**.
+Alarmfolgen, die seit mindestens einem vollen Spielmonat manuell quittiert und
+noch aktiv sind, erscheinen dort in einer nach Meldungsart gruppierten
+Zusammenfassung (`×3`, `×5`, `×20000`). Vor der ersten Monatsaktualisierung
+meldet der Tab, dass noch kein Monatsbericht verfügbar ist. Meldungen, die über
+**MELDUNGSOPTIONEN** bewusst auf **SILENT**, **HIDDEN** oder **IGNORED** stehen,
+und Regeln mit ausgeschaltetem Ton gehören nicht in diese Liste. Der Tab öffnet
+sich nie automatisch, erzeugt weder Alarmton noch Verlaufseintrag und ändert
+keinen Alarmzustand.
 
 Abgeschlossene `KGQ`-Einträge bleiben im Verlauf gespeichert, bis sie dort
 ausdrücklich gelöscht werden. Nur abgeschlossene Einträge können gelöscht
@@ -321,8 +324,9 @@ Sequenz und ist wieder hörbar.
 
 Eigene Meldeschlitze bieten eine sichtbare Aktion **BEARBEITEN**. Der bisherige
 Doppelklick öffnet die zugehörige Regel weiterhin als Schnellaktion direkt im
-Editor. Die Symbolaktionen zum Öffnen des Objekts, Quittieren sowie Pausieren
-oder Fortsetzen des Tons erklären ihre vollständige Funktion im Tooltip.
+Editor. Beim Hovern über die kompakten Aktionen **Q**, **S**, **Z**, **R** oder
+**↗** erklärt ein Tooltip genau, was die jeweilige Aktion quittiert, still
+markiert, pausiert, fortsetzt oder öffnet.
 
 ### Abgekoppelte Panels
 

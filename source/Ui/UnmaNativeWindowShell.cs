@@ -247,6 +247,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
     private const float MinimumWindowHeight = 520f;
     private const float HorizontalBodyInset = 44f;
     private const float VerticalChromeInset = 138f;
+    private const float NavigationGap = 6f;
     private const float MinimumBodyWidth =
         MinimumWindowWidth - HorizontalBodyInset;
     private const float MinimumBodyHeight =
@@ -638,7 +639,7 @@ internal sealed class UnmaNativeWindowShell : IDisposable
 
     private Row BuildNavigation()
     {
-        var row = new Row(6)
+        var row = new Row((int)NavigationGap)
             .Width(new Px(Mathf.Max(
                 1f,
                 m_windowWidth - HorizontalBodyInset)))
@@ -656,6 +657,10 @@ internal sealed class UnmaNativeWindowShell : IDisposable
             1,
             UnmaText.Get("tab.history", "VERLAUF"),
             102));
+        row.Add(CreateTabButton(
+            6,
+            UnmaText.Get("tab.silent_alarms", "STILLE ALARME"),
+            132));
         row.Add(CreateTabButton(
             2,
             UnmaText.Get("tab.system", "SYSTEM"),
@@ -999,8 +1004,17 @@ internal sealed class UnmaNativeWindowShell : IDisposable
 
     private void UpdateNavigationButtonWidths(float availableWidth)
     {
+        var totalBaseWidth = 0f;
+        foreach (var entry in m_navigationButtons)
+        {
+            totalBaseWidth += entry.BaseWidth;
+        }
+        var totalGapWidth = Math.Max(
+            0,
+            m_navigationButtons.Count - 1) * NavigationGap;
         var scale = Mathf.Clamp(
-            (availableWidth - 36f) / 842f,
+            (availableWidth - totalGapWidth) /
+            Mathf.Max(1f, totalBaseWidth),
             0.25f,
             1f);
         foreach (var entry in m_navigationButtons)

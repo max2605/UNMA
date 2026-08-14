@@ -13,11 +13,11 @@
     "alarm_tile.behavior_silent": "БЕЗ ЗВУКА",
     "alarm_tile.edit": "EDIT",
     "alarm_tile.edit_tooltip": "Edit this custom alarm.",
-    "alarm_tile.mark_operator_silent_tooltip": "Mark this already acknowledged occurrence as manually silent. After one game month it is eligible for monthly reminders; notification-setting exclusions still apply.",
+    "alarm_tile.mark_operator_silent_tooltip": "Mark this already acknowledged occurrence as manually silent. If it remains active for one full game month, it appears in the SILENT ALARMS tab; notification-setting exclusions still apply.",
     "alarm_tile.object": "ОБЪЕКТ",
     "alarm_tile.open_object_tooltip": "Open the associated game object.",
     "alarm_tile.operator_silent": "S",
-    "alarm_tile.operator_silent_tooltip": "Acknowledged and silent for this occurrence. After one game month it is eligible for the monthly reminder while active; notification-setting exclusions still apply.",
+    "alarm_tile.operator_silent_tooltip": "This occurrence is acknowledged and silent. If it remains active for one full game month, it appears in the SILENT ALARMS tab; notification-setting exclusions still apply.",
     "alarm_tile.type": "ТИП",
     "audio.muted_five_minutes": "Alarm audio muted for five minutes.",
     "auto.019d3710d0ee": "Порог не является допустимым числом.",
@@ -1076,5 +1076,7 @@
     "unit.quantity": "units",
     "unit.quantity_per_month": "units/month",
     "unit.workers": "workers",
-    "window.title": "UNMA · УНИВЕРСАЛЬНОЕ ТАБЛО АВАРИЙНОЙ СИГНАЛИЗАЦИИ"
+    "window.title": "UNMA · УНИВЕРСАЛЬНОЕ ТАБЛО АВАРИЙНОЙ СИГНАЛИЗАЦИИ",
+    "operator_silence.reminder.unavailable": "The monthly report is not yet available. It will be generated at the next game-month boundary.",
+    "tab.silent_alarms": "SILENT ALARMS"
 }

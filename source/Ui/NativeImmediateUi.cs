@@ -16,12 +16,24 @@ namespace UNMA.Ui;
 /// </summary>
 internal sealed class NativeUiSurface : IDisposable
 {
+    private const float TooltipEdgeInset = 4f;
+    private const float TooltipHorizontalOffset = 12f;
+    private const float TooltipVerticalOffset = 18f;
+    private const float TooltipMaxWidth = 360f;
+    private const float TooltipFontSize = 12f;
+    private const float TooltipHorizontalPadding = 8f;
+    private const float TooltipVerticalPadding = 5f;
+
     private readonly VisualElement m_contentRoot;
     private readonly VisualElement m_focusSink;
+    private readonly UiLabel m_tooltipLabel;
     private readonly NativeRenderContext m_context;
     private bool m_disposed;
     private bool m_rendering;
+    private bool m_tooltipVisible;
+    private VisualElement m_tooltipOwner;
     private float m_scale = 1f;
+    private Vector2 m_tooltipPointerPosition;
 
     public NativeUiSurface(string name = "UNMA.NativeUiSurface")
     {
@@ -65,11 +77,47 @@ internal sealed class NativeUiSurface : IDisposable
         m_focusSink.style.height = 1f;
         RootElement.Add(m_focusSink);
 
+        // Runtime UI Toolkit does not render VisualElement.tooltip by itself.
+        // Keep one non-picking overlay per surface and feed it from delegated
+        // pointer events so controls and their descendants need no callbacks.
+        m_tooltipLabel = new UiLabel
+        {
+            name = name + ".Tooltip",
+            pickingMode = PickingMode.Ignore,
+            focusable = false,
+        };
+        m_tooltipLabel.style.position = Position.Absolute;
+        m_tooltipLabel.style.display = DisplayStyle.None;
+        m_tooltipLabel.style.flexShrink = 1f;
+        m_tooltipLabel.style.whiteSpace = WhiteSpace.Normal;
+        m_tooltipLabel.style.unityTextAlign = TextAnchor.UpperLeft;
+        m_tooltipLabel.style.color = new StyleColor(
+            new Color32(244, 244, 244, 255));
+        m_tooltipLabel.style.backgroundColor = new StyleColor(
+            new Color32(24, 27, 32, 248));
+        var tooltipBorder = new StyleColor(
+            new Color32(130, 134, 142, 255));
+        m_tooltipLabel.style.borderLeftColor = tooltipBorder;
+        m_tooltipLabel.style.borderRightColor = tooltipBorder;
+        m_tooltipLabel.style.borderTopColor = tooltipBorder;
+        m_tooltipLabel.style.borderBottomColor = tooltipBorder;
+        RootElement.Add(m_tooltipLabel);
+
         m_context = new NativeRenderContext(this, m_contentRoot);
         RootElement.RegisterCallback<GeometryChangedEvent>(HandleGeometryChanged);
+        RootElement.RegisterCallback<PointerMoveEvent>(
+            HandleTooltipPointerMove,
+            TrickleDown.TrickleDown);
+        RootElement.RegisterCallback<PointerLeaveEvent>(
+            HandleTooltipPointerLeave);
+        RootElement.RegisterCallback<PointerDownEvent>(
+            HandleTooltipPointerDown,
+            TrickleDown.TrickleDown);
         RootElement.RegisterCallback<PointerUpEvent>(
             HandlePointerRelease,
             TrickleDown.TrickleDown);
+        m_tooltipLabel.RegisterCallback<GeometryChangedEvent>(
+            HandleTooltipGeometryChanged);
         ApplyScaleLayout();
     }
 
@@ -150,6 +198,7 @@ internal sealed class NativeUiSurface : IDisposable
                 if (passStarted)
                 {
                     m_context.CompletePass();
+                    RefreshTooltipAfterRender();
                 }
             }
             finally
@@ -188,13 +237,200 @@ internal sealed class NativeUiSurface : IDisposable
         }
 
         m_disposed = true;
+        HideTooltip();
         RootElement.UnregisterCallback<GeometryChangedEvent>(
             HandleGeometryChanged);
+        RootElement.UnregisterCallback<PointerMoveEvent>(
+            HandleTooltipPointerMove,
+            TrickleDown.TrickleDown);
+        RootElement.UnregisterCallback<PointerLeaveEvent>(
+            HandleTooltipPointerLeave);
+        RootElement.UnregisterCallback<PointerDownEvent>(
+            HandleTooltipPointerDown,
+            TrickleDown.TrickleDown);
         RootElement.UnregisterCallback<PointerUpEvent>(
             HandlePointerRelease,
             TrickleDown.TrickleDown);
+        m_tooltipLabel.UnregisterCallback<GeometryChangedEvent>(
+            HandleTooltipGeometryChanged);
         m_context.Dispose();
         RootElement.RemoveFromHierarchy();
+    }
+
+    private void HandleTooltipPointerMove(PointerMoveEvent evt)
+    {
+        if (m_disposed)
+        {
+            return;
+        }
+
+        var owner = FindTooltipOwner(evt.target as VisualElement);
+        if (owner == null)
+        {
+            HideTooltip();
+            return;
+        }
+
+        var tooltip = owner.tooltip;
+        m_tooltipPointerPosition = RootElement.WorldToLocal(
+            (Vector2)evt.position);
+        if (!string.Equals(
+                m_tooltipLabel.text,
+                tooltip,
+                StringComparison.Ordinal))
+        {
+            m_tooltipLabel.text = tooltip;
+        }
+
+        m_tooltipVisible = true;
+        m_tooltipOwner = owner;
+        m_tooltipLabel.style.display = DisplayStyle.Flex;
+        m_tooltipLabel.BringToFront();
+        PositionTooltip();
+    }
+
+    private void HandleTooltipPointerLeave(PointerLeaveEvent evt)
+    {
+        // PointerLeaveEvent can also be dispatched for descendants. Only the
+        // surface's own leave means that the pointer is no longer over UNMA.
+        if (ReferenceEquals(evt.target, RootElement))
+        {
+            HideTooltip();
+        }
+    }
+
+    private void HandleTooltipPointerDown(PointerDownEvent _)
+    {
+        HideTooltip();
+    }
+
+    private void HandleTooltipGeometryChanged(GeometryChangedEvent _)
+    {
+        if (m_tooltipVisible)
+        {
+            PositionTooltip();
+        }
+    }
+
+    private VisualElement FindTooltipOwner(VisualElement element)
+    {
+        for (var current = element;
+             current != null;
+             current = current.parent)
+        {
+            if (!string.IsNullOrWhiteSpace(current.tooltip))
+            {
+                return current;
+            }
+
+            if (current == RootElement)
+            {
+                break;
+            }
+        }
+
+        return null;
+    }
+
+    private void RefreshTooltipAfterRender()
+    {
+        if (!m_tooltipVisible)
+        {
+            return;
+        }
+
+        var owner = m_tooltipOwner;
+        var pointerWorld = RootElement.LocalToWorld(
+            m_tooltipPointerPosition);
+        if (owner == null ||
+            !IsWithinRoot(owner) ||
+            !owner.worldBound.Contains(pointerWorld) ||
+            string.IsNullOrWhiteSpace(owner.tooltip))
+        {
+            HideTooltip();
+            return;
+        }
+
+        if (!string.Equals(
+                m_tooltipLabel.text,
+                owner.tooltip,
+                StringComparison.Ordinal))
+        {
+            m_tooltipLabel.text = owner.tooltip;
+        }
+        PositionTooltip();
+    }
+
+    private void HideTooltip()
+    {
+        m_tooltipVisible = false;
+        m_tooltipOwner = null;
+        m_tooltipLabel.text = string.Empty;
+        m_tooltipLabel.style.display = DisplayStyle.None;
+    }
+
+    private void PositionTooltip()
+    {
+        var rootWidth = RootElement.contentRect.width;
+        var rootHeight = RootElement.contentRect.height;
+        if (!IsFinitePositive(rootWidth))
+        {
+            rootWidth = RootElement.resolvedStyle.width;
+        }
+        if (!IsFinitePositive(rootHeight))
+        {
+            rootHeight = RootElement.resolvedStyle.height;
+        }
+        if (!IsFinitePositive(rootWidth) || !IsFinitePositive(rootHeight))
+        {
+            return;
+        }
+
+        var scale = IsFinitePositive(m_scale) ? m_scale : 1f;
+        var edgeInset = TooltipEdgeInset * scale;
+        var availableWidth = Mathf.Max(
+            0f,
+            rootWidth - (edgeInset * 2f));
+        m_tooltipLabel.style.maxWidth = Mathf.Min(
+            TooltipMaxWidth * scale,
+            availableWidth);
+
+        var tooltipWidth = m_tooltipLabel.layout.width;
+        var tooltipHeight = m_tooltipLabel.layout.height;
+        if (!IsFinitePositive(tooltipWidth))
+        {
+            tooltipWidth = 0f;
+        }
+        if (!IsFinitePositive(tooltipHeight))
+        {
+            tooltipHeight = 0f;
+        }
+
+        var left = m_tooltipPointerPosition.x +
+                   TooltipHorizontalOffset * scale;
+        var top = m_tooltipPointerPosition.y +
+                  TooltipVerticalOffset * scale;
+        if (tooltipHeight > 0f &&
+            top + tooltipHeight > rootHeight - edgeInset)
+        {
+            top = m_tooltipPointerPosition.y -
+                tooltipHeight - edgeInset;
+        }
+
+        var maxLeft = Mathf.Max(
+            edgeInset,
+            rootWidth - tooltipWidth - edgeInset);
+        var maxTop = Mathf.Max(
+            edgeInset,
+            rootHeight - tooltipHeight - edgeInset);
+        m_tooltipLabel.style.left = Mathf.Clamp(
+            left,
+            edgeInset,
+            maxLeft);
+        m_tooltipLabel.style.top = Mathf.Clamp(
+            top,
+            edgeInset,
+            maxTop);
     }
 
     private void HandlePointerRelease(PointerUpEvent evt)
@@ -243,11 +479,28 @@ internal sealed class NativeUiSurface : IDisposable
     private void HandleGeometryChanged(GeometryChangedEvent _)
     {
         ApplyScaleLayout();
+        if (m_tooltipVisible)
+        {
+            PositionTooltip();
+        }
     }
 
     private void ApplyScaleLayout()
     {
         var scale = IsFinitePositive(m_scale) ? m_scale : 1f;
+        m_tooltipLabel.style.fontSize = TooltipFontSize * scale;
+        m_tooltipLabel.style.paddingLeft =
+            TooltipHorizontalPadding * scale;
+        m_tooltipLabel.style.paddingRight =
+            TooltipHorizontalPadding * scale;
+        m_tooltipLabel.style.paddingTop = TooltipVerticalPadding * scale;
+        m_tooltipLabel.style.paddingBottom = TooltipVerticalPadding * scale;
+        var borderWidth = Mathf.Max(1f, scale);
+        m_tooltipLabel.style.borderLeftWidth = borderWidth;
+        m_tooltipLabel.style.borderRightWidth = borderWidth;
+        m_tooltipLabel.style.borderTopWidth = borderWidth;
+        m_tooltipLabel.style.borderBottomWidth = borderWidth;
+        m_tooltipLabel.style.maxWidth = TooltipMaxWidth * scale;
         m_contentRoot.style.transformOrigin = new TransformOrigin(
             new Length(0f, LengthUnit.Pixel),
             new Length(0f, LengthUnit.Pixel));

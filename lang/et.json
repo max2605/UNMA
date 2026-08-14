@@ -1069,12 +1069,14 @@
     "ui.history.filter": "FILTER",
     "native.launcher_move": "Move UNMA launcher",
     "alarm_tile.operator_silent": "S",
-    "alarm_tile.operator_silent_tooltip": "Acknowledged and silent for this occurrence. After one game month it is eligible for the monthly reminder while active; notification-setting exclusions still apply.",
+    "alarm_tile.operator_silent_tooltip": "This occurrence is acknowledged and silent. If it remains active for one full game month, it appears in the SILENT ALARMS tab; notification-setting exclusions still apply.",
     "operator_silence.reminder.title": "ACKNOWLEDGED ALARMS STILL SILENT",
     "operator_silence.reminder.intro": "These active alarm occurrences were acknowledged in the alarm window at least one game month ago. They remain visible, but their alarm audio is silent.",
     "operator_silence.reminder.summary": "{0} active alarms in {1} groups",
     "operator_silence.reminder.dismiss": "DISMISS",
-    "alarm_tile.mark_operator_silent_tooltip": "Mark this already acknowledged occurrence as manually silent. After one game month it is eligible for monthly reminders; notification-setting exclusions still apply.",
+    "alarm_tile.mark_operator_silent_tooltip": "Mark this already acknowledged occurrence as manually silent. If it remains active for one full game month, it appears in the SILENT ALARMS tab; notification-setting exclusions still apply.",
     "board.no_acknowledgeable": "No alarms need acknowledgement or manual silence.",
-    "board.area_no_acknowledgeable": "No alarms in this area need acknowledgement or manual silence."
+    "board.area_no_acknowledgeable": "No alarms in this area need acknowledgement or manual silence.",
+    "operator_silence.reminder.unavailable": "The monthly report is not yet available. It will be generated at the next game-month boundary.",
+    "tab.silent_alarms": "SILENT ALARMS"
 }

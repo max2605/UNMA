@@ -59,6 +59,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private const int TabSounds = 3;
     private const int TabOptions = 4;
     private const int TabInstruments = 5;
+    private const int TabSilentAlarms = 6;
     // Leave a dedicated action strip below the tile detail. This keeps the
     // visible EDIT affordance from covering alarm information.
     private const float TileHeight = 142f;
@@ -539,7 +540,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 handledAttentionRequest = true;
             }
             if (!handledAttentionRequest &&
-                m_operatorSilenceReminder == null &&
                 m_runtime.TryTakeOperatorSilenceReminder(
                     out var silenceReminder))
             {
@@ -1133,12 +1133,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawSelectedMainTab()
     {
-        if (m_operatorSilenceReminder != null)
-        {
-            DrawOperatorSilenceReminder();
-            return;
-        }
-
         DrawStatusMessage();
         switch (m_tab)
         {
@@ -1157,6 +1151,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             case TabInstruments:
                 DrawInstruments();
                 break;
+            case TabSilentAlarms:
+                DrawOperatorSilenceReminder();
+                break;
             default:
                 DrawBoard();
                 break;
@@ -1166,11 +1163,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void DrawOperatorSilenceReminder()
     {
         var reminder = m_operatorSilenceReminder;
-        if (reminder == null)
-        {
-            return;
-        }
-
         NativeGUILayout.BeginVertical(m_panelStyle);
         NativeGUILayout.Label(
             UnmaText.Get(
@@ -1182,9 +1174,20 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.Label(
             UnmaText.Get(
                 "operator_silence.reminder.intro",
-                "These active alarm occurrences were acknowledged in the alarm window at least one game month ago. They remain visible, but their alarm audio is silent."),
+                "This tab is refreshed at the start of every game month with active alarm occurrences that have remained acknowledged and silent for at least one full game month."),
             m_labelStyle);
         NativeGUILayout.Space(6f);
+        if (reminder == null)
+        {
+            NativeGUILayout.Label(
+                UnmaText.Get(
+                    "operator_silence.reminder.unavailable",
+                    "The first monthly update is not available yet."),
+                m_smallLabelStyle);
+            NativeGUILayout.EndVertical();
+            return;
+        }
+
         NativeGUILayout.Label(
             UnmaText.Format(
                 "operator_silence.reminder.summary",
@@ -1210,18 +1213,6 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 NativeGUILayout.Height(30f));
         }
         NativeGUILayout.EndScrollView();
-
-        NativeGUILayout.Space(8f);
-        if (NativeGUILayout.Button(
-                UnmaText.Get(
-                    "operator_silence.reminder.dismiss",
-                    "DISMISS"),
-                m_primaryButtonStyle,
-                NativeGUILayout.Height(36f)))
-        {
-            m_operatorSilenceReminder = null;
-            m_operatorSilenceReminderScroll = Vector2.zero;
-        }
         NativeGUILayout.EndVertical();
     }
 
@@ -11857,18 +11848,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private void HandleOperatorSilenceReminder(
         OperatorSilenceReminderSnapshot reminder)
     {
-        if (reminder == null || reminder.AlarmCount <= 0)
+        if (reminder == null)
         {
             return;
         }
 
         m_operatorSilenceReminder = reminder;
         m_operatorSilenceReminderScroll = Vector2.zero;
-        m_isOpen = true;
-        m_clearGuiFocusPending = true;
-        SynchronizeNativeWindowVisibility();
-        m_nativeWindowShell?.BringToFront();
-        SynchronizeNativeLauncher();
     }
 
     private void DrawAlarmNavigationButton(
@@ -11957,7 +11943,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             var silentTooltip = UnmaText.Get(
                 "alarm_tile.operator_silent_tooltip",
-                "Acknowledged and silent for this occurrence. After one game month it is eligible for the monthly reminder while active; notification-setting exclusions still apply.");
+                "Acknowledged and silent for this occurrence. After one game month it appears in the monthly silent-alarm tab while active; notification-setting exclusions still apply.");
             if (NativeGUI.Button(
                     buttonRect,
                     new GUIContent(
@@ -11980,7 +11966,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             var markSilentTooltip = UnmaText.Get(
                 "alarm_tile.mark_operator_silent_tooltip",
-                "Mark this already acknowledged occurrence as manually silent. After one game month it is eligible for monthly reminders; notification-setting exclusions still apply.");
+                "Mark this already acknowledged occurrence as manually silent. After one game month it appears in the monthly silent-alarm tab while active; notification-setting exclusions still apply.");
             if (NativeGUI.Button(
                     buttonRect,
                     new GUIContent(

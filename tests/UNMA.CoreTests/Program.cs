@@ -426,8 +426,11 @@ internal static class Program
         var mainTab = ExtractSourceMethod(
             editorSource,
             "private void DrawSelectedMainTab()");
-        var silenceReminderGate = mainTab.IndexOf(
+        IsFalse(mainTab.Contains(
             "m_operatorSilenceReminder != null",
+            StringComparison.Ordinal));
+        var silenceReminderTab = mainTab.IndexOf(
+            "case TabSilentAlarms:",
             StringComparison.Ordinal);
         var silenceReminderDraw = mainTab.IndexOf(
             "DrawOperatorSilenceReminder();",
@@ -438,10 +441,12 @@ internal static class Program
         var mainSwitch = mainTab.IndexOf(
             "switch (m_tab)",
             StringComparison.Ordinal);
-        IsTrue(silenceReminderGate >= 0);
-        IsTrue(silenceReminderDraw > silenceReminderGate);
-        IsTrue(mainStatus > silenceReminderDraw);
+        IsTrue(silenceReminderTab >= 0);
+        IsTrue(silenceReminderDraw > silenceReminderTab);
         IsTrue(mainStatus >= 0 && mainStatus < mainSwitch);
+        IsTrue(editorSource.Contains(
+            "private const int TabSilentAlarms = 6;",
+            StringComparison.Ordinal));
         var detachedPanel = ExtractSourceMethod(
             editorSource,
             "private void DrawDetachedPanelContent(");
@@ -543,6 +548,9 @@ internal static class Program
         IsTrue(update.Contains(
             "HandleOperatorSilenceReminder(silenceReminder);",
             StringComparison.Ordinal));
+        IsFalse(update.Contains(
+            "m_operatorSilenceReminder == null",
+            StringComparison.Ordinal));
 
         var handleSilenceReminder = ExtractSourceMethod(
             editorSource,
@@ -550,8 +558,17 @@ internal static class Program
         IsTrue(handleSilenceReminder.Contains(
             "m_operatorSilenceReminder = reminder;",
             StringComparison.Ordinal));
-        IsTrue(handleSilenceReminder.Contains(
+        IsFalse(handleSilenceReminder.Contains(
+            "reminder.AlarmCount <= 0",
+            StringComparison.Ordinal));
+        IsFalse(handleSilenceReminder.Contains(
             "m_isOpen = true;",
+            StringComparison.Ordinal));
+        IsFalse(handleSilenceReminder.Contains(
+            "BringToFront()",
+            StringComparison.Ordinal));
+        IsFalse(handleSilenceReminder.Contains(
+            "SynchronizeNativeWindowVisibility()",
             StringComparison.Ordinal));
         IsFalse(handleSilenceReminder.Contains(
             "m_audio.",
@@ -567,10 +584,44 @@ internal static class Program
             "group.Count.ToString(",
             StringComparison.Ordinal));
         IsTrue(drawSilenceReminder.Contains(
+            "operator_silence.reminder.unavailable",
+            StringComparison.Ordinal));
+        IsFalse(drawSilenceReminder.Contains(
             "m_operatorSilenceReminder = null;",
             StringComparison.Ordinal));
         IsFalse(drawSilenceReminder.Contains(
+            "operator_silence.reminder.dismiss",
+            StringComparison.Ordinal));
+        IsFalse(drawSilenceReminder.Contains(
             "m_audio.",
+            StringComparison.Ordinal));
+
+        var windowShellSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "source",
+            "Ui",
+            "UnmaNativeWindowShell.cs"));
+        var mainNavigation = ExtractSourceMethod(
+            windowShellSource,
+            "private Row BuildNavigation()");
+        IsTrue(mainNavigation.Contains(
+            "tab.silent_alarms",
+            StringComparison.Ordinal));
+        IsTrue(Regex.IsMatch(
+            mainNavigation,
+            "CreateTabButton\\(\\s*6,",
+            RegexOptions.CultureInvariant));
+        var navigationWidths = ExtractSourceMethod(
+            windowShellSource,
+            "private void UpdateNavigationButtonWidths(float availableWidth)");
+        IsTrue(navigationWidths.Contains(
+            "m_navigationButtons.Count - 1",
+            StringComparison.Ordinal));
+        IsTrue(navigationWidths.Contains(
+            "totalBaseWidth += entry.BaseWidth;",
+            StringComparison.Ordinal));
+        IsFalse(navigationWidths.Contains(
+            "842f",
             StringComparison.Ordinal));
 
         var runtimeSource = File.ReadAllText(Path.Combine(
@@ -578,6 +629,15 @@ internal static class Program
             "source",
             "Runtime",
             "UnmaRuntime.cs"));
+        var onNewMonthStart = ExtractSourceMethod(
+            runtimeSource,
+            "private void OnNewMonthStart()");
+        IsTrue(onNewMonthStart.Contains(
+            "m_pendingOperatorSilenceReminder = snapshot;",
+            StringComparison.Ordinal));
+        IsFalse(onNewMonthStart.Contains(
+            "snapshot.AlarmCount > 0",
+            StringComparison.Ordinal));
         var getViews = ExtractSourceMethod(
             runtimeSource,
             "public IReadOnlyList<AlarmView> GetViews(PanelDefinition panel)");
@@ -757,6 +817,108 @@ internal static class Program
         IsTrue(immediateUiSource.Contains(
             "internal readonly struct NativeControlMetadata",
             StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "private readonly UiLabel m_tooltipLabel;",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "HandleTooltipPointerMove",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "HandleTooltipPointerLeave",
+            StringComparison.Ordinal));
+        IsTrue(immediateUiSource.Contains(
+            "HandleTooltipPointerDown",
+            StringComparison.Ordinal));
+        var findTooltip = ExtractSourceMethod(
+            immediateUiSource,
+            "private VisualElement FindTooltipOwner(VisualElement element)");
+        IsTrue(findTooltip.Contains(
+            "current = current.parent",
+            StringComparison.Ordinal));
+        IsTrue(findTooltip.Contains(
+            "current.tooltip",
+            StringComparison.Ordinal));
+        var refreshTooltip = ExtractSourceMethod(
+            immediateUiSource,
+            "private void RefreshTooltipAfterRender()");
+        IsTrue(refreshTooltip.Contains(
+            "!IsWithinRoot(owner)",
+            StringComparison.Ordinal));
+        IsTrue(refreshTooltip.Contains(
+            "!owner.worldBound.Contains(pointerWorld)",
+            StringComparison.Ordinal));
+        IsTrue(refreshTooltip.Contains(
+            "string.IsNullOrWhiteSpace(owner.tooltip)",
+            StringComparison.Ordinal));
+        var positionTooltip = ExtractSourceMethod(
+            immediateUiSource,
+            "private void PositionTooltip()");
+        IsTrue(positionTooltip.Contains(
+            "Mathf.Clamp(",
+            StringComparison.Ordinal));
+        IsTrue(positionTooltip.Contains(
+            "RootElement.contentRect",
+            StringComparison.Ordinal));
+        IsTrue(positionTooltip.Contains(
+            "TooltipMaxWidth * scale",
+            StringComparison.Ordinal));
+        var applyScaleLayout = ExtractSourceMethod(
+            immediateUiSource,
+            "private void ApplyScaleLayout()");
+        IsTrue(applyScaleLayout.Contains(
+            "TooltipFontSize * scale",
+            StringComparison.Ordinal));
+        IsTrue(applyScaleLayout.Contains(
+            "TooltipHorizontalPadding * scale",
+            StringComparison.Ordinal));
+        var disposeImmediateUi = ExtractSourceMethod(
+            immediateUiSource,
+            "public void Dispose()");
+        IsTrue(disposeImmediateUi.Contains(
+            "UnregisterCallback<PointerMoveEvent>",
+            StringComparison.Ordinal));
+        IsTrue(disposeImmediateUi.Contains(
+            "UnregisterCallback<PointerLeaveEvent>",
+            StringComparison.Ordinal));
+        IsTrue(disposeImmediateUi.Contains(
+            "UnregisterCallback<PointerDownEvent>",
+            StringComparison.Ordinal));
+
+        var navigationButton = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmNavigationButton(");
+        IsTrue(navigationButton.Contains(
+            "alarm_tile.open_object_tooltip",
+            StringComparison.Ordinal));
+        IsTrue(navigationButton.Contains(
+            "new GUIContent(",
+            StringComparison.Ordinal));
+        IsTrue(navigationButton.Contains(
+            "new NativeControlMetadata(",
+            StringComparison.Ordinal));
+        var audioButton = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmAudioSnoozeButton(");
+        IsTrue(audioButton.Contains(
+            "alarm_tile.audio_resume_tooltip",
+            StringComparison.Ordinal));
+        IsTrue(audioButton.Contains(
+            "alarm_tile.audio_snooze_tooltip",
+            StringComparison.Ordinal));
+        IsTrue(audioButton.Contains(
+            "new NativeControlMetadata(",
+            StringComparison.Ordinal));
+        foreach (var tooltipKey in new[]
+                 {
+                     "alarm_tile.acknowledge_tooltip",
+                     "alarm_tile.operator_silent_tooltip",
+                     "alarm_tile.mark_operator_silent_tooltip",
+                 })
+        {
+            IsTrue(alarmAcknowledgeButton.Contains(
+                tooltipKey,
+                StringComparison.Ordinal));
+        }
 
         var ensureStyles = ExtractSourceMethod(
             editorSource,
@@ -3422,6 +3584,15 @@ internal static class Program
         IsTrue(result.Groups is
             System.Collections.ObjectModel
                 .ReadOnlyCollection<OperatorSilenceReminderGroup>);
+
+        var emptyMonth = OperatorSilenceReminderPolicy.Build(
+            Array.Empty<OperatorSilenceReminderSample>(),
+            now,
+            month);
+        AreEqual(now, emptyMonth.CurrentGameTick);
+        AreEqual(month, emptyMonth.MinimumAgeTicks);
+        AreEqual(0, emptyMonth.GroupCount);
+        AreEqual(0, emptyMonth.AlarmCount);
 
         var reversed = OperatorSilenceReminderPolicy.Build(
             samples.Reverse(),

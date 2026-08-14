@@ -24,6 +24,7 @@
     "tab.system":  "SYSTEM",
     "tab.sounds":  "TÖNE",
     "tab.notification_options":  "MELDUNGSOPTIONEN",
+    "tab.silent_alarms":  "STILLE ALARME",
     "alarm_tile.object":  "OBJEKT",
     "alarm_tile.type":  "TYP",
     "alarm_tile.behavior_normal":  "AN",
@@ -818,10 +819,10 @@
     "board.no_acknowledgeable": "Kein Alarm muss quittiert oder manuell stillgeschaltet werden.",
     "board.next_alarm_selected": "Ausgewählt: {0}",
     "alarm_tile.acknowledge": "Q",
-    "alarm_tile.acknowledge_tooltip": "Diese Alarmfolge quittieren und stillschalten.",
+    "alarm_tile.acknowledge_tooltip": "Diese Alarmfolge quittieren und ihren Ton bis zum Ende der Folge stillschalten.",
     "alarm_tile.operator_silent": "S",
-    "alarm_tile.operator_silent_tooltip": "Für diese Alarmfolge quittiert und still. Nach einem Spielmonat kommt sie infrage, solange sie aktiv ist; Ausschlüsse der Meldungsoptionen gelten weiter.",
-    "alarm_tile.mark_operator_silent_tooltip": "Diese bereits quittierte Folge manuell still markieren. Nach einem Spielmonat kommt sie für Erinnerungen infrage; Ausschlüsse der Meldungsoptionen gelten weiter.",
+    "alarm_tile.operator_silent_tooltip": "Diese Alarmfolge ist quittiert und still. Bleibt sie einen vollen Spielmonat aktiv, erscheint sie im Tab STILLE ALARME; Ausschlüsse der Meldungsoptionen gelten weiter.",
+    "alarm_tile.mark_operator_silent_tooltip": "Diese bereits quittierte Folge manuell still markieren. Bleibt sie einen vollen Spielmonat aktiv, erscheint sie im Tab STILLE ALARME; Ausschlüsse der Meldungsoptionen gelten weiter.",
     "audio.muted_five_minutes": "Alarmton für fünf Minuten stummgeschaltet.",
     "keybind.group.operations": "Bedienung",
     "keybind.toggle_window.label": "UNMA öffnen oder schließen",
@@ -1074,7 +1075,8 @@
     "options.reduced_motion": "Reduzierte Bewegung",
     "options.reduced_motion_hint": "Verwendet eine ruhige, dauerhaft sichtbare Alarmmarkierung statt Blinken.",
     "operator_silence.reminder.title": "QUITTIERTE ALARME NOCH IMMER STILL",
-    "operator_silence.reminder.intro": "Diese aktiven Alarmfolgen wurden vor mindestens einem Spielmonat im Alarmfenster quittiert. Sie bleiben sichtbar, ihr Alarmton ist jedoch still.",
+    "operator_silence.reminder.intro": "Dieser Tab wird zu Beginn jedes Spielmonats aktualisiert. Er listet aktive Alarmfolgen, die vor mindestens einem vollen Spielmonat quittiert wurden; sie bleiben sichtbar, während ihr Alarmton still bleibt.",
     "operator_silence.reminder.summary": "{0} aktive Alarme in {1} Gruppen",
-    "operator_silence.reminder.dismiss": "SCHLIESSEN"
+    "operator_silence.reminder.dismiss": "SCHLIESSEN",
+    "operator_silence.reminder.unavailable": "Der Monatsbericht ist noch nicht verfügbar. Er wird beim nächsten Spielmonatswechsel erstellt."
 }
