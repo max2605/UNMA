@@ -628,7 +628,7 @@ internal static class Program
             repositoryRoot,
             "source",
             "Runtime",
-            "UnmaRuntime.cs"));
+            "UnmaRuntime.cs")).ReplaceLineEndings("\n");
         var onNewMonthStart = ExtractSourceMethod(
             runtimeSource,
             "private void OnNewMonthStart()");
