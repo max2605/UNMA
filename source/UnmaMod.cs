@@ -18,9 +18,11 @@ using Mafi.Logging;
 using Mafi.Unity;
 using Mafi.Unity.Audio;
 using Mafi.Unity.Camera;
+using Mafi.Unity.InputControl;
 using Mafi.Unity.Ui;
 using Mafi.Unity.UiToolkit;
 using UnityEngine;
+using UNMA.Domain;
 using UNMA.Localization;
 using UNMA.Extensions;
 using UNMA.Integration;
@@ -76,13 +78,42 @@ public sealed class UnmaMod : IMod
         var store = new UnmaStateStore(
             Manifest.RootDirectoryPath,
             gameId);
+        var transferProfilePath =
+            UnmaTransferProfileStore.ResolveStartupProfilePath(
+                JsonConfig.GetString("transferProfilePath", ""),
+                out var migratedLegacyProfile,
+                out var profilePathWarning);
+        if (!string.IsNullOrWhiteSpace(profilePathWarning))
+        {
+            Log.Warning("UNMA: " + profilePathWarning);
+        }
+        if (migratedLegacyProfile)
+        {
+            Log.Info(
+                "UNMA: copied legacy transfer profile to " +
+                transferProfilePath);
+        }
         var transferProfileStore = new UnmaTransferProfileStore(
-            System.IO.Path.Combine(
-                Environment.GetFolderPath(
-                    Environment.SpecialFolder.LocalApplicationData),
-                "UNMA",
-                "profiles",
-                "default.json"));
+            transferProfilePath);
+        var settings = ReadSettings();
+        Action requestGamePause = null;
+        if (resolver.TryResolve<GameSpeedController>(
+                out var gameSpeedController))
+        {
+            requestGamePause = () =>
+            {
+                if (!gameSpeedController.IsPaused)
+                {
+                    gameSpeedController.RequestPause();
+                }
+            };
+        }
+        else if (settings.EnableAutoPause)
+        {
+            Log.Warning(
+                "UNMA: automatic pause is enabled, but the game speed " +
+                "controller is unavailable.");
+        }
         m_runtime = new UnmaRuntime(
             resolver.Resolve<INotificationsManager>(),
             resolver.Resolve<IEntitiesManager>(),
@@ -95,9 +126,10 @@ public sealed class UnmaMod : IMod
             resolver.Resolve<ICalendar>(),
             resolver.Resolve<ISimLoopEvents>(),
             store,
-            ReadSettings(),
+            settings,
             DiscoverActiveExternalProviders(),
-            transferProfileStore);
+            transferProfileStore,
+            requestGamePause);
         m_runtime.Initialize();
 
         m_overlay = UnmaOverlayController.Create(
@@ -156,6 +188,29 @@ public sealed class UnmaMod : IMod
             EnableSystemAlarms = JsonConfig.GetBool(
                 "enableSystemAlarms",
                 true),
+            EnableAutoPause = JsonConfig.GetBool(
+                "autoPauseEnabled",
+                false),
+            AutoPauseMinimumSeverity =
+                AlarmAutoPausePolicy.NormalizeMinimumSeverity(
+                    (AlarmSeverity)JsonConfig.GetInt(
+                        "autoPauseMinimumSeverity",
+                        (int)AlarmSeverity.Critical)),
+            AutoPauseVanilla = JsonConfig.GetBool(
+                "autoPauseVanilla",
+                true),
+            AutoPauseSystem = JsonConfig.GetBool(
+                "autoPauseSystem",
+                true),
+            AutoPauseCustom = JsonConfig.GetBool(
+                "autoPauseCustom",
+                true),
+            AutoPauseExternal = JsonConfig.GetBool(
+                "autoPauseExternal",
+                true),
+            MuteAudioWhilePaused = JsonConfig.GetBool(
+                "muteAudioWhilePaused",
+                false),
         };
     }
 

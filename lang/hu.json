@@ -1067,5 +1067,8 @@
     "ui.editor.advanced.scope": "Timing and escalation",
     "ui.editor.advanced.title": "ADVANCED SETTINGS",
     "ui.history.filter": "FILTER",
-    "native.launcher_move": "Move UNMA launcher"
+    "native.launcher_move": "Move UNMA launcher",
+    "board.tile_density_compact": "KÁRTYÁK · KOMPAKT",
+    "board.tile_density_regular": "KÁRTYÁK · NORMÁL",
+    "board.audio_master_toggle_tooltip": "Elnémítja az összes UNMA riasztási és teszthangot erre a munkamenetre, amíg újra be nem kapcsolja."
 }

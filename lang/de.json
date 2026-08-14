@@ -1067,5 +1067,8 @@
     "options.transfer.sound_missing": "Ton '{0}' ist nicht verfügbar; UNMA verwendet den normalen Ersatz, bis der Ton installiert ist.",
     "options.color.invalid": "Gib eine gültige HTML-Farbe im Format #RRGGBB ein.",
     "options.reduced_motion": "Reduzierte Bewegung",
-    "options.reduced_motion_hint": "Verwendet eine ruhige, dauerhaft sichtbare Alarmmarkierung statt Blinken."
+    "options.reduced_motion_hint": "Verwendet eine ruhige, dauerhaft sichtbare Alarmmarkierung statt Blinken.",
+    "board.tile_density_compact": "KARTEN · KOMPAKT",
+    "board.tile_density_regular": "KARTEN · NORMAL",
+    "board.audio_master_toggle_tooltip": "Schaltet alle Alarm- und Testtöne von UNMA für diese Sitzung stumm, bis sie wieder eingeschaltet werden."
 }

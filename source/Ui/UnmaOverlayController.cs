@@ -62,6 +62,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     // Leave a dedicated action strip below the tile detail. This keeps the
     // visible EDIT affordance from covering alarm information.
     private const float TileHeight = 142f;
+    private const float CompactTileHeight = 104f;
     private const float HistoryRowHeight = 40f;
     private const int MaximumAlarmAreas = 64;
     private const int MaximumIncidentCards = 6;
@@ -202,6 +203,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private Vector2 m_metricPickerScroll;
     private Vector2 m_referenceMetricPickerScroll;
     private Vector2 m_soundOverrideScroll;
+    private readonly VanillaBehaviorCandidateCache
+        m_vanillaBehaviorCandidates = new();
     private Vector2 m_systemAlarmScroll;
     private Vector2 m_optionsScroll;
     private bool m_optionsColorDraftInitialized;
@@ -230,6 +233,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private float m_nextInstrumentRefresh;
     private bool m_isOpen;
     private bool m_incidentLensExpanded;
+    private bool m_compactAlarmTiles;
     private bool m_entityAlarmWindowOpen;
     private bool m_editorClosePromptOpen;
     private EditorWindowMode m_editorWindowMode;
@@ -363,6 +367,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private StatusSeverity m_statusSeverity;
     private bool m_statusPersistent;
     private AlarmView m_testAlarm;
+    private AlarmView m_currentAudibleAlarm;
     private float m_testAlarmUntil;
     private long m_historyCacheRevision = -1;
     private IReadOnlyList<AlarmHistoryDefinition> m_historyCache =
@@ -397,6 +402,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
     private GUIStyle m_historyStateStyle;
     private GUIStyle m_historyAlertTextStyle;
     private GUIStyle m_historyAlertStateStyle;
+
+    private float AlarmTileHeight =>
+        m_compactAlarmTiles ? CompactTileHeight : TileHeight;
+
+    private float AlarmTileActionSize =>
+        m_compactAlarmTiles ? 28f : 36f;
 
     public static UnmaOverlayController Create(
         UnmaRuntime runtime,
@@ -618,12 +629,18 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "Alarm audio muted for five minutes."));
         }
 
-        var audible = Time.realtimeSinceStartup < m_audioMutedUntil
+        var testSoundActive = m_testAlarm != null &&
+                              Time.realtimeSinceStartup < m_testAlarmUntil;
+        var mutedByPause = m_runtime.Settings.MuteAudioWhilePaused &&
+                           m_runtime.IsSimulationPaused;
+        var audible = m_audio.IsMuted ||
+                      mutedByPause ||
+                      Time.realtimeSinceStartup < m_audioMutedUntil
             ? null
-            : m_testAlarm != null &&
-                      Time.realtimeSinceStartup < m_testAlarmUntil
-            ? m_testAlarm
-            : m_runtime.GetAudibleAlarm();
+            : testSoundActive
+                ? m_testAlarm
+                : m_runtime.GetAudibleAlarm();
+        m_currentAudibleAlarm = testSoundActive ? null : audible;
         if (m_testAlarm != null &&
             Time.realtimeSinceStartup >= m_testAlarmUntil)
         {
@@ -1318,6 +1335,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             AcknowledgeAllAlarms();
         }
+        DrawGlobalAudioMuteButton(compactActions);
         if (NativeGUILayout.Button(
                 UnmaText.Get("auto.c70a06d3a782"),
                 m_buttonStyle,
@@ -1340,6 +1358,13 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             NativeGUILayout.EndScrollView();
         }
+
+        NativeGUILayout.BeginHorizontal();
+        DrawPanelColumnControls(panel, compactActions);
+        DrawAlarmTileDensityButton(compactActions);
+        NativeGUILayout.EndHorizontal();
+
+        DrawAudibleAlarmBanner();
 
         if (!m_entityAssignmentPending &&
             (!compactActions || m_windowRect.height >= 340f))
@@ -1372,6 +1397,212 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 : UnmaText.Get("auto.e8bad0a4452b"),
             !panel.IsDashboard);
         NativeGUILayout.EndScrollView();
+    }
+
+    private void DrawGlobalAudioMuteButton(bool compact)
+    {
+        var configured = m_runtime.Settings.EnableAudio;
+        var muted = m_audio.IsMuted;
+        var label = UnmaText.Get("tab.sounds", "SOUNDS") + " · " +
+                    UnmaText.Get(
+                        muted || !configured
+                            ? "ui.common.off"
+                            : "ui.common.on",
+                        muted || !configured ? "OFF" : "ON");
+        var previousEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = previousEnabled && configured;
+        if (NativeGUILayout.Button(
+                label,
+                muted || !configured
+                    ? m_dangerButtonStyle
+                    : m_primaryButtonStyle,
+                new NativeControlMetadata(
+                    "annunciator-global-audio-toggle",
+                    UnmaText.Get(
+                        "board.audio_master_toggle_tooltip",
+                        "Mutes all UNMA alarm and test audio for this " +
+                        "session until switched on again.")),
+                NativeGUILayout.Width(compact ? 128f : 145f),
+                NativeGUILayout.Height(34f)))
+        {
+            muted = !muted;
+            m_audio.SetMuted(muted);
+            if (muted)
+            {
+                m_currentAudibleAlarm = null;
+            }
+            else
+            {
+                m_audioMutedUntil = 0f;
+            }
+            SetStatus(
+                UnmaText.Get("tab.sounds", "SOUNDS") + " · " +
+                UnmaText.Get(
+                    muted ? "ui.common.off" : "ui.common.on",
+                    muted ? "OFF" : "ON"),
+                muted ? StatusSeverity.Warning : StatusSeverity.Success);
+        }
+        NativeGUI.enabled = previousEnabled;
+    }
+
+    private void DrawPanelColumnControls(
+        PanelDefinition panel,
+        bool compact)
+    {
+        if (panel == null)
+        {
+            return;
+        }
+
+        NativeGUILayout.Label(
+            UnmaText.Get("auto.7f6972b99a3e") + panel.Columns,
+            m_smallLabelStyle,
+            NativeGUILayout.Width(compact ? 72f : 86f),
+            NativeGUILayout.Height(34f));
+        var previousEnabled = NativeGUI.enabled;
+        NativeGUI.enabled = previousEnabled && panel.Columns > 1;
+        if (NativeGUILayout.Button(
+                "−",
+                m_buttonStyle,
+                new NativeControlMetadata("annunciator-columns-decrease"),
+                NativeGUILayout.Width(34f),
+                NativeGUILayout.Height(34f)))
+        {
+            SetPanelColumns(panel, panel.Columns - 1);
+        }
+        NativeGUI.enabled = previousEnabled && panel.Columns < 8;
+        if (NativeGUILayout.Button(
+                "+",
+                m_buttonStyle,
+                new NativeControlMetadata("annunciator-columns-increase"),
+                NativeGUILayout.Width(34f),
+                NativeGUILayout.Height(34f)))
+        {
+            SetPanelColumns(panel, panel.Columns + 1);
+        }
+        NativeGUI.enabled = previousEnabled;
+    }
+
+    private void SetPanelColumns(PanelDefinition panel, int columns)
+    {
+        if (panel == null)
+        {
+            return;
+        }
+        columns = Math.Max(1, Math.Min(8, columns));
+        if (columns == panel.Columns)
+        {
+            return;
+        }
+
+        var previousColumns = panel.Columns;
+        panel.Columns = columns;
+        if (m_runtime.SaveConfiguration())
+        {
+            m_boardScroll = Vector2.zero;
+            SetStatus(UnmaText.Get("auto.4bd5b213cd77"));
+            return;
+        }
+
+        panel.Columns = previousColumns;
+        SetStatus(
+            UnmaText.Get("auto.27f10f6dc69e") +
+            m_runtime.LastPersistenceError,
+            StatusSeverity.Error,
+            true);
+    }
+
+    private void DrawAlarmTileDensityButton(bool compact)
+    {
+        var label = UnmaText.Get(
+            m_compactAlarmTiles
+                ? "board.tile_density_compact"
+                : "board.tile_density_regular",
+            m_compactAlarmTiles
+                ? "CARDS · COMPACT"
+                : "CARDS · REGULAR");
+        if (NativeGUILayout.Button(
+                label,
+                m_compactAlarmTiles
+                    ? m_primaryButtonStyle
+                    : m_buttonStyle,
+                new NativeControlMetadata(
+                    "annunciator-tile-density",
+                    label),
+                NativeGUILayout.Width(compact ? 150f : 170f),
+                NativeGUILayout.Height(34f)))
+        {
+            m_compactAlarmTiles = !m_compactAlarmTiles;
+            m_boardScroll = Vector2.zero;
+        }
+    }
+
+    private void DrawAudibleAlarmBanner()
+    {
+        var audible = m_currentAudibleAlarm;
+        if (audible == null || !m_audio.IsPlayingAlarm(audible))
+        {
+            return;
+        }
+
+        var stableId = PanelSlotProjection.StableAlarmId(audible);
+        var text = UnmaText.Get("tab.sounds", "SOUNDS") + " · " +
+                   SeverityLabel(audible.Severity) + " · " +
+                   (audible.Name ??
+                    UnmaText.Get("ui.common.alarm", "ALARM")) + " · " +
+                   stableId;
+        if (NativeGUILayout.Button(
+                text,
+                audible.Severity >= AlarmSeverity.Critical
+                    ? m_dangerButtonStyle
+                    : m_primaryButtonStyle,
+                new NativeControlMetadata(
+                    "annunciator-audible-alarm",
+                    text),
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.Height(34f)))
+        {
+            FocusAudibleAlarm(audible);
+        }
+    }
+
+    private void FocusAudibleAlarm(AlarmView audible)
+    {
+        if (audible == null)
+        {
+            return;
+        }
+
+        m_alarmAreaFilter = AlarmAreaFilter.All;
+        var panel = GlobalPanels.FirstOrDefault(candidate =>
+                        candidate?.IsDashboard == true) ??
+                    CurrentPanel;
+        if (panel == null)
+        {
+            return;
+        }
+
+        SelectGlobalPanel(panel, true);
+        var stableId = PanelSlotProjection.StableAlarmId(audible);
+        var visible = GetBoardViews(panel);
+        var alarmIndex = visible.ToList().FindIndex(candidate =>
+            candidate != null &&
+            (m_audio.IsPlayingAlarm(candidate) || string.Equals(
+                PanelSlotProjection.StableAlarmId(candidate),
+                stableId,
+                StringComparison.Ordinal)));
+        if (alarmIndex >= 0)
+        {
+            var columns = Math.Max(1, Math.Min(8, panel.Columns));
+            m_boardScroll.y = Math.Max(
+                0f,
+                alarmIndex / columns * (AlarmTileHeight + 6f) - 12f);
+        }
+        m_lastNavigatedAlarmSlotId = stableId;
+        SetStatus(UnmaText.Format(
+            "board.next_alarm_selected",
+            "Selected: {0}",
+            audible.Name ?? UnmaText.Get("ui.common.alarm", "ALARM")));
     }
 
     private float DrawIncidentLens(
@@ -1696,7 +1927,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             var columns = Math.Max(1, Math.Min(8, dashboard.Columns));
             m_boardScroll.y = Math.Max(
                 0f,
-                alarmIndex / columns * (TileHeight + 6f) - 12f);
+                alarmIndex / columns * (AlarmTileHeight + 6f) - 12f);
         }
         if (m_runtime.TryResolveNavigationEntity(
                 dashboard,
@@ -8636,8 +8867,43 @@ public sealed class UnmaOverlayController : MonoBehaviour
             }
         }
         NativeGUILayout.EndHorizontal();
+        DrawSystemAlarmMetricSummary(alarm);
         NativeGUILayout.EndVertical();
         NativeGUILayout.Space(4f);
+    }
+
+    private void DrawSystemAlarmMetricSummary(SystemAlarmDefinition alarm)
+    {
+        const string pollutionMetricId = "health.pollution_penalty";
+        var pollutionStages = (alarm?.Stages ??
+                new List<SystemAlarmStageDefinition>())
+            .Where(stage => stage?.Conditions?.Any(condition =>
+                condition != null && string.Equals(
+                    condition.MetricId,
+                    pollutionMetricId,
+                    StringComparison.Ordinal)) == true)
+            .ToArray();
+        if (pollutionStages.Length == 0)
+        {
+            return;
+        }
+
+        var pollutionMetric = SystemMetricCatalog.All.FirstOrDefault(metric =>
+            string.Equals(
+                metric.Id,
+                pollutionMetricId,
+                StringComparison.Ordinal));
+        var stageMessages = pollutionStages
+            .Select(stage => stage.Message?.Trim() ?? "")
+            .Where(message => message.Length > 0)
+            .Distinct(StringComparer.CurrentCultureIgnoreCase);
+        NativeGUILayout.Label(
+            alarm.DisplayName + " · " +
+            (pollutionMetric?.Label ?? pollutionMetricId) + " · " +
+            string.Join(" · ", stageMessages),
+            m_warningBannerStyle,
+            NativeGUILayout.ExpandWidth(true),
+            NativeGUILayout.MinHeight(28f));
     }
 
     private void DrawSystemAlarmDraft()
@@ -9285,6 +9551,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
 
     private void DrawSoundOverrides()
     {
+        NativeGUILayout.BeginHorizontal();
+        DrawGlobalAudioMuteButton(false);
+        NativeGUILayout.EndHorizontal();
         NativeGUILayout.Label(
             UnmaText.Get(
                 "sounds.override.title",
@@ -9318,7 +9587,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         NativeGUILayout.EndHorizontal();
 
         var sounds = m_audio.GetSoundOptions();
-        var candidates = m_runtime.GetSoundOverrideCandidates()
+        var candidates = m_vanillaBehaviorCandidates
+            .Merge(m_runtime.GetSoundOverrideCandidates())
             .Where(MatchesSoundOverrideFilter)
             .ToArray();
 
@@ -9500,7 +9770,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
             scope,
             candidate.EntityId,
             candidate.EntityPrototypeId);
-        NativeGUILayout.BeginHorizontal();
+        var scopeIdentity = VanillaNotificationSuppressionPolicy.RuleIdentity(
+            new VanillaNotificationRule
+            {
+                AlarmId = candidate.OverrideId,
+                Scope = scope,
+                EntityId = candidate.EntityId,
+                EntityPrototypeId = candidate.EntityPrototypeId,
+            });
+        NativeGUILayout.BeginHorizontal(
+            "vanilla-behavior-row:" + scopeIdentity);
         NativeGUILayout.Label(
             scopeLabel,
             m_smallLabelStyle,
@@ -9514,9 +9793,15 @@ public sealed class UnmaOverlayController : MonoBehaviour
                     : behavior == VanillaNotificationBehavior.Silent
                         ? m_buttonStyle
                         : m_primaryButtonStyle,
+                new NativeControlMetadata(
+                    "vanilla-behavior-button:" + scopeIdentity,
+                    scopeLabel),
                 NativeGUILayout.Width(245f),
                 NativeGUILayout.Height(30f)))
         {
+            m_vanillaBehaviorCandidates.RememberInteraction(
+                candidate,
+                scope);
             SaveVanillaNotificationBehavior(
                 candidate,
                 scope,
@@ -10214,16 +10499,22 @@ public sealed class UnmaOverlayController : MonoBehaviour
         string hintKey,
         string fallbackHint)
     {
-        var updated = NativeGUILayout.Toggle(
-            enabled,
-            UnmaText.Get(labelKey, fallbackLabel));
-        if (updated != enabled)
+        var label = UnmaText.Get(labelKey, fallbackLabel);
+        var hint = UnmaText.Get(hintKey, fallbackHint);
+        if (NativeGUILayout.Button(
+                (enabled ? "[X] " : "[ ] ") + label,
+                enabled ? m_primaryButtonStyle : m_buttonStyle,
+                new NativeControlMetadata(
+                    "transfer-category-" + labelKey,
+                    hint),
+                NativeGUILayout.ExpandWidth(true),
+                NativeGUILayout.Height(30f)))
         {
-            enabled = updated;
+            enabled = !enabled;
             InvalidateTransferPreview();
         }
         NativeGUILayout.Label(
-            UnmaText.Get(hintKey, fallbackHint),
+            hint,
             m_smallLabelStyle,
             NativeGUILayout.ExpandWidth(true));
     }
@@ -10391,11 +10682,21 @@ public sealed class UnmaOverlayController : MonoBehaviour
                                 m_transferNotificationBehaviors;
             var selected = m_transferSelectedRuleIdentities.Contains(
                 row.Identity);
-            var updated = NativeGUILayout.Toggle(
-                selected,
-                string.IsNullOrWhiteSpace(rule.AlarmId)
-                    ? row.Identity
-                    : rule.AlarmId);
+            var label = string.IsNullOrWhiteSpace(rule.AlarmId)
+                ? row.Identity
+                : rule.AlarmId;
+            var updated = selected;
+            if (NativeGUILayout.Button(
+                    (selected ? "[X] " : "[ ] ") + label,
+                    selected ? m_primaryButtonStyle : m_buttonStyle,
+                    new NativeControlMetadata(
+                        "transfer-rule-selection-" + row.Identity,
+                        label),
+                    NativeGUILayout.ExpandWidth(true),
+                    NativeGUILayout.Height(30f)))
+            {
+                updated = !selected;
+            }
             NativeGUI.enabled = previousEnabled;
             if (updated != selected)
             {
@@ -10907,7 +11208,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         detached.Scroll = NativeGUILayout.BeginScrollView(detached.Scroll);
         DrawAlarmGrid(
             alarms,
-            Math.Max(1, Math.Min(panel.Columns, 5)),
+            Math.Max(1, Math.Min(panel.Columns, 8)),
             detached.Rect.width - 54f,
             detached.Scroll.y,
             Math.Max(180f, detached.Rect.height - 100f),
@@ -10951,9 +11252,11 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
-        var tileWidth = Math.Max(140f, (availableWidth -
+        var minimumTileWidth = m_compactAlarmTiles ? 112f : 140f;
+        var tileWidth = Math.Max(minimumTileWidth, (availableWidth -
             (columns - 1) * 6f) / columns);
-        var rowHeight = TileHeight + 6f;
+        var tileHeight = AlarmTileHeight;
+        var rowHeight = tileHeight + 6f;
         var rowCount = (itemCount + columns - 1) / columns;
         var firstVisibleRow = Math.Max(
             0,
@@ -11001,9 +11304,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 var index = rowStart + column;
                 var rect = NativeGUILayoutUtility.GetRect(
                     tileWidth,
-                    TileHeight,
+                    tileHeight,
                     NativeGUILayout.Width(tileWidth),
-                    NativeGUILayout.Height(TileHeight));
+                    NativeGUILayout.Height(tileHeight));
                 if (index < alarms.Count)
                 {
                     var alarm = alarms[index];
@@ -11044,14 +11347,16 @@ public sealed class UnmaOverlayController : MonoBehaviour
                             ? new Rect(
                                 rect.x,
                                 rect.y,
-                                rect.width - 35f,
+                                rect.width -
+                                (m_compactAlarmTiles ? 27f : 35f),
                                 rect.height)
                             : rect;
                         if (hasEntityVanillaControls)
                         {
                             tileClickRect.height = Math.Max(
                                 0f,
-                                tileClickRect.height - 31f);
+                                tileClickRect.height -
+                                (m_compactAlarmTiles ? 25f : 31f));
                         }
                         var customAlarm =
                             PanelSlotProjection.TryGetCustomRuleId(
@@ -11236,6 +11541,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
         PanelDefinition displayPanel,
         bool isAudioSnoozed)
     {
+        var isSounding = m_audio?.IsPlayingAlarm(alarm) == true;
         var customRule = TryGetCustomRule(alarm);
         var inactive = customRule?.Enabled == false;
         var background = CoiUiPalette.Text;
@@ -11247,7 +11553,8 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             var active = ParseColor(alarm.ActiveColor, Color.yellow);
             var blinkOn = m_runtime.Configuration.ReducedMotion ||
-                          !alarm.RequiresAcknowledgement ||
+                          !alarm.IsActive ||
+                          alarm.IsAcknowledged ||
                           Mathf.FloorToInt(Time.realtimeSinceStartup * 2.2f) %
                           2 == 0;
             background = blinkOn
@@ -11259,7 +11566,9 @@ public sealed class UnmaOverlayController : MonoBehaviour
             background = new Color(0.76f, 0.70f, 0.60f, 1f);
         }
 
-        DrawPanelRect(rect, Color.black);
+        DrawPanelRect(
+            rect,
+            isSounding ? CoiUiPalette.Blue : Color.black);
         var inner = new Rect(
             rect.x + 4f,
             rect.y + 4f,
@@ -11300,33 +11609,42 @@ public sealed class UnmaOverlayController : MonoBehaviour
                 "alarm_tile.audio_snoozed_badge",
                 "Z · 1M") + " · " + badge;
         }
-        var acknowledgementInset = alarm.RequiresAcknowledgement ? 32f : 0f;
+        if (isSounding)
+        {
+            badge = UnmaText.Get("tab.sounds", "SOUNDS") + " · " + badge;
+        }
+        var actionInset = alarm.RequiresAcknowledgement
+            ? m_compactAlarmTiles ? 26f : 32f
+            : 0f;
         NativeGUI.Label(
             new Rect(
                 inner.x + 7f,
                 inner.y + 5f,
-                inner.width - 14f - acknowledgementInset,
+                inner.width - 14f - actionInset,
                 18f),
             badge + " · " + SeverityLabel(alarm.Severity),
             detailStyle);
         NativeGUI.Label(
             new Rect(
                 inner.x + 7f,
-                inner.y + 24f,
-                inner.width - 14f - acknowledgementInset,
-                48f),
+                inner.y + (m_compactAlarmTiles ? 22f : 24f),
+                inner.width - 14f - actionInset,
+                m_compactAlarmTiles ? 38f : 48f),
             (alarm.Name ?? UnmaText.Get(
                 "ui.common.alarm",
                 "ALARM")).ToUpperInvariant(),
             titleStyle);
-        NativeGUI.Label(
-            new Rect(
-                inner.x + 7f,
-                inner.y + 72f,
-                inner.width - 14f,
-                IsEntityVanillaTile(displayPanel, alarm) ? 13f : 25f),
-            alarm.Detail ?? "",
-            detailStyle);
+        if (!m_compactAlarmTiles)
+        {
+            NativeGUI.Label(
+                new Rect(
+                    inner.x + 7f,
+                    inner.y + 72f,
+                    inner.width - 14f,
+                    IsEntityVanillaTile(displayPanel, alarm) ? 13f : 25f),
+                alarm.Detail ?? "",
+                detailStyle);
+        }
         DrawEntityVanillaBehaviorButtons(inner, alarm, displayPanel);
     }
 
@@ -11583,7 +11901,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             var columns = Math.Max(1, Math.Min(8, panel.Columns));
             m_boardScroll.y = Math.Max(
                 0f,
-                alarmIndex / columns * (TileHeight + 6f) - 12f);
+                alarmIndex / columns * (AlarmTileHeight + 6f) - 12f);
         }
 
         if (m_runtime.TryResolveNavigationEntity(
@@ -11678,7 +11996,7 @@ public sealed class UnmaOverlayController : MonoBehaviour
             var columns = Math.Max(1, Math.Min(8, panel.Columns));
             m_boardScroll.y = Math.Max(
                 0f,
-                alarmIndex / columns * (TileHeight + 6f) - 12f);
+                alarmIndex / columns * (AlarmTileHeight + 6f) - 12f);
         }
         else
         {
@@ -11710,11 +12028,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var size = AlarmTileActionSize;
         var buttonRect = new Rect(
-            tileRect.xMax - 40f,
-            tileRect.yMax - 40f,
-            36f,
-            36f);
+            tileRect.xMax - size - 4f,
+            tileRect.yMax - size - 4f,
+            size,
+            size);
         if (NativeGUI.Button(
                 buttonRect,
                 new GUIContent(
@@ -11740,11 +12059,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
         {
             return;
         }
+        var height = m_compactAlarmTiles ? 24f : 30f;
         var buttonRect = new Rect(
             tileRect.x + 4f,
-            tileRect.yMax - 34f,
+            tileRect.yMax - height - 4f,
             Math.Max(76f, tileRect.width - 48f),
-            30f);
+            height);
         if (NativeGUI.Button(
                 buttonRect,
                 new GUIContent(
@@ -11774,11 +12094,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var size = AlarmTileActionSize;
         var buttonRect = new Rect(
-            tileRect.xMax - 40f,
+            tileRect.xMax - size - 4f,
             tileRect.y + 4f,
-            36f,
-            36f);
+            size,
+            size);
         if (!NativeGUI.Button(
                 buttonRect,
                 new GUIContent(
@@ -11824,11 +12145,12 @@ public sealed class UnmaOverlayController : MonoBehaviour
             return;
         }
 
+        var size = AlarmTileActionSize;
         var buttonRect = new Rect(
-            tileRect.xMax - 40f,
-            tileRect.y + (tileRect.height - 36f) * 0.5f,
-            36f,
-            36f);
+            tileRect.xMax - size - 4f,
+            tileRect.y + (tileRect.height - size) * 0.5f,
+            size,
+            size);
         if (!NativeGUI.Button(
                 buttonRect,
                 new GUIContent(
@@ -11978,16 +12300,27 @@ public sealed class UnmaOverlayController : MonoBehaviour
             rect.height - 8f);
         DrawPanelRect(inner, CoiUiPalette.Symbol);
         NativeGUI.Label(
-            new Rect(inner.x + 7f, inner.y + 17f, inner.width - 14f, 52f),
+            new Rect(
+                inner.x + 7f,
+                inner.y + (m_compactAlarmTiles ? 8f : 17f),
+                inner.width - 14f,
+                m_compactAlarmTiles ? 44f : 52f),
             UnmaText.Get("auto.1cc8d34d4b3e"),
             m_tileTitleStyle);
-        NativeGUI.Label(
-            new Rect(inner.x + 7f, inner.y + 73f, inner.width - 14f, 25f),
-            m_assignmentEntity == null
-                ? UnmaText.Get("auto.7c06a5edce22")
-                : UnmaText.Get("auto.36a818f7f3f3") +
-                  m_assignmentEntity.Title.ToUpperInvariant(),
-            m_tileDetailStyle);
+        if (!m_compactAlarmTiles)
+        {
+            NativeGUI.Label(
+                new Rect(
+                    inner.x + 7f,
+                    inner.y + 73f,
+                    inner.width - 14f,
+                    25f),
+                m_assignmentEntity == null
+                    ? UnmaText.Get("auto.7c06a5edce22")
+                    : UnmaText.Get("auto.36a818f7f3f3") +
+                      m_assignmentEntity.Title.ToUpperInvariant(),
+                m_tileDetailStyle);
+        }
         if (NativeGUI.Button(
                 rect,
                 GUIContent.none,

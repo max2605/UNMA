@@ -1,6 +1,6 @@
 UNMA – Universal Notification and Monitoring Annunciator
 
-Version: 0.10.3
+Version: 0.10.5
 Captain of Industry: 0.8.6c
 Required dependency: MultiLangLib 0.1.0 or newer
 Optional dependency: Keybind Framework 2.0.2 or newer
@@ -16,11 +16,12 @@ Installation
 UNMA can be added to and removed from existing saves. World-specific settings
 are stored separately and are not included in this release archive.
 
-Version 0.10.3 improves input contrast and restores reliable title-bar
-dragging. Every editable text, search, color, numeric, and timing field now
-uses a dark-green background with bold white text. Main, editor, and detached
-windows follow the pointer smoothly and retain their settled position, while
-viewport clamping still responds to real resolution and UI-scale changes.
+Version 0.10.5 adds session-wide audio muting, identifies the alarm that is
+actually sounding, and keeps cleared alarms silent. HOME now sorts stably by
+severity and alarm ID, with direct column controls and compact cards. Optional
+severity- and source-based auto-pause, paused-game audio muting, clearer profile
+selection, roaming profile storage with safe legacy migration, and explicit
+pollution-alarm guidance complete this feedback-driven release.
 
 Documentation: README.md, USER_GUIDE_EN.md, USER_GUIDE_DE.md
 Source and issues: https://github.com/max2605/UNMA

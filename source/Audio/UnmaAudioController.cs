@@ -51,13 +51,30 @@ public sealed class UnmaAudioController : MonoBehaviour
     private AudioSource m_source;
     private string m_soundsDirectory = "";
     private string m_requestedSoundId = "";
+    private string m_requestedAlarmKey = "";
+    private long m_requestedAlarmSequence;
     private string m_playingSoundId = "";
+    private string m_playingAlarmKey = "";
+    private long m_playingAlarmSequence;
     private bool m_playingDefaultFallback;
     private AlarmSeverity m_playingFallbackSeverity;
     private string m_loadingSoundId = "";
     private Coroutine m_loadingCoroutine;
+    private bool m_isMuted;
 
     public string SoundsDirectory => m_soundsDirectory;
+    public bool IsMuted => m_isMuted;
+    public string PlayingAlarmKey =>
+        IsAlarmOccurrencePlaying ? m_playingAlarmKey : "";
+    public long PlayingAlarmSequence =>
+        IsAlarmOccurrencePlaying ? m_playingAlarmSequence : 0L;
+
+    private bool IsAlarmOccurrencePlaying =>
+        !m_isMuted &&
+        m_source != null &&
+        m_source.isPlaying &&
+        !string.IsNullOrWhiteSpace(m_playingAlarmKey) &&
+        m_playingAlarmSequence > 0;
 
     public void Configure(string modRoot, AudioDb audioDb)
     {
@@ -81,6 +98,32 @@ public sealed class UnmaAudioController : MonoBehaviour
     public IReadOnlyList<SoundOption> GetSoundOptions()
     {
         return m_soundOptions;
+    }
+
+    /// <summary>
+    /// Hard master gate for every UNMA sound, including sound previews. The
+    /// selected alarm resumes on the next update after the gate is released.
+    /// </summary>
+    public void SetMuted(bool muted)
+    {
+        if (m_isMuted == muted)
+        {
+            return;
+        }
+        m_isMuted = muted;
+        if (muted)
+        {
+            StopAlarm();
+        }
+    }
+
+    public bool IsPlayingAlarm(AlarmView alarm)
+    {
+        return IsAlarmOccurrencePlaying &&
+               AlarmAudioPlaybackPolicy.IsSameOccurrence(
+                   alarm,
+                   m_playingAlarmKey,
+                   m_playingAlarmSequence);
     }
 
     public void RefreshSoundOptions()
@@ -156,6 +199,11 @@ public sealed class UnmaAudioController : MonoBehaviour
 
     public void UpdateAlarm(AlarmView alarm, int volumePercent)
     {
+        if (m_isMuted)
+        {
+            StopAlarm();
+            return;
+        }
         m_source.volume = Mathf.Clamp01(volumePercent / 100f);
         if (alarm == null)
         {
@@ -171,6 +219,8 @@ public sealed class UnmaAudioController : MonoBehaviour
         }
 
         m_requestedSoundId = soundId;
+        m_requestedAlarmKey = alarm.Key ?? "";
+        m_requestedAlarmSequence = alarm.Sequence;
         if (string.Equals(
                 m_playingSoundId,
                 soundId,
@@ -179,6 +229,7 @@ public sealed class UnmaAudioController : MonoBehaviour
              m_playingFallbackSeverity == alarm.Severity) &&
             m_source.isPlaying)
         {
+            SetPlayingAlarmIdentityFromRequest();
             return;
         }
 
@@ -225,6 +276,8 @@ public sealed class UnmaAudioController : MonoBehaviour
     public void StopAlarm()
     {
         m_requestedSoundId = "";
+        m_requestedAlarmKey = "";
+        m_requestedAlarmSequence = 0L;
         if (m_loadingCoroutine != null)
         {
             StopCoroutine(m_loadingCoroutine);
@@ -237,6 +290,8 @@ public sealed class UnmaAudioController : MonoBehaviour
     private void StopPlayback()
     {
         m_playingSoundId = "";
+        m_playingAlarmKey = "";
+        m_playingAlarmSequence = 0L;
         m_playingDefaultFallback = false;
         if (m_source != null)
         {
@@ -391,7 +446,14 @@ public sealed class UnmaAudioController : MonoBehaviour
         m_source.loop = true;
         m_source.Play();
         m_playingSoundId = soundId;
+        SetPlayingAlarmIdentityFromRequest();
         m_playingDefaultFallback = false;
+    }
+
+    private void SetPlayingAlarmIdentityFromRequest()
+    {
+        m_playingAlarmKey = m_requestedAlarmKey;
+        m_playingAlarmSequence = m_requestedAlarmSequence;
     }
 
     private void PlayDefaultFallback(

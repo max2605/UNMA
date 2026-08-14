@@ -1,6 +1,6 @@
 # UNMA Benutzeranleitung
 
-Diese Anleitung gilt für **UNMA 0.10.3** und
+Diese Anleitung gilt für **UNMA 0.10.5** und
 **Captain of Industry 0.8.6c**.
 
 UNMA – die Universelle Nachrichten-Meldeanlage – ergänzt Captain of Industry
@@ -121,9 +121,9 @@ UNMA arbeitet wie eine klassische industrielle Meldeanlage.
 
 | Kürzel | Zustand | Anzeigeverhalten |
 | --- | --- | --- |
-| `K` | Meldung ist gekommen und nicht quittiert | Aktivfarbe; blinkt ohne „Reduzierte Bewegung“, wiederholt den Ton |
+| `K` | Meldung ist gekommen und nicht quittiert | Aktivfarbe; blinkt ohne „Reduzierte Bewegung“ und kann den Ton wiederholen |
 | `KQ` | Meldung ist gekommen und quittiert | Bleibt aktiv stehen, ohne den Ton zu wiederholen |
-| `KG` | Ursache ist gegangen, Meldung aber nicht quittiert | Ruhige kontrastreiche Verlaufsmarkierung bis zur Quittierung |
+| `KG` | Ursache ist gegangen, Meldung aber nicht quittiert | Ruhige kontrastreiche Verlaufsmarkierung bis zur Quittierung; tönt nach dem Gehen nicht weiter |
 | `KGQ` | Ursache ist gegangen und Meldung quittiert | Abgeschlossenes Verlaufsereignis |
 
 Das Quittieren einer aktiven Meldung beseitigt ihre Aktivfarbe nicht. Die Farbe
@@ -153,6 +153,10 @@ oder löscht keinen Verlaufseintrag.
 HOME ist unter **ALLE** die Live-Übersicht aller aktuell anstehenden Meldungen.
 Angezeigt werden `K` und `KQ` aus allen Quellen. HOME besitzt keine festen
 Schlitze; inaktive, gegangene und leere Plätze werden ausgeblendet.
+
+HOME ordnet die Karten nach Alarmstufe von Notfall bis Hinweis und danach nach
+der stabilen Alarmkennung. Quittierung, ein weiteres Vorkommen oder der reine
+Zeitablauf lassen sonst unveränderte Karten deshalb nicht mehr umherspringen.
 
 ### Betriebsbereiche
 
@@ -251,6 +255,10 @@ Provider- und eigene Meldungen.
   Panel anlegen.
 - Über das benachbarte Zahnrad Name, Spaltenzahl, Filter, automatische Quellen
   und Schlitzreihenfolge ändern.
+- Mit **SPALTEN −/+** direkt auf der Tafel festlegen, wie viele Karten in eine
+  Zeile passen. **KARTEN · KOMPAKT/NORMAL** schaltet die Kartenhöhe für die
+  laufende Sitzung zwischen kompakten 104 und normalen 142 Pixeln um; das gilt
+  im Hauptfenster und in abgekoppelten Tafeln.
 - **PANEL DUPLIZIEREN** erstellt dort eine unabhängige Kopie einschließlich
   Reihenfolge, Filter und eigener Meldungen. Die kopierten eigenen Meldungen
   erhalten neue Kennungen und starten aus Sicherheitsgründen deaktiviert;
@@ -541,6 +549,12 @@ ist der neutrale Basiswert; ein gesundheitsbedingter Bevölkerungsverlust beginn
 unter `0`. UNMA verwendet den abgeschlossenen Monatswert und berücksichtigt
 Krankheit, Pollution, erwarteten Bevölkerungsverlust und Arbeitsreserve.
 
+Pollution wird innerhalb der Systemmeldung **GESUNDHEIT** konfiguriert und ist
+keine eigene Hauptkategorie. Unter **SYSTEM → GESUNDHEIT** lässt sich die Stufe
+**VERSCHMUTZUNG KRITISCH** bearbeiten. Ihre Werkbedingung lautet
+**Verschmutzungs-/Müllbeitrag ≤ −5 Punkte**; sie kann wie jede andere
+Systemstufe aktiviert, deaktiviert oder angepasst werden.
+
 In den Werkvorgaben bleibt **NOTFALL** einer aktiven Gesundheits- oder
 Hungertodesspirale vorbehalten. Reiner Arbeitermangel eskaliert höchstens auf
 **KRITISCH**.
@@ -548,7 +562,25 @@ Hungertodesspirale vorbehalten. Reiner Arbeitermangel eskaliert höchstens auf
 ## Töne
 
 UNMA enthält Warnklingel, Industriehorn, Motorsirene und mehrere synthetische
-Signale. Töne werden wiederholt, solange eine Meldung nicht quittiert ist.
+Signale. Töne werden wiederholt, solange eine Meldung aktiv und unquittiert ist.
+
+Hörbar ist nur eine noch aktive, unquittierte, weder tonpausierte noch
+unterdrückte Meldung mit einem hörbaren Ton. Ein gegangener, aber noch
+unquittierter `KG`-Zustand bleibt für Quittierung und Verlauf erhalten, wird
+jedoch sofort stumm, sobald seine Ursache nicht mehr ansteht.
+
+**TÖNE · AN/AUS** unter **MELDETAFEL** ist die sitzungsweite
+Master-Stummschaltung. **AUS** sperrt sofort jeden UNMA-Ton einschließlich
+Hörproben, ohne eine Meldung zu quittieren, zu verstecken oder zu verändern.
+Nach **AN** darf die aktuell berechtigte Meldung wieder tönen. Der Zustand wird
+bewusst weder in der Weltdatei noch im spielstandsübergreifenden Profil
+gespeichert.
+
+Während eine Meldung tatsächlich tönt, erhält ihre Karte eine blaue Kontur und
+eine **TÖNE**-Markierung. Eine Leiste oberhalb der Karten nennt Alarmstufe,
+Meldungsname und stabile Kennung; ein Druck darauf wählt die Meldung in HOME
+und scrollt zu ihr. So lässt sich die Quelle eines Horns oder einer Sirene auch
+bei geöffnetem anderem Panel eindeutig finden.
 
 Eigene PCM-WAV- oder Ogg-Vorbis-Dateien kommen nach:
 
@@ -606,10 +638,32 @@ Die Startvorgaben in `config.json` lauten:
 | Option | Vorgabe | Zweck |
 | --- | ---: | --- |
 | `showOnGameStart` | `true` | UNMA nach dem Laden einer Welt öffnen |
-| `enableAudio` | `true` | Alarmtöne bis zur Quittierung wiederholen |
+| `enableAudio` | `true` | Töne für aktive, unquittierte Meldungen wiederholen |
 | `audioVolumePercent` | `65` | UNMA-Lautstärke von 0 bis 100 Prozent |
 | `pollIntervalMs` | `500` | Eigene Regeln alle 500 ms auswerten |
 | `enableSystemAlarms` | `true` | Gesundheit, Nahrung und Arbeiter überwachen |
+| `autoPauseEnabled` | `false` | Das Spiel bei passenden neuen UNMA-Meldungsfolgen pausieren |
+| `autoPauseMinimumSeverity` | `2` | Mindeststufe: 0 Hinweis, 1 Warnung, 2 Kritisch, 3 Notfall |
+| `autoPauseVanilla` | `true` | Auto-Pause für Vanilla-Meldungen zulassen |
+| `autoPauseSystem` | `true` | Auto-Pause für eingebaute Systemalarme zulassen |
+| `autoPauseCustom` | `true` | Auto-Pause für selbst erstellte Alarme zulassen |
+| `autoPauseExternal` | `true` | Auto-Pause für Alarme anderer Mods zulassen |
+| `muteAudioWhilePaused` | `false` | UNMA-Töne bei pausiertem Spiel unabhängig von Auto-Pause stummschalten |
+| `transferProfilePath` | `""` | Roaming-Standardpfad verwenden oder Datei-/Ordnerpfad vorgeben |
+
+### Automatische Pause
+
+Auto-Pause ist standardmäßig abgeschaltet. Ist sie aktiv, fordert UNMA nur bei
+einem neuen, unquittierten Vorkommen ab der gewählten Mindeststufe eine
+Spielpause an und nur für zugelassene Quellkategorien. Eine lediglich weiterhin
+aktive Meldung fordert nicht immer wieder eine Pause an. Vanilla-Meldungen,
+eingebaute Systemalarme, selbst erstellte Alarme und Alarme anderer Mods lassen
+sich unabhängig voneinander einbeziehen.
+
+`muteAudioWhilePaused` ist davon getrennt. Bei aktivierter Option bleibt jeder
+UNMA-Ton stumm, solange die Simulation pausiert ist, und wird beim Fortsetzen
+wieder freigegeben. Die Option funktioniert mit oder ohne Auto-Pause; die
+sitzungsweite Master-Stummschaltung **TÖNE · AUS** hat weiterhin Vorrang.
 
 ### Spielstandsübergreifendes Standardprofil
 
@@ -618,8 +672,22 @@ gespeichert und in einem anderen Spielstand importiert werden. Das Profil liegt
 außerhalb der Weltdateien unter:
 
 ```text
-%LOCALAPPDATA%\UNMA\profiles\default.json
+%APPDATA%\Captain of Industry\UNMA\profiles\default.json
 ```
+
+Beim ersten Start nach der Aktualisierung kopiert UNMA ein vorhandenes
+Legacy-Profil aus `%LOCALAPPDATA%\UNMA\profiles\default.json` atomar an den
+neuen Ort, sofern dort noch keine Datei existiert. Die Quelldatei bleibt
+erhalten. Scheitert das Kopieren, verwendet UNMA für diese Sitzung weiter die
+Legacy-Datei und versucht die zerstörungsfreie Migration bei einem späteren
+Start erneut. Eine bereits vorhandene Roaming-Datei hat immer Vorrang.
+
+Mit `transferProfilePath` in `config.json` kann ein anderer Ablageort gewählt
+werden. Der Wert darf Umgebungsvariablen enthalten. Ein vorhandener Ordner, ein
+mit einem Pfadtrenner endender Wert oder jeder Pfad ohne Dateiendung gilt als
+Ordner; UNMA hängt daran `default.json` an. Für eine bestimmte Datei ist ein
+Pfad mit Dateiendung wie `.json` anzugeben. Eine gültige ausdrückliche Vorgabe
+hat Vorrang vor beiden Standardorten.
 
 Nur wenn diese Datei tatsächlich fehlt, erzeugt und persistiert UNMA das
 eingebaute Profil **UNMA Recommended Quiet**. Exakt erkannte, unveränderte
@@ -670,6 +738,10 @@ Beim Speichern und Importieren sind folgende Kategorien einzeln auswählbar:
 - Alarmfarben und UI-Skalierung;
 - Fensterpositionen, -größen und offene abgekoppelte Tafeln; diese Kategorie
   ist standardmäßig abgewählt.
+
+Kategorien und einzelne Regelzeilen zeigen `[X]` für ausgewählt und `[ ]` für
+abgewählt. Die hervorgehobene Auswahl wird sofort aktualisiert und bleibt beim
+Vorbereiten der Vorschau sichtbar.
 
 Die globalen Startoptionen aus `config.json`, einschließlich globaler
 Audio-Aktivierung und Lautstärke, gelten bereits unabhängig vom Spielstand und
@@ -751,7 +823,7 @@ vorhandenen Panels als **NICHT ZUGEORDNET**. Das bisherige Verhalten unter
 **ALLE** bleibt dadurch unverändert, bis Bereiche bewusst angelegt und
 zugewiesen werden.
 Die Incident-Linse speichert weder Konfiguration noch Ergebnis. Auch das
-separate Standardprofil erweitert die Weltdatei nicht; 0.10.3 bleibt daher bei
+separate Standardprofil erweitert die Weltdatei nicht; 0.10.5 bleibt daher bei
 Schema 20. Erkennt diese Version eine Konfiguration aus einem neueren
 UNMA-Schema, lässt sie Hauptdatei und Sicherungsartefakte bytegenau unangetastet,
 verwendet sichere Vorgaben und sperrt Konfigurationsschreibvorgänge für die

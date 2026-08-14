@@ -1,3 +1,14 @@
+v0.10.5 | 2026-08-14
+Feedback-driven annunciator controls
+* Added a session-level SOUNDS ON/OFF master gate for all alarm and test audio without acknowledging or hiding alarms. Only active, unacknowledged alarms remain audible; cleared KG events stop immediately, and a blue card outline plus a clickable severity/name/stable-ID banner identifies the alarm that is actually playing.
+* Made HOME order active cards stably by severity and alarm ID so acknowledgement, sequence, and time do not make cards jump. Added direct persistent column controls plus a session-level COMPACT/REGULAR card-height switch for the main and detached boards.
+* Preserved object and prototype context while changing notification behavior, and replaced ambiguous profile selectors with persistent [X]/[ ] selection buttons.
+* Added optional one-shot auto-pause for new unacknowledged occurrences at or above a configurable severity, with independent Vanilla, system, custom, and external source categories. Paused-game audio muting remains a separate option and includes test sounds.
+* Moved the default cross-save profile to %APPDATA%\Captain of Industry\UNMA\profiles\default.json. Existing %LOCALAPPDATA% profiles are copied atomically without deletion, with session fallback on migration failure; transferProfilePath accepts environment variables and explicit file or directory overrides.
+* Clarified that pollution is configured under SYSTEM > HEALTH > POLLUTION CRITICAL, whose factory condition is Pollution / waste contribution <= -5.
+* Synchronized compact/regular card and session master-audio text across all 21 language catalogs.
+* Retained public API and assembly binding V1 plus persistence schema 20, requiring no save migration; passed 138,744 core assertions plus all Release, IL/reflection, localization, rollback, encoding, and package checks.
+
 v0.10.3 | 2026-08-12
 Input contrast and window dragging
 * Changed every editable free-text, search, color, numeric, and timing field to a dark-green background with bold white text across normal, hover, active, and focused states.

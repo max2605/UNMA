@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.5 – 2026-08-14
+
+- **TÖNE · AN/AUS** schaltet Alarm- und Testtöne für die laufende Sitzung
+  global stumm, ohne Meldungen zu quittieren oder auszublenden. Nur noch aktive,
+  unquittierte Meldungen sind hörbar; ein gegangener `KG`-Zustand verstummt
+  sofort. Blaue Kartenkontur, **TÖNE**-Kennzeichen und eine anklickbare Leiste
+  mit Stufe, Name und stabiler ID zeigen die tatsächlich spielende Meldung.
+- HOME sortiert aktive Karten stabil nach Alarmstufe und Alarm-ID; Quittierung,
+  Sequenz und Zeit lassen sie nicht mehr springen. **SPALTEN −/+** ändert die
+  persistente Spaltenzahl direkt, **KARTEN · KOMPAKT/NORMAL** schaltet Haupt-
+  und abgekoppelte Tafeln sitzungsweit zwischen 104 und 142 Pixel Kartenhöhe um.
+- Die Meldungsoptionen behalten Objekt- und Prototypkontext beim Umschalten
+  einer Regel bei. Profilkategorien und einzelne Regelzeilen zeigen ihre Auswahl
+  dauerhaft mit `[X]` beziehungsweise `[ ]`, statt optisch zu verschwinden.
+- Optionale Auto-Pause reagiert nur auf ein neues, unquittiertes Vorkommen ab
+  der gewählten Mindeststufe. Vanilla-, System-, eigene und externe Quellen
+  sind getrennt zulassbar; **Ton bei Spielpause stumm** arbeitet unabhängig
+  davon und schließt Hörproben ein.
+- Das Standardprofil liegt jetzt unter
+  `%APPDATA%\Captain of Industry\UNMA\profiles\default.json`. Ein vorhandenes
+  Legacy-Profil unter `%LOCALAPPDATA%` wird einmalig atomar kopiert, niemals
+  gelöscht und bei einem Kopierfehler für die Sitzung weiterverwendet.
+  `transferProfilePath` akzeptiert Umgebungsvariablen sowie Datei- oder
+  Ordnerpfade; vorhandene, mit Trenner endende oder erweiterungslose Pfade
+  erhalten automatisch `default.json`.
+- Die Anleitung weist Pollution ausdrücklich unter **SYSTEM → GESUNDHEIT →
+  VERSCHMUTZUNG KRITISCH** aus und dokumentiert die Werkbedingung
+  `Verschmutzungs-/Müllbeitrag ≤ −5`.
+- Alle 21 Sprachkataloge enthalten synchronisierte Texte für die Umschaltung der
+  Kartendichte und die globale Audio-Stummschaltung.
+- Öffentliche API und Assembly-Bindung bleiben V1, das Persistenzschema bleibt
+  20; für bestehende Spielstände ist keine Migration erforderlich. Release-
+  Build, 138.744 Core-Assertions sowie sämtliche IL-/Reflection-,
+  Lokalisierungs-, Rollback-, Encoding- und Paketprüfungen wurden erfolgreich
+  ausgeführt.
+
 ## 0.10.3 – 2026-08-12
 
 - Alle editierbaren Freitext-, Such-, Farb-, Zahlen- und Zeitfelder verwenden

@@ -29,6 +29,10 @@
              Link="Domain\AlarmEscalationPolicy.cs" />
     <Compile Include="..\..\source\Domain\AlarmAudioSnoozePolicy.cs"
              Link="Domain\AlarmAudioSnoozePolicy.cs" />
+    <Compile Include="..\..\source\Domain\AlarmAutoPausePolicy.cs"
+             Link="Domain\AlarmAutoPausePolicy.cs" />
+    <Compile Include="..\..\source\Domain\AlarmAudioPlaybackPolicy.cs"
+             Link="Domain\AlarmAudioPlaybackPolicy.cs" />
     <Compile Include="..\..\source\Domain\PanelSlotProjection.cs"
              Link="Domain\PanelSlotProjection.cs" />
     <Compile Include="..\..\source\Domain\PanelTopologyPolicy.cs"
@@ -63,6 +67,8 @@
              Link="Ui\WindowResizeMath.cs" />
     <Compile Include="..\..\source\Ui\AlarmUiErgonomics.cs"
              Link="Ui\AlarmUiErgonomics.cs" />
+    <Compile Include="..\..\source\Ui\VanillaBehaviorCandidateCache.cs"
+             Link="Ui\VanillaBehaviorCandidateCache.cs" />
     <Compile Include="..\..\source\Api\ExternalApiModels.cs"
              Link="Api\ExternalApiModels.cs" />
     <Compile Include="..\..\source\Api\ExternalContractValidator.cs"

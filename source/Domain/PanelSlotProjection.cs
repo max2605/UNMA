@@ -272,9 +272,10 @@ public static class PanelSlotProjection
                 return view;
             })
             .Where(view => view.IsActive)
-            .OrderByDescending(view => !view.IsAcknowledged)
-            .ThenByDescending(view => view.Severity)
-            .ThenByDescending(view => view.Sequence)
+            .OrderByDescending(view => view.Severity)
+            .ThenBy(
+                StableAlarmId,
+                StringComparer.Ordinal)
             .ThenBy(view => view.Name ?? "", StringComparer.Ordinal)
             .ToArray();
     }

@@ -36,7 +36,8 @@ Zielversion: Captain of Industry **0.8.6c**.
   im Speicher erweitert; Profildateien werden dabei nicht überschrieben.
 - Das Home-Dashboard zeigt ausschließlich aktuell anstehende Meldungen (`K` und
   `KQ`) aus allen Quellen. Normale, gegangene und leere Plätze werden dort
-  vollständig ausgeblendet.
+  vollständig ausgeblendet. Die Karten bleiben nach Alarmstufe und stabiler
+  Kennung geordnet; Quittierung oder Zeitablauf lassen sie nicht springen.
 - Benutzerdefinierte Betriebsbereiche gruppieren globale Panels, ohne deren
   Alarm-, Verlaufs- oder Audiologik zu verändern. **ALLE**, **NICHT
   ZUGEORDNET** und jeder konkrete Bereich filtern Panelleiste und HOME; das
@@ -87,6 +88,11 @@ Zielversion: Captain of Industry **0.8.6c**.
   Motorsirene für Notfälle. Ihr kräftigerer Lauf steigt zwei Sekunden an und
   fällt zwei Sekunden ab. Das tiefe Industriehorn tönt 3,2 Sekunden und macht
   anschließend 1,2 Sekunden Pause.
+- **TÖNE · AN/AUS** schaltet alle UNMA-Töne für die laufende Sitzung sofort
+  stumm, ohne Alarmzustand, Quittierung oder Verlauf zu verändern. Nur aktive,
+  unquittierte Meldungen dürfen tönen; ein gegangener `KG`-Zustand bleibt
+  sichtbar, wird aber stumm. Die tatsächlich hörbare Meldung erhält eine blaue
+  Kontur und eine anklickbare Leiste mit Stufe, Name und stabiler Kennung.
 - Zusätzliche synthetische Sinus-, Rechteck-, Sägezahn-, Dreieck- und
   Impulssignale. Alle eingebauten Signale entstehen mathematisch zur Laufzeit.
 - Eigene `.wav`- und `.ogg`-Dateien aus dem Ordner `Sounds`.
@@ -107,6 +113,10 @@ Zielversion: Captain of Industry **0.8.6c**.
 - Spielzeitbasierte Auslöse- und Rücksetzverzögerung sowie Mindestaktivzeit je
   eigener Regel und Systemalarmstufe. Eine Hysterese je numerischer Bedingung
   hält Grenzwerte stabil; laufende Timer und Latches überleben Save/Load.
+- Optionale Auto-Pause bei einer neuen unquittierten Meldungsfolge ab einer
+  konfigurierbaren Mindeststufe. Vanilla-, System-, eigene und externe Alarme
+  lassen sich als Quellen getrennt zulassen; unabhängig davon kann UNMA-Audio
+  während jeder Spielpause stumm bleiben.
 - Eigene Regeln können nach frei wählbarer aktiver Spielzeit einmalig auf eine
   höhere Stufe und einen anderen Ton eskalieren. Optional öffnet UNMA dann das
   passende Panel und beendet ausschließlich die vorübergehende
@@ -159,6 +169,9 @@ Zielversion: Captain of Industry **0.8.6c**.
   bekannter Meldungen sowie Vanilla-/System-Automatik und kommagetrennten
   Suchfiltern. Neu entdeckte passende Meldungsarten werden einmalig hinten
   angehängt und verschieben vorhandene Plätze nicht.
+- Direkte **SPALTEN −/+**-Bedienung und eine sitzungsweite Umschaltung zwischen
+  **KARTEN · KOMPAKT** (104 Pixel) und **KARTEN · NORMAL** (142 Pixel) für das
+  Hauptfenster und abgekoppelte Tafeln.
 - Globale Panels lassen sich als unabhängige Vorlage duplizieren. Reihenfolge,
   Filter und eigene Regeln werden tief kopiert; kopierte Regeln erhalten neue
   Kennungen und starten deaktiviert, während Livezustand und Verlauf unberührt
@@ -222,14 +235,18 @@ Zielversion: Captain of Industry **0.8.6c**.
    **NICHT ZUGEORDNET** oder einen Betriebsbereich Panelleiste und HOME
    eingrenzen. Die **INCIDENT-LINSE** bei Bedarf erweitern, um die zeitlichen
    Cluster dieses Bereichs zu prüfen; für die dauerhaft definierte
-   Schlitztafel ein Fachpanel wählen.
+   Schlitztafel ein Fachpanel wählen. HOME bleibt nach Alarmstufe stabil
+   sortiert; **SPALTEN −/+** und **KARTEN · KOMPAKT/NORMAL** bestimmen, wie
+   viele Meldungen gleichzeitig sichtbar sind.
 4. Mit `Q` nur einen Schlitz, mit `PANEL QUITTIEREN` die sichtbare Tafel oder
    mit **BEREICH QUITT.** den ausgewählten Bereich oder mit `ALLES QUITTIEREN`
    sämtliche kommenden und gegangenen Meldungen quittieren. **BEREICH
    WEITER**, `NÄCHSTER ALARM` beziehungsweise standardmäßig
    `Umschalt links + F8` springt zyklisch durch unquittierte Meldungen.
    Bei einer weiterhin anstehenden Meldung bleibt die Aktivfarbe sichtbar,
-   bis die Ursache verschwindet.
+   bis die Ursache verschwindet. **TÖNE · AUS** sperrt bei einer Alarmflut alle
+   UNMA-Töne für die Sitzung; die Hörbar-Leiste führt zur tatsächlich
+   spielenden Meldung.
 5. In **VERLAUF** zeigt eine eigene Zeile je Alarmereignis den Zustand `K`,
    `KQ`, `KG` oder `KGQ`. Vollständig abgeschlossene `KGQ`-Zeilen bleiben
    gespeichert, bis sie dort ausdrücklich gelöscht werden.
@@ -251,8 +268,10 @@ Zielversion: Captain of Industry **0.8.6c**.
    alle Objekte desselben Prototyps lautlos, aus HOME ausgeblendet oder
    vollständig ohne Verlaufseintrag ignoriert werden.
 10. Unter **SYSTEM** können Gesundheit, Nahrung und Arbeiter einschließlich
-   ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
-   oder auf die Werkvorgabe zurückgesetzt werden.
+    ihrer Warn-, Kritisch- und Todesspiralenbedingungen jederzeit angepasst
+    oder auf die Werkvorgabe zurückgesetzt werden. Der Pollution-Alarm befindet
+    sich unter **GESUNDHEIT → VERSCHMUTZUNG KRITISCH**; seine Werkbedingung ist
+    ein Verschmutzungs-/Müllbeitrag von höchstens `−5` Punkten.
 11. Unter **OPTIONEN** lässt sich die gesamte UNMA-Oberfläche von 75 bis
     200 Prozent skalieren. `+ PANEL` legt eine globale Tafel an; das Zahnrad
     daneben öffnet deren getrennte Einstellungen samt Bereichszuordnung. Über
@@ -264,6 +283,16 @@ Zielversion: Captain of Industry **0.8.6c**.
     Profil wird nie automatisch importiert; der Vorgang übernimmt nur die
     ausgewählten Einstellungen und verändert keine CoI-Meldung.
 
+### Globale Auto-Pause und Pausen-Audio
+
+Die Startoption `autoPauseEnabled` ist standardmäßig `false`. Bei Aktivierung
+pausiert UNMA nur für ein neues, unquittiertes Vorkommen ab
+`autoPauseMinimumSeverity` (`0` Hinweis, `1` Warnung, `2` Kritisch, `3`
+Notfall). `autoPauseVanilla`, `autoPauseSystem`, `autoPauseCustom` und
+`autoPauseExternal` schalten die vier Quellkategorien unabhängig; ihre
+Vorgabe ist jeweils `true`. `muteAudioWhilePaused` ist standardmäßig `false`
+und kann UNMA-Töne unabhängig von Auto-Pause während jeder Spielpause sperren.
+
 ### Spielstandsübergreifendes Standardprofil
 
 Das Profil kann Meldungsregeln einschließlich Tonzuordnung und automatischer
@@ -271,7 +300,8 @@ Quittierung, Systemalarm-Konfiguration, Alarmfarben/UI-Skalierung und optional
 Fensterpositionen, -größen sowie offene abgekoppelte Tafeln enthalten. Vor dem Import zeigt UNMA neue, geänderte,
 unveränderte und übersprungene Werte. Erst die Bestätigung führt die gewählten
 Kategorien atomar mit der Zielwelt zusammen; nicht ausgewählte und nur in der
-Zielwelt vorhandene Werte bleiben bestehen.
+Zielwelt vorhandene Werte bleiben bestehen. Auswahlzeilen kennzeichnen ihren
+Zustand dauerhaft mit `[X]` beziehungsweise `[ ]`.
 
 Vanilla-Regeln werden anhand der stabilen Meldungsart (`NotificationType`) und,
 falls vorhanden, des Entity-Prototyps übertragen. Regeln für eine konkrete
@@ -280,9 +310,19 @@ Entity-ID sind nicht zwischen Welten portabel und werden mit Ergebnisangabe
 sonstige Laufzeit-Memories sind grundsätzlich ausgeschlossen. Eine importierte
 Ignore-Regel unterdrückt deshalb nur die UNMA-Verarbeitung; die ursprüngliche
 Captain-of-Industry-Meldung bleibt sichtbar und unverändert. Das atomar
-geschriebene Profil liegt in
-`%LOCALAPPDATA%\UNMA\profiles\default.json` und ist von den weltbezogenen
-`unma-world-<GameId>.json`-Dateien getrennt.
+geschriebene Profil liegt standardmäßig in
+`%APPDATA%\Captain of Industry\UNMA\profiles\default.json` und ist von den
+weltbezogenen `unma-world-<GameId>.json`-Dateien getrennt.
+
+Fehlt die neue Datei beim ersten Start nach der Aktualisierung, kopiert UNMA
+ein vorhandenes Legacy-Profil aus
+`%LOCALAPPDATA%\UNMA\profiles\default.json` atomar dorthin und behält die
+Quelle. Bei einem Kopierfehler verwendet es für diese Sitzung die Legacy-Datei
+und versucht die Migration später erneut. `transferProfilePath` in
+`config.json` erlaubt stattdessen einen vollständigen Datei- oder Ordnerpfad
+mit Umgebungsvariablen. Vorhandene Ordner, mit einem Pfadtrenner endende Werte
+und Pfade ohne Dateiendung gelten als Ordner; UNMA hängt `default.json` an. Ein
+direkter Dateipfad muss eine Dateiendung wie `.json` besitzen.
 
 Nur wenn `default.json` tatsächlich fehlt, erzeugt und persistiert UNMA das
 eingebaute Profil **UNMA Recommended Quiet**. Exakt erkannte, unveränderte

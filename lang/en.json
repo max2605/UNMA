@@ -1067,5 +1067,8 @@
     "options.transfer.sound_missing": "Sound '{0}' is unavailable; UNMA will use its normal fallback until the sound is installed.",
     "options.color.invalid": "Enter a valid HTML color in #RRGGBB format.",
     "options.reduced_motion": "Reduced motion",
-    "options.reduced_motion_hint": "Uses stable alarm highlighting instead of flashing."
+    "options.reduced_motion_hint": "Uses stable alarm highlighting instead of flashing.",
+    "board.tile_density_compact": "CARDS · COMPACT",
+    "board.tile_density_regular": "CARDS · REGULAR",
+    "board.audio_master_toggle_tooltip": "Mutes all UNMA alarm and test audio for this session until switched on again."
 }

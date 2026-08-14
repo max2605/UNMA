@@ -9,6 +9,8 @@ namespace UNMA.Runtime;
 
 public sealed class UnmaTransferProfileStore
 {
+    public const string DefaultProfileFileName = "default.json";
+
     [DataContract]
     private sealed class ProfileSchemaVersionProbe
     {
@@ -21,6 +23,199 @@ public sealed class UnmaTransferProfileStore
     public string Path => m_path;
     public bool IsWriteBlocked { get; private set; }
     public string WriteBlockReason { get; private set; } = "";
+
+    public static string GetDefaultProfilePath(
+        string applicationDataRoot = null)
+    {
+        applicationDataRoot = ResolveDataRoot(
+            applicationDataRoot,
+            Environment.SpecialFolder.ApplicationData,
+            "Roaming");
+        return System.IO.Path.GetFullPath(System.IO.Path.Combine(
+            applicationDataRoot,
+            "Captain of Industry",
+            "UNMA",
+            "profiles",
+            DefaultProfileFileName));
+    }
+
+    public static string GetLegacyDefaultProfilePath(
+        string localApplicationDataRoot = null)
+    {
+        localApplicationDataRoot = ResolveDataRoot(
+            localApplicationDataRoot,
+            Environment.SpecialFolder.LocalApplicationData,
+            "Local");
+        return System.IO.Path.GetFullPath(System.IO.Path.Combine(
+            localApplicationDataRoot,
+            "UNMA",
+            "profiles",
+            DefaultProfileFileName));
+    }
+
+    /// <summary>
+    /// Resolves the startup file. An explicit configured path wins. Otherwise
+    /// the roaming Captain of Industry directory is used and the old local
+    /// profile is copied there once, atomically and without deleting it.
+    /// </summary>
+    public static string ResolveStartupProfilePath(
+        string configuredPath,
+        out bool migratedLegacyProfile,
+        out string warning)
+    {
+        migratedLegacyProfile = false;
+        warning = "";
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            try
+            {
+                var expanded = Environment.ExpandEnvironmentVariables(
+                    configuredPath.Trim());
+                var endsWithSeparator = expanded.EndsWith(
+                        System.IO.Path.DirectorySeparatorChar.ToString(),
+                        StringComparison.Ordinal) ||
+                    expanded.EndsWith(
+                        System.IO.Path.AltDirectorySeparatorChar.ToString(),
+                        StringComparison.Ordinal);
+                var resolved = System.IO.Path.GetFullPath(expanded);
+                if (endsWithSeparator || Directory.Exists(resolved) ||
+                    !System.IO.Path.HasExtension(resolved))
+                {
+                    resolved = System.IO.Path.Combine(
+                        resolved,
+                        DefaultProfileFileName);
+                }
+                return resolved;
+            }
+            catch (Exception exception)
+            {
+                warning = "Configured transfer profile path is invalid; " +
+                    "the default path will be used: " + exception.Message;
+            }
+        }
+
+        return ResolveDefaultProfilePath(
+            GetDefaultProfilePath(),
+            GetLegacyDefaultProfilePath(),
+            out migratedLegacyProfile,
+            ref warning);
+    }
+
+    internal static string ResolveDefaultProfilePath(
+        string destinationPath,
+        string legacyPath,
+        out bool migratedLegacyProfile,
+        ref string warning)
+    {
+        destinationPath = System.IO.Path.GetFullPath(destinationPath);
+        legacyPath = System.IO.Path.GetFullPath(legacyPath);
+        migratedLegacyProfile = false;
+        if (string.Equals(
+                destinationPath,
+                legacyPath,
+                StringComparison.OrdinalIgnoreCase) ||
+            File.Exists(destinationPath) || !File.Exists(legacyPath))
+        {
+            return destinationPath;
+        }
+
+        if (TryMigrateLegacyProfile(
+                legacyPath,
+                destinationPath,
+                out migratedLegacyProfile,
+                out var migrationError))
+        {
+            return destinationPath;
+        }
+
+        warning = string.IsNullOrWhiteSpace(warning)
+            ? migrationError
+            : warning + " " + migrationError;
+        // A migration failure must not make the existing profile disappear.
+        // Continue using the legacy file for this session; the next launch can
+        // try the non-destructive copy again.
+        return legacyPath;
+    }
+
+    public static bool TryMigrateLegacyProfile(
+        string legacyPath,
+        string destinationPath,
+        out bool migrated,
+        out string error)
+    {
+        migrated = false;
+        error = "";
+        string temporaryPath = null;
+        try
+        {
+            legacyPath = System.IO.Path.GetFullPath(legacyPath);
+            destinationPath = System.IO.Path.GetFullPath(destinationPath);
+            if (string.Equals(
+                    legacyPath,
+                    destinationPath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                File.Exists(destinationPath) || !File.Exists(legacyPath))
+            {
+                return true;
+            }
+
+            var directory = System.IO.Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            temporaryPath = destinationPath + ".migrate-" +
+                Guid.NewGuid().ToString("N") + ".tmp";
+            File.Copy(legacyPath, temporaryPath, false);
+            try
+            {
+                File.Move(temporaryPath, destinationPath);
+                migrated = true;
+                return true;
+            }
+            catch (IOException) when (File.Exists(destinationPath))
+            {
+                // Another instance completed the same one-time migration.
+                TryDelete(temporaryPath);
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            error = "UNMA could not copy the legacy transfer profile from '" +
+                legacyPath + "' to '" + destinationPath + "': " +
+                exception.Message;
+            TryDelete(temporaryPath);
+            return false;
+        }
+    }
+
+    private static string ResolveDataRoot(
+        string configuredRoot,
+        Environment.SpecialFolder specialFolder,
+        string appDataLeaf)
+    {
+        var root = string.IsNullOrWhiteSpace(configuredRoot)
+            ? Environment.GetFolderPath(specialFolder)
+            : configuredRoot.Trim();
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            return root;
+        }
+
+        var userProfile = Environment.GetFolderPath(
+            Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            return System.IO.Path.Combine(
+                userProfile,
+                "AppData",
+                appDataLeaf);
+        }
+
+        throw new InvalidOperationException(
+            "The Windows application-data directory is unavailable.");
+    }
 
     // The runtime owns path selection. This keeps the store usable with a
     // global profile path as well as explicit test or future per-profile paths.

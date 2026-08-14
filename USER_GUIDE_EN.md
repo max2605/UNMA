@@ -1,6 +1,6 @@
 # UNMA User Guide
 
-This guide applies to **UNMA 0.10.3** and **Captain of Industry 0.8.6c**.
+This guide applies to **UNMA 0.10.5** and **Captain of Industry 0.8.6c**.
 
 UNMA (Universal Alarm Annunciator) adds a configurable industrial annunciator
 to Captain of Industry. It mirrors game notifications, keeps a persistent alarm
@@ -106,9 +106,9 @@ UNMA follows the behavior of a traditional industrial annunciator.
 
 | Code | State | Display behavior |
 | --- | --- | --- |
-| `K` | Active and not acknowledged | Active color; flashes unless Reduced Motion is enabled, repeats its sound |
+| `K` | Active and not acknowledged | Active color; flashes unless Reduced Motion is enabled, and is eligible to repeat its sound |
 | `KQ` | Active and acknowledged | Remains active without repeating its sound |
-| `KG` | Cleared and not acknowledged | Stable high-contrast history marking until acknowledgement |
+| `KG` | Cleared and not acknowledged | Stable high-contrast history marking until acknowledgement; never keeps sounding after the condition clears |
 | `KGQ` | Cleared and acknowledged | Completed history event |
 
 Acknowledging an active alarm does not clear its active color. The color
@@ -136,6 +136,10 @@ change any history entry.
 HOME is a live overview of alarms that are currently active. It shows `K` and
 `KQ` alarms from all sources under **ALL** but does not own permanent slots.
 Inactive, cleared, and empty slots are hidden from HOME.
+
+HOME orders cards by severity, from Emergency down to Notice, and then by the
+stable alarm ID. Acknowledgement, a repeated occurrence, or the passage of time
+therefore does not make otherwise unchanged cards jump around.
 
 ### Operational areas
 
@@ -223,6 +227,10 @@ system, provider, and custom alarms.
   **ANNUNCIATOR**.
 - Use the adjacent gear button to change its name, column count, filters,
   automatic sources, and slot order.
+- The inline **COLUMNS −/+** controls change how many cards fit on each row.
+  **CARDS · COMPACT/REGULAR** switches every annunciator card between the
+  104-pixel compact and 142-pixel regular height for the current session in
+  both the main and detached alarm grids.
 - **DUPLICATE PANEL** creates an independent copy of that configuration,
   including its slot order, filters, and custom alarms. Cloned custom alarms
   receive new IDs and start disabled for safety; live alarm state and history
@@ -492,13 +500,35 @@ neutral base value, and health-related population loss starts below `0`. UNMA
 uses the completed monthly value and considers disease, pollution, expected
 population loss, and available worker reserve.
 
+Pollution is configured inside the **HEALTH** system alarm rather than as a
+separate top-level alarm. Open **SYSTEM → HEALTH** and edit the **POLLUTION
+CRITICAL** stage. Its factory condition is **Pollution / waste contribution
+≤ −5 points**; it can be enabled, disabled, or changed like every other system
+stage.
+
 By default, **EMERGENCY** is reserved for an active health or hunger death
 spiral. Worker shortages escalate only to **CRITICAL**.
 
 ## Sounds
 
 UNMA includes a warning bell, industrial horn, motor siren, and several
-synthesized signals. Sounds repeat while an alarm is unacknowledged.
+synthesized signals. Sounds repeat while an alarm is active and unacknowledged.
+
+Only an alarm that is still active, unacknowledged, not snoozed or suppressed,
+and assigned an audible sound can play. A cleared-but-unacknowledged `KG` event
+remains available for acknowledgement and history, but becomes silent as soon
+as its condition clears.
+
+The **SOUNDS · ON/OFF** button in **ANNUNCIATOR** is a session-level master
+mute. **OFF** immediately gates every UNMA sound, including previews, without
+acknowledging, hiding, or changing any alarm. Switching it back to **ON** lets
+the currently eligible alarm resume. The setting is intentionally not written
+to the world or the cross-save profile.
+
+While an alarm is actually playing, its card receives a blue outline and a
+**SOUNDS** marker. A banner above the cards gives its severity, name, and
+stable ID; pressing the banner selects and scrolls to that alarm on HOME. This
+identifies the source of a horn or siren even when another panel is open.
 
 To add a custom sound, copy a supported PCM WAV or Ogg Vorbis file to:
 
@@ -553,10 +583,32 @@ The startup defaults in `config.json` are:
 | Option | Default | Purpose |
 | --- | ---: | --- |
 | `showOnGameStart` | `true` | Open UNMA after loading a world |
-| `enableAudio` | `true` | Repeat alarm sounds until acknowledgement |
+| `enableAudio` | `true` | Repeat sounds for active, unacknowledged alarms |
 | `audioVolumePercent` | `65` | Set UNMA sound volume from 0 to 100 percent |
 | `pollIntervalMs` | `500` | Evaluate custom rules every 500 ms |
 | `enableSystemAlarms` | `true` | Monitor health, food, and workers |
+| `autoPauseEnabled` | `false` | Pause the game for qualifying new UNMA alarm occurrences |
+| `autoPauseMinimumSeverity` | `2` | Minimum auto-pause severity: 0 Notice, 1 Warning, 2 Critical, 3 Emergency |
+| `autoPauseVanilla` | `true` | Allow auto-pause for Vanilla notifications |
+| `autoPauseSystem` | `true` | Allow auto-pause for built-in system alarms |
+| `autoPauseCustom` | `true` | Allow auto-pause for user-created alarms |
+| `autoPauseExternal` | `true` | Allow auto-pause for alarms published by other mods |
+| `muteAudioWhilePaused` | `false` | Mute UNMA audio whenever the game is paused, independently of auto-pause |
+| `transferProfilePath` | `""` | Use the roaming default-profile path; set a file or directory override if required |
+
+### Automatic pause
+
+Auto-pause is disabled by default. When enabled, it requests a game pause only
+on a new, unacknowledged occurrence at or above the configured minimum severity
+and only for enabled source categories. An alarm that merely remains active
+does not repeatedly request another pause. Vanilla notifications, built-in
+system alarms, user-created alarms, and alarms from other mods can be included
+independently.
+
+`muteAudioWhilePaused` is a separate option. When enabled, all UNMA audio is
+silent for as long as the simulation is paused and resumes eligibility when
+play continues. It can be used with or without auto-pause; the session-level
+**SOUNDS · OFF** master mute still takes precedence.
 
 ### Cross-save default profile
 
@@ -565,8 +617,22 @@ and imported into another save. The profile is separate from world files and
 is stored at:
 
 ```text
-%LOCALAPPDATA%\UNMA\profiles\default.json
+%APPDATA%\Captain of Industry\UNMA\profiles\default.json
 ```
+
+On the first launch after upgrading, if the roaming file is absent but the
+legacy `%LOCALAPPDATA%\UNMA\profiles\default.json` exists, UNMA copies it to
+the new location atomically. The source file is retained. If copying fails,
+UNMA continues to use the legacy file for that session and retries the
+non-destructive migration on a later launch. An existing roaming file always
+wins.
+
+Set `transferProfilePath` in `config.json` to choose another location. The
+value may contain environment variables. An existing directory, a path ending
+in a directory separator, or any extensionless path is treated as a directory
+and receives `default.json`. To select a file directly, provide a path with a
+file extension such as `.json`. A valid explicit override takes precedence over
+both default locations.
 
 Only when this file is genuinely absent does UNMA create and persist the
 built-in **UNMA Recommended Quiet** profile. Exactly recognized, unchanged
@@ -617,6 +683,10 @@ importing:
 - alarm colors and UI scale;
 - window positions, sizes, and open detached panels; this category is
   unselected by default.
+
+Category and individual-rule selectors show `[X]` when selected and `[ ]` when
+not selected. Their highlighted state updates immediately and remains visible
+while the preview is prepared.
 
 The startup options in `config.json`, including global audio enablement and
 volume, already apply independently of a save and are not duplicated in the
@@ -692,7 +762,7 @@ Schema 20 migrates configurations from earlier UNMA versions with every
 existing panel unassigned. Their previous **ALL** board behavior therefore
 remains unchanged until areas are deliberately created and assigned.
 The Incident Lens stores no configuration or result of its own. The separate
-default profile does not extend a world file either, so 0.10.3 remains on
+default profile does not extend a world file either, so 0.10.5 remains on
 schema 20. If a configuration from a newer UNMA schema is found,
 this version leaves the main file and its backup artifacts byte-for-byte
 untouched, uses safe defaults, and blocks configuration writes for the session

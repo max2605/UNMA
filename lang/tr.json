@@ -1067,5 +1067,8 @@
     "ui.editor.advanced.scope": "Timing and escalation",
     "ui.editor.advanced.title": "ADVANCED SETTINGS",
     "ui.history.filter": "FILTER",
-    "native.launcher_move": "Move UNMA launcher"
+    "native.launcher_move": "Move UNMA launcher",
+    "board.tile_density_compact": "KARTLAR · KOMPAKT",
+    "board.tile_density_regular": "KARTLAR · NORMAL",
+    "board.audio_master_toggle_tooltip": "Bu oturumdaki tüm UNMA alarm ve test seslerini yeniden açılana kadar sessize alır."
 }

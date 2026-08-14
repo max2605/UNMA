@@ -5,7 +5,7 @@
   },
   "enableAudio": {
     "default": true,
-    "description": "Alarmtöne bis zur Quittierung wiederholen."
+    "description": "Alarmtöne für aktive, unquittierte Meldungen wiederholen."
   },
   "audioVolumePercent": {
     "default": 65,
@@ -24,5 +24,40 @@
   "enableSystemAlarms": {
     "default": true,
     "description": "Gesundheit, Nahrung und Arbeiter automatisch überwachen."
+  },
+  "autoPauseEnabled": {
+    "default": false,
+    "description": "Spiel bei einer neuen UNMA-Meldung ab der gewählten Stufe automatisch pausieren."
+  },
+  "autoPauseMinimumSeverity": {
+    "default": 2,
+    "is_integer": true,
+    "description": "Niedrigste Stufe für Auto-Pause: 0 Hinweis, 1 Warnung, 2 Kritisch, 3 Notfall.",
+    "min": 0,
+    "max": 3
+  },
+  "autoPauseVanilla": {
+    "default": true,
+    "description": "Auto-Pause für Vanilla-Meldungen zulassen."
+  },
+  "autoPauseSystem": {
+    "default": true,
+    "description": "Auto-Pause für UNMA-Systemalarme zulassen."
+  },
+  "autoPauseCustom": {
+    "default": true,
+    "description": "Auto-Pause für selbst erstellte Alarme zulassen."
+  },
+  "autoPauseExternal": {
+    "default": true,
+    "description": "Auto-Pause für Alarme anderer Mods zulassen."
+  },
+  "muteAudioWhilePaused": {
+    "default": false,
+    "description": "UNMA-Alarmtöne stummschalten, solange das Spiel pausiert ist. Unabhängig von Auto-Pause."
+  },
+  "transferProfilePath": {
+    "default": "",
+    "description": "Optionaler Pfad zur JSON-Profildatei oder zu einem Profilordner. Bei einem vorhandenen Ordner, einem abschließenden Pfadtrenner oder einem Pfad ohne Dateiendung wird default.json angehängt. Leer verwendet %APPDATA%\\Captain of Industry\\UNMA\\profiles\\default.json."
   }
 }

@@ -1067,5 +1067,8 @@
     "ui.editor.advanced.scope": "Timing and escalation",
     "ui.editor.advanced.title": "ADVANCED SETTINGS",
     "ui.history.filter": "FILTER",
-    "native.launcher_move": "Move UNMA launcher"
+    "native.launcher_move": "Move UNMA launcher",
+    "board.tile_density_compact": "卡片 · 緊湊",
+    "board.tile_density_regular": "卡片 · 一般",
+    "board.audio_master_toggle_tooltip": "在本次工作階段中將所有 UNMA 警報和測試音訊靜音，直到再次開啟。"
 }

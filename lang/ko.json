@@ -1067,5 +1067,8 @@
     "ui.editor.advanced.scope": "Timing and escalation",
     "ui.editor.advanced.title": "ADVANCED SETTINGS",
     "ui.history.filter": "FILTER",
-    "native.launcher_move": "Move UNMA launcher"
+    "native.launcher_move": "Move UNMA launcher",
+    "board.tile_density_compact": "카드 · 컴팩트",
+    "board.tile_density_regular": "카드 · 일반",
+    "board.audio_master_toggle_tooltip": "다시 켤 때까지 이 세션의 모든 UNMA 알람 및 테스트 오디오를 음소거합니다."
 }

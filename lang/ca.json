@@ -1067,5 +1067,8 @@
     "ui.editor.advanced.scope": "Timing and escalation",
     "ui.editor.advanced.title": "ADVANCED SETTINGS",
     "ui.history.filter": "FILTER",
-    "native.launcher_move": "Move UNMA launcher"
+    "native.launcher_move": "Move UNMA launcher",
+    "board.tile_density_compact": "TARGETES · COMPACTES",
+    "board.tile_density_regular": "TARGETES · NORMALS",
+    "board.audio_master_toggle_tooltip": "Silencia tot l'àudio d'alarmes i proves d'UNMA durant aquesta sessió fins que es torni a activar."
 }

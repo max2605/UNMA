@@ -31,6 +31,8 @@ internal static class Program
         TestAlarmEscalationModelNormalization();
         TestAlarmTimingMemoryPolicy();
         TestAlarmAudioSnoozePolicy();
+        TestAlarmAudioPlaybackPolicy();
+        TestAlarmAutoPausePolicy();
         TestSustainedVanillaAlarmPolicy();
         TestVanillaNotificationSuppressionPolicy();
         TestIgnoredVanillaPersistenceCleanup();
@@ -57,10 +59,12 @@ internal static class Program
         TestTransferProfileSemanticValidation();
         TestTransferProfileSchemaOneSystemAlarmContract();
         TestTransferProfileStoreRoundTripAndAtomicSave();
+        TestTransferProfilePathAndLegacyMigration();
         TestTransferProfileStoreFutureAndCorruptProtection();
         TestStateStoreFutureSchemaProtection();
         TestMechanicalSiren();
         TestAlarmUiErgonomics();
+        TestVanillaBehaviorCandidateCache();
         TestAlarmUiStructuralSmokeTests();
         TestLocalizationCoverage();
         TestExternalRegistryValidationAndSnapshots();
@@ -265,6 +269,207 @@ internal static class Program
             "LOW COAL", true, 1, false, true));
         IsFalse(AlarmUiErgonomics.CanSaveRule(
             "LOW COAL", true, 1, true, false));
+
+    }
+
+    private static void TestVanillaBehaviorCandidateCache()
+    {
+        const string overrideId = "vanilla:ExcavatorHasNoValidTruck";
+
+        static AlarmView Candidate(
+            string overrideId,
+            int entityId,
+            string prototypeId,
+            string slotId,
+            string name)
+        {
+            return new AlarmView
+            {
+                Key = slotId,
+                OverrideId = overrideId,
+                SlotId = slotId,
+                Name = name,
+                Detail = "detail:" + name,
+                Source = "vanilla",
+                Severity = AlarmSeverity.Warning,
+                EntityId = entityId,
+                EntityPrototypeId = prototypeId,
+            };
+        }
+
+        var full = Candidate(
+            overrideId,
+            123,
+            "ExcavatorT2",
+            "occurrence:123",
+            "Excavator 123");
+
+        // A prototype-scoped save persists no entity id. The exact clicked
+        // row remains stable for the next options-page snapshot.
+        var prototypeCache = new VanillaBehaviorCandidateCache();
+        prototypeCache.RememberInteraction(
+            full,
+            VanillaNotificationScope.EntityPrototype);
+        var prototypeRestored = prototypeCache.Merge(new[]
+        {
+            Candidate(
+                overrideId,
+                -1,
+                "ExcavatorT2",
+                overrideId,
+                "persisted prototype"),
+        }).Single();
+        AreEqual(123, prototypeRestored.EntityId);
+        AreEqual("ExcavatorT2", prototypeRestored.EntityPrototypeId);
+        AreEqual("occurrence:123", prototypeRestored.SlotId);
+        AreEqual("Excavator 123", prototypeRestored.Name);
+
+        // An entity-scoped save persists no prototype id. Matching by the
+        // entity RuleIdentity restores only that entity's prototype button.
+        var entityCache = new VanillaBehaviorCandidateCache();
+        entityCache.RememberInteraction(
+            full,
+            VanillaNotificationScope.Entity);
+        var entityRestored = entityCache.Merge(new[]
+        {
+            Candidate(
+                overrideId,
+                123,
+                "",
+                overrideId,
+                "persisted entity"),
+        }).Single();
+        AreEqual(123, entityRestored.EntityId);
+        AreEqual("ExcavatorT2", entityRestored.EntityPrototypeId);
+        AreEqual("occurrence:123", entityRestored.SlotId);
+
+        // Two entity interactions for the same notification type have
+        // distinct rule identities and can never overwrite each other.
+        var multiEntityCache = new VanillaBehaviorCandidateCache();
+        var entityOne = Candidate(
+            overrideId,
+            101,
+            "ExcavatorT1",
+            "occurrence:101",
+            "Excavator 101");
+        var entityTwo = Candidate(
+            overrideId,
+            202,
+            "ExcavatorT2",
+            "occurrence:202",
+            "Excavator 202");
+        multiEntityCache.RememberInteraction(
+            entityOne,
+            VanillaNotificationScope.Entity);
+        multiEntityCache.RememberInteraction(
+            entityTwo,
+            VanillaNotificationScope.Entity);
+        var restoredEntities = multiEntityCache.Merge(new[]
+        {
+            Candidate(overrideId, 202, "", overrideId, "entity 202"),
+            Candidate(overrideId, 101, "", overrideId, "entity 101"),
+        });
+        AreEqual(2, restoredEntities.Count);
+        AreEqual(
+            "ExcavatorT1",
+            restoredEntities.Single(candidate =>
+                candidate.EntityId == 101).EntityPrototypeId);
+        AreEqual(
+            "ExcavatorT2",
+            restoredEntities.Single(candidate =>
+                candidate.EntityId == 202).EntityPrototypeId);
+        AreEqual(
+            2,
+            restoredEntities.Select(candidate => candidate.SlotId)
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+
+        // Prototype interactions are likewise isolated by prototype rule
+        // identity even when the override id is shared.
+        var multiPrototypeCache = new VanillaBehaviorCandidateCache();
+        multiPrototypeCache.RememberInteraction(
+            entityOne,
+            VanillaNotificationScope.EntityPrototype);
+        multiPrototypeCache.RememberInteraction(
+            entityTwo,
+            VanillaNotificationScope.EntityPrototype);
+        var restoredPrototypes = multiPrototypeCache.Merge(new[]
+        {
+            Candidate(
+                overrideId,
+                -1,
+                "ExcavatorT2",
+                overrideId,
+                "prototype T2"),
+            Candidate(
+                overrideId,
+                -1,
+                "ExcavatorT1",
+                overrideId,
+                "prototype T1"),
+        });
+        AreEqual(2, restoredPrototypes.Count);
+        AreEqual(
+            101,
+            restoredPrototypes.Single(candidate =>
+                candidate.EntityPrototypeId == "ExcavatorT1").EntityId);
+        AreEqual(
+            202,
+            restoredPrototypes.Single(candidate =>
+                candidate.EntityPrototypeId == "ExcavatorT2").EntityId);
+
+        // Merely observing multiple rows teaches the cache nothing. An
+        // ambiguous prototype fallback therefore stays prototype-scoped.
+        var observationOnlyCache = new VanillaBehaviorCandidateCache();
+        AreEqual(
+            2,
+            observationOnlyCache.Merge(new[] { entityOne, entityTwo }).Count);
+        var untouchedPrototype = observationOnlyCache.Merge(new[]
+        {
+            Candidate(
+                overrideId,
+                -1,
+                "ExcavatorT2",
+                overrideId,
+                "prototype only"),
+        }).Single();
+        AreEqual(-1, untouchedPrototype.EntityId);
+        AreEqual("ExcavatorT2", untouchedPrototype.EntityPrototypeId);
+
+        // A less-specific persisted/fixed fallback is removed when the same
+        // snapshot already contains the restored exact row.
+        var dedupeCache = new VanillaBehaviorCandidateCache();
+        dedupeCache.RememberInteraction(
+            full,
+            VanillaNotificationScope.EntityPrototype);
+        var deduplicated = dedupeCache.Merge(new[]
+        {
+            full,
+            Candidate(
+                overrideId,
+                -1,
+                "ExcavatorT2",
+                overrideId,
+                "prototype fallback"),
+            Candidate(
+                overrideId,
+                -1,
+                "",
+                overrideId,
+                "notification fallback"),
+        });
+        AreEqual(1, deduplicated.Count);
+        AreEqual(123, deduplicated[0].EntityId);
+
+        // Restart semantics are conservative: without a recorded interaction
+        // a persisted partial rule remains partial instead of borrowing data.
+        var restartCache = new VanillaBehaviorCandidateCache();
+        var afterRestart = restartCache.Merge(new[]
+        {
+            Candidate(overrideId, 123, "", overrideId, "entity only"),
+        }).Single();
+        AreEqual(123, afterRestart.EntityId);
+        AreEqual("", afterRestart.EntityPrototypeId);
     }
 
     private static void TestAlarmUiStructuralSmokeTests()
@@ -443,6 +648,63 @@ internal static class Program
             StringComparison.Ordinal));
         IsTrue(alarmTile.Contains(
             "AlarmUiErgonomics.ShouldUseLightText(",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "m_audio?.IsPlayingAlarm(alarm) == true",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "!alarm.IsActive",
+            StringComparison.Ordinal));
+        IsTrue(alarmTile.Contains(
+            "alarm.IsAcknowledged",
+            StringComparison.Ordinal));
+        var alarmGrid = ExtractSourceMethod(
+            editorSource,
+            "private void DrawAlarmGrid(");
+        IsTrue(alarmGrid.Contains(
+            "var tileHeight = AlarmTileHeight;",
+            StringComparison.Ordinal));
+        var board = ExtractSourceMethod(
+            editorSource,
+            "private void DrawBoard()");
+        IsTrue(board.Contains(
+            "DrawGlobalAudioMuteButton(compactActions);",
+            StringComparison.Ordinal));
+        IsTrue(board.Contains(
+            "DrawAlarmTileDensityButton(compactActions);",
+            StringComparison.Ordinal));
+        IsTrue(board.Contains(
+            "DrawAudibleAlarmBanner();",
+            StringComparison.Ordinal));
+        var soundOverrides = ExtractSourceMethod(
+            editorSource,
+            "private void DrawSoundOverrides()");
+        IsTrue(soundOverrides.Contains(
+            "DrawGlobalAudioMuteButton(false);",
+            StringComparison.Ordinal));
+        IsTrue(soundOverrides.Contains(
+            "m_vanillaBehaviorCandidates",
+            StringComparison.Ordinal));
+        IsTrue(soundOverrides.Contains(
+            ".Merge(m_runtime.GetSoundOverrideCandidates())",
+            StringComparison.Ordinal));
+        var transferCategory = ExtractSourceMethod(
+            editorSource,
+            "private void DrawTransferCategory(");
+        IsTrue(transferCategory.Contains(
+            "enabled ? \"[X] \" : \"[ ] \"",
+            StringComparison.Ordinal));
+        IsTrue(transferCategory.Contains(
+            "enabled ? m_primaryButtonStyle : m_buttonStyle",
+            StringComparison.Ordinal));
+        IsFalse(transferCategory.Contains(
+            "NativeGUILayout.Toggle(",
+            StringComparison.Ordinal));
+        var systemMetricSummary = ExtractSourceMethod(
+            editorSource,
+            "private void DrawSystemAlarmMetricSummary(");
+        IsTrue(systemMetricSummary.Contains(
+            "health.pollution_penalty",
             StringComparison.Ordinal));
         var historyRows = ExtractSourceMethod(
             editorSource,
@@ -3049,6 +3311,179 @@ internal static class Program
             long.MaxValue,
             long.MaxValue,
             isActive: true));
+    }
+
+    private static void TestAlarmAudioPlaybackPolicy()
+    {
+        var active = new AlarmView
+        {
+            Key = "alarm:active",
+            Sequence = 7,
+            Severity = AlarmSeverity.Warning,
+            SoundId = "bell",
+            IsActive = true,
+            IsAcknowledged = false,
+        };
+        IsTrue(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: false,
+            isSuppressed: false,
+            usesNormalSoundBehavior: true));
+        IsFalse(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: true,
+            isSuppressed: false,
+            usesNormalSoundBehavior: true));
+        IsFalse(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: false,
+            isSuppressed: true,
+            usesNormalSoundBehavior: true));
+        IsFalse(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: false,
+            isSuppressed: false,
+            usesNormalSoundBehavior: false));
+
+        active.SoundId = "NONE";
+        IsFalse(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: false,
+            isSuppressed: false,
+            usesNormalSoundBehavior: true));
+        active.SoundId = "bell";
+        active.IsAcknowledged = true;
+        IsFalse(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: false,
+            isSuppressed: false,
+            usesNormalSoundBehavior: true));
+
+        // KG remains latched for acknowledgement/history, but must not keep
+        // an invisible HOME alarm sounding after its condition has cleared.
+        active.IsActive = false;
+        active.IsAcknowledged = false;
+        active.IsGoneUnacknowledged = true;
+        IsTrue(active.RequiresAcknowledgement);
+        IsFalse(AlarmAudioPlaybackPolicy.CanPlay(
+            active,
+            isSnoozed: false,
+            isSuppressed: false,
+            usesNormalSoundBehavior: true));
+
+        active.IsActive = true;
+        active.IsGoneUnacknowledged = false;
+        var critical = new AlarmView
+        {
+            Key = "alarm:critical",
+            Sequence = 1,
+            Severity = AlarmSeverity.Critical,
+        };
+        IsTrue(AlarmAudioPlaybackPolicy.HasHigherPriority(
+            critical,
+            active));
+        critical.Severity = AlarmSeverity.Warning;
+        critical.Sequence = 8;
+        IsTrue(AlarmAudioPlaybackPolicy.HasHigherPriority(
+            critical,
+            active));
+        critical.Sequence = 7;
+        IsTrue(AlarmAudioPlaybackPolicy.HasHigherPriority(
+            critical,
+            active));
+        IsFalse(AlarmAudioPlaybackPolicy.HasHigherPriority(
+            active,
+            critical));
+
+        IsTrue(AlarmAudioPlaybackPolicy.IsSameOccurrence(
+            active,
+            "alarm:active",
+            7));
+        IsFalse(AlarmAudioPlaybackPolicy.IsSameOccurrence(
+            active,
+            "alarm:active",
+            8));
+        IsFalse(AlarmAudioPlaybackPolicy.IsSameOccurrence(
+            active,
+            "ALARM:ACTIVE",
+            7));
+        IsFalse(AlarmAudioPlaybackPolicy.IsSameOccurrence(
+            active,
+            "alarm:active",
+            0));
+    }
+
+    private static void TestAlarmAutoPausePolicy()
+    {
+        var options = new AlarmAutoPauseOptions(
+            enabled: true,
+            minimumSeverity: AlarmSeverity.Critical,
+            includeVanilla: true,
+            includeSystem: false,
+            includeCustom: true,
+            includeExternal: false);
+        IsTrue(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "vanilla",
+            AlarmSeverity.Critical,
+            isNewOccurrence: true,
+            isAcknowledged: false));
+        IsTrue(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "custom",
+            AlarmSeverity.Emergency,
+            isNewOccurrence: true,
+            isAcknowledged: false));
+        IsFalse(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "system",
+            AlarmSeverity.Critical,
+            isNewOccurrence: true,
+            isAcknowledged: false));
+        IsFalse(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "external",
+            AlarmSeverity.Emergency,
+            isNewOccurrence: true,
+            isAcknowledged: false));
+        IsFalse(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "vanilla",
+            AlarmSeverity.Warning,
+            isNewOccurrence: true,
+            isAcknowledged: false));
+        IsFalse(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "vanilla",
+            AlarmSeverity.Critical,
+            isNewOccurrence: false,
+            isAcknowledged: false));
+        IsFalse(AlarmAutoPausePolicy.ShouldPause(
+            options,
+            "vanilla",
+            AlarmSeverity.Critical,
+            isNewOccurrence: true,
+            isAcknowledged: true));
+        IsFalse(AlarmAutoPausePolicy.ShouldPause(
+            new AlarmAutoPauseOptions(
+                enabled: false,
+                minimumSeverity: AlarmSeverity.Notice,
+                includeVanilla: true,
+                includeSystem: true,
+                includeCustom: true,
+                includeExternal: true),
+            "vanilla",
+            AlarmSeverity.Emergency,
+            isNewOccurrence: true,
+            isAcknowledged: false));
+        AreEqual(
+            AlarmSeverity.Notice,
+            AlarmAutoPausePolicy.NormalizeMinimumSeverity(
+                (AlarmSeverity)(-100)));
+        AreEqual(
+            AlarmSeverity.Emergency,
+            AlarmAutoPausePolicy.NormalizeMinimumSeverity(
+                (AlarmSeverity)100));
     }
 
     private static void TestComparableValues()
@@ -6937,13 +7372,58 @@ internal static class Program
         IsFalse(dashboard[0].IsAcknowledged);
         AreEqual(AlarmSeverity.Emergency, dashboard[0].Severity);
         AreEqual(
-            "external:active-without-dashboard-slot",
+            "dashboard:b",
             dashboard[1].SlotId);
         IsTrue(dashboard[1].IsActive);
-        IsFalse(dashboard[1].IsAcknowledged);
-        AreEqual("dashboard:b", dashboard[2].SlotId);
+        IsTrue(dashboard[1].IsAcknowledged);
+        AreEqual(
+            "external:active-without-dashboard-slot",
+            dashboard[2].SlotId);
         IsTrue(dashboard[2].IsActive);
-        IsTrue(dashboard[2].IsAcknowledged);
+        IsFalse(dashboard[2].IsAcknowledged);
+
+        var originalDashboardOrder = dashboard
+            .Select(PanelSlotProjection.StableAlarmId)
+            .ToArray();
+        var reorderedInputs = new[]
+        {
+            new AlarmView
+            {
+                Key = "warning-newest",
+                SlotId = "external:active-without-dashboard-slot",
+                Name = "AKTIV OHNE FESTEN HOME-SCHLITZ",
+                IsActive = true,
+                IsAcknowledged = true,
+                Severity = AlarmSeverity.Warning,
+                Sequence = 5000,
+            },
+            new AlarmView
+            {
+                Key = "critical-oldest",
+                SlotId = "dashboard:b",
+                Name = "AKTIV KQ",
+                IsActive = true,
+                Severity = AlarmSeverity.Critical,
+                Sequence = 1,
+            },
+            new AlarmView
+            {
+                Key = "emergency-middle",
+                SlotId = "dashboard:a",
+                Name = "AKTIV K",
+                IsActive = true,
+                IsAcknowledged = true,
+                Severity = AlarmSeverity.Emergency,
+                Sequence = 2500,
+            },
+        };
+        var stableDashboardOrder = PanelSlotProjection
+            .ProjectActive(reorderedInputs)
+            .Select(PanelSlotProjection.StableAlarmId)
+            .ToArray();
+        AreEqual(
+            string.Join("|", originalDashboardOrder),
+            string.Join("|", stableDashboardOrder));
 
         var legacy = new AlarmView
         {
@@ -8346,13 +8826,13 @@ internal static class Program
                 VanillaNotificationBehavior.Ignored,
         };
         var profile = ConfigurationTransferPolicy
-            .CreateRecommendedQuietProfile("0.10.3");
+            .CreateRecommendedQuietProfile("0.10.5");
 
         AreEqual(
             UnmaTransferProfile.CurrentProfileSchemaVersion,
             profile.ProfileSchemaVersion);
         AreEqual("UNMA Recommended Quiet", profile.Metadata.Name);
-        AreEqual("0.10.3", profile.Metadata.SourceVersion);
+        AreEqual("0.10.5", profile.Metadata.SourceVersion);
         IsTrue(DateTime.TryParse(
             profile.Metadata.CreatedUtc,
             System.Globalization.CultureInfo.InvariantCulture,
@@ -8414,7 +8894,7 @@ internal static class Program
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 legacyProfile,
-                "0.10.3",
+                "0.10.5",
                 out var upgradedLegacyProfile));
         IsFalse(ReferenceEquals(legacyProfile, upgradedLegacyProfile));
         AreEqual("UNMA Recommended Silent", legacyProfile.Metadata.Name);
@@ -8446,7 +8926,7 @@ internal static class Program
         IsTrue(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 previousQuietProfile,
-                "0.10.3",
+                "0.10.5",
                 out var refreshedQuietProfile));
         AreEqual(
             2,
@@ -8466,7 +8946,7 @@ internal static class Program
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 customProfile,
-                "0.10.3",
+                "0.10.5",
                 out var unchangedCustomProfile));
         IsTrue(ReferenceEquals(customProfile, unchangedCustomProfile));
 
@@ -8478,7 +8958,7 @@ internal static class Program
         IsFalse(ConfigurationTransferPolicy
             .TryRefreshPreviousRecommendedProfile(
                 divergentQuietProfile,
-                "0.10.3",
+                "0.10.5",
                 out var unchangedDivergentProfile));
         IsTrue(ReferenceEquals(
             divergentQuietProfile,
@@ -9348,6 +9828,141 @@ internal static class Program
             AreEqual("", loadError);
             AreEqual("First", backup.Metadata.Name);
             AreEqual("#111111", backup.Appearance.WarningColor);
+        }
+        finally
+        {
+            DeleteTemporaryTestDirectory(testDirectory);
+        }
+    }
+
+    private static void TestTransferProfilePathAndLegacyMigration()
+    {
+        var testDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "UNMA-CoreTests-ProfileMigration-" +
+            Guid.NewGuid().ToString("N"));
+        var roamingRoot = Path.Combine(testDirectory, "Roaming");
+        var localRoot = Path.Combine(testDirectory, "Local");
+        var destinationPath =
+            UnmaTransferProfileStore.GetDefaultProfilePath(roamingRoot);
+        var legacyPath =
+            UnmaTransferProfileStore.GetLegacyDefaultProfilePath(localRoot);
+        try
+        {
+            AreEqual(
+                Path.GetFullPath(Path.Combine(
+                    roamingRoot,
+                    "Captain of Industry",
+                    "UNMA",
+                    "profiles",
+                    "default.json")),
+                destinationPath);
+            AreEqual(
+                Path.GetFullPath(Path.Combine(
+                    localRoot,
+                    "UNMA",
+                    "profiles",
+                    "default.json")),
+                legacyPath);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(legacyPath));
+            const string legacyContents = "legacy profile bytes";
+            File.WriteAllText(legacyPath, legacyContents);
+            var warning = "";
+            var resolved =
+                UnmaTransferProfileStore.ResolveDefaultProfilePath(
+                    destinationPath,
+                    legacyPath,
+                    out var migrated,
+                    ref warning);
+            AreEqual(destinationPath, resolved);
+            IsTrue(migrated);
+            AreEqual("", warning);
+            AreEqual(legacyContents, File.ReadAllText(destinationPath));
+            AreEqual(legacyContents, File.ReadAllText(legacyPath));
+            AreEqual(
+                0,
+                Directory.GetFiles(
+                    Path.GetDirectoryName(destinationPath),
+                    "default.json.migrate-*.tmp").Length);
+
+            File.WriteAllText(legacyPath, "new legacy contents");
+            resolved = UnmaTransferProfileStore.ResolveDefaultProfilePath(
+                destinationPath,
+                legacyPath,
+                out migrated,
+                ref warning);
+            AreEqual(destinationPath, resolved);
+            IsFalse(migrated);
+            AreEqual(legacyContents, File.ReadAllText(destinationPath));
+            AreEqual("new legacy contents", File.ReadAllText(legacyPath));
+
+            IsTrue(UnmaTransferProfileStore.TryMigrateLegacyProfile(
+                destinationPath,
+                destinationPath,
+                out migrated,
+                out var migrationError));
+            IsFalse(migrated);
+            AreEqual("", migrationError);
+
+            var configuredDirectory = Path.Combine(
+                testDirectory,
+                "chosen-profiles");
+            Directory.CreateDirectory(configuredDirectory);
+            resolved =
+                UnmaTransferProfileStore.ResolveStartupProfilePath(
+                    configuredDirectory,
+                    out migrated,
+                    out warning);
+            AreEqual(
+                Path.Combine(configuredDirectory, "default.json"),
+                resolved);
+            IsFalse(migrated);
+            AreEqual("", warning);
+
+            var trailingDirectory = Path.Combine(
+                testDirectory,
+                "new-chosen-profiles") + Path.DirectorySeparatorChar;
+            resolved =
+                UnmaTransferProfileStore.ResolveStartupProfilePath(
+                    trailingDirectory,
+                    out migrated,
+                    out warning);
+            AreEqual(
+                Path.GetFullPath(Path.Combine(
+                    trailingDirectory,
+                    "default.json")),
+                resolved);
+            IsFalse(migrated);
+            AreEqual("", warning);
+
+            var newDirectoryWithoutSeparator = Path.Combine(
+                testDirectory,
+                "another-new-profile-directory");
+            resolved =
+                UnmaTransferProfileStore.ResolveStartupProfilePath(
+                    newDirectoryWithoutSeparator,
+                    out migrated,
+                    out warning);
+            AreEqual(
+                Path.Combine(
+                    newDirectoryWithoutSeparator,
+                    "default.json"),
+                resolved);
+            IsFalse(migrated);
+            AreEqual("", warning);
+
+            var explicitJsonPath = Path.Combine(
+                testDirectory,
+                "named-profile.json");
+            resolved =
+                UnmaTransferProfileStore.ResolveStartupProfilePath(
+                    explicitJsonPath,
+                    out migrated,
+                    out warning);
+            AreEqual(explicitJsonPath, resolved);
+            IsFalse(migrated);
+            AreEqual("", warning);
         }
         finally
         {

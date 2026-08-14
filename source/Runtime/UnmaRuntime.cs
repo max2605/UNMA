@@ -78,6 +78,21 @@ public sealed class UnmaSettings
     public int AudioVolumePercent = 65;
     public int PollIntervalMs = 500;
     public bool EnableSystemAlarms = true;
+    public bool EnableAutoPause;
+    public AlarmSeverity AutoPauseMinimumSeverity = AlarmSeverity.Critical;
+    public bool AutoPauseVanilla = true;
+    public bool AutoPauseSystem = true;
+    public bool AutoPauseCustom = true;
+    public bool AutoPauseExternal = true;
+    public bool MuteAudioWhilePaused;
+
+    public AlarmAutoPauseOptions GetAutoPauseOptions() => new(
+        EnableAutoPause,
+        AutoPauseMinimumSeverity,
+        AutoPauseVanilla,
+        AutoPauseSystem,
+        AutoPauseCustom,
+        AutoPauseExternal);
 }
 
 public sealed class ExternalIntegrationStatus
@@ -256,6 +271,7 @@ public sealed class UnmaRuntime : IDisposable
     private readonly ISimLoopEvents m_simLoopEvents;
     private readonly UnmaStateStore m_store;
     private readonly UnmaTransferProfileStore m_transferProfileStore;
+    private readonly Action m_requestGamePause;
     private readonly object m_transferProfileGate = new();
     private readonly ExternalDisplayNotificationWriter m_externalDisplay =
         new();
@@ -378,6 +394,7 @@ public sealed class UnmaRuntime : IDisposable
 
     public UnmaConfiguration Configuration { get; }
     public UnmaSettings Settings => m_settings;
+    public bool IsSimulationPaused => m_simLoopEvents?.IsSimPaused == true;
     public string LastPersistenceError { get; private set; } = "";
     public string LastTransferProfileError { get; private set; } = "";
     public string TransferProfilePath => m_transferProfileStore?.Path ?? "";
@@ -397,7 +414,8 @@ public sealed class UnmaRuntime : IDisposable
         UnmaStateStore store,
         UnmaSettings settings,
         IEnumerable<ExternalProviderDescriptor> externalProviders = null,
-        UnmaTransferProfileStore transferProfileStore = null)
+        UnmaTransferProfileStore transferProfileStore = null,
+        Action requestGamePause = null)
     {
         m_notificationsManager = notificationsManager;
         m_entitiesManager = entitiesManager;
@@ -414,6 +432,7 @@ public sealed class UnmaRuntime : IDisposable
         m_simLoopEvents = simLoopEvents;
         m_store = store;
         m_transferProfileStore = transferProfileStore;
+        m_requestGamePause = requestGamePause;
         m_externalProviders = (externalProviders ??
                 Enumerable.Empty<ExternalProviderDescriptor>())
             .Where(provider => provider != null)
@@ -2177,27 +2196,23 @@ public sealed class UnmaRuntime : IDisposable
             AlarmState best = null;
             foreach (var candidate in m_alarms.Values)
             {
-                if (!candidate.View.RequiresAcknowledgement ||
-                    m_alarmAudioSnoozes.ContainsKey(
-                        candidate.View.Key ?? "") ||
-                    IsSuppressedVanillaAlarm(
+                if (!AlarmAudioPlaybackPolicy.CanPlay(
                         candidate.View,
-                        disabledVanillaOverrideIds) ||
-                    ResolveVanillaNotificationBehavior(
-                        candidate.View,
-                        vanillaRules) !=
-                        VanillaNotificationBehavior.Normal ||
-                    string.Equals(
-                        candidate.View.SoundId,
-                        "none",
-                        StringComparison.OrdinalIgnoreCase))
+                        m_alarmAudioSnoozes.ContainsKey(
+                            candidate.View.Key ?? ""),
+                        IsSuppressedVanillaAlarm(
+                            candidate.View,
+                            disabledVanillaOverrideIds),
+                        ResolveVanillaNotificationBehavior(
+                            candidate.View,
+                            vanillaRules) ==
+                        VanillaNotificationBehavior.Normal))
                 {
                     continue;
                 }
-                if (best == null ||
-                    candidate.View.Severity > best.View.Severity ||
-                    candidate.View.Severity == best.View.Severity &&
-                    candidate.Sequence > best.Sequence)
+                if (AlarmAudioPlaybackPolicy.HasHigherPriority(
+                        candidate.View,
+                        best?.View))
                 {
                     best = candidate;
                 }
@@ -2955,7 +2970,7 @@ public sealed class UnmaRuntime : IDisposable
             {
                 var recommendedProfile =
                     ConfigurationTransferPolicy
-                        .CreateRecommendedQuietProfile("0.10.3");
+                        .CreateRecommendedQuietProfile("0.10.5");
                 if (m_transferProfileStore.SaveIfMissing(
                         recommendedProfile,
                         out var alreadyExists,
@@ -2984,7 +2999,7 @@ public sealed class UnmaRuntime : IDisposable
             if (ConfigurationTransferPolicy
                 .TryRefreshPreviousRecommendedProfile(
                     m_transferProfile,
-                    "0.10.3",
+                    "0.10.5",
                     out var upgradedRecommendedProfile))
             {
                 // Keep custom and on-disk profiles untouched. This refreshes
@@ -3023,7 +3038,7 @@ public sealed class UnmaRuntime : IDisposable
                 snapshot,
                 selection ?? new TransferProfileSelection(),
                 profileName,
-                "0.10.3");
+                "0.10.5");
             if (!m_transferProfileStore.Save(profile, out var error))
             {
                 LastTransferProfileError = error;
@@ -9252,6 +9267,7 @@ public sealed class UnmaRuntime : IDisposable
     {
         var shouldPersist = false;
         var shouldPublishExternal = false;
+        var shouldRequestGamePause = false;
         AlarmView slotCandidate;
         lock (m_gate)
         {
@@ -9320,6 +9336,12 @@ public sealed class UnmaRuntime : IDisposable
             state.View.IsAcknowledged = transition.IsAcknowledged;
             state.View.IsGoneUnacknowledged =
                 transition.IsGoneUnacknowledged;
+            shouldRequestGamePause = AlarmAutoPausePolicy.ShouldPause(
+                m_settings.GetAutoPauseOptions(),
+                state.View.Source,
+                state.View.Severity,
+                transition.IsNewOccurrence,
+                state.View.IsAcknowledged);
             state.View.IsMissingSource = missingSource;
             state.View.SoundId = string.IsNullOrWhiteSpace(soundId)
                 ? "auto"
@@ -9474,6 +9496,28 @@ public sealed class UnmaRuntime : IDisposable
         if (shouldPublishExternal)
         {
             PublishExternalDisplayAlarm(slotCandidate, true);
+        }
+        if (shouldRequestGamePause)
+        {
+            RequestGamePause();
+        }
+    }
+
+    private void RequestGamePause()
+    {
+        if (m_requestGamePause == null || IsSimulationPaused)
+        {
+            return;
+        }
+        try
+        {
+            m_requestGamePause();
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                "UNMA: automatic pause request failed: " +
+                exception.Message);
         }
     }
 
